@@ -1,8 +1,18 @@
 {
-  "name": "@jsonsqlite/core",
+  "name": "@webofcat/jsonsqlite",
   "version": "1.0.0",
   "description": "JSON-native embedded database for Node.js with WAL, queries, and ops tooling",
   "license": "MIT",
+  "author": "hanlin <lincent909@163.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Core10900/json-sqlite.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/Core10900/json-sqlite#readme",
+  "bugs": {
+    "url": "https://github.com/Core10900/json-sqlite/issues"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -28,7 +38,8 @@
     "node": ">=20"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
     "build": "tsup",
@@ -53,6 +64,7 @@
     "embedded",
     "document-store",
     "nodejs",
-    "wal"
+    "wal",
+    "jsonsqlite"
   ]
 }

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { open } from '@jsonsqlite/core';
+import { open } from '@webofcat/jsonsqlite';
 
 const N = Number(process.env.BENCH_N ?? 10_000);
 const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'jsonsqlite-bench-'));

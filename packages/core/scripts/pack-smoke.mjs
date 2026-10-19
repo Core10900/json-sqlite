@@ -24,7 +24,7 @@ try {
   });
 
   const esm = `
-    import { open } from '@jsonsqlite/core';
+    import { open } from '@webofcat/jsonsqlite';
     const db = await open({ storagePath: './data' });
     await db.insert('t', { ok: true });
     const rows = await db.query({ collection: 't' });
@@ -36,7 +36,7 @@ try {
   execSync('node esm.mjs', { cwd: tmp, stdio: 'inherit' });
 
   const cjs = `
-    const { open } = require('@jsonsqlite/core');
+    const { open } = require('@webofcat/jsonsqlite');
     (async () => {
       const db = await open({ storagePath: './data-cjs' });
       await db.insert('t', { ok: true });

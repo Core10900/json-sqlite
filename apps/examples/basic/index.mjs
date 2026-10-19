@@ -1,4 +1,4 @@
-import { open } from '@jsonsqlite/core';
+import { open } from '@webofcat/jsonsqlite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 

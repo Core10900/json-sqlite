@@ -1,12 +1,12 @@
 # JSONSQLite
 
-**版本：1.0.0** · **运行时：Node.js ≥ 20** · **包名：`@jsonsqlite/core`**
+**版本：1.0.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。通过 `npm install` 装进业务工程后，在进程内打开本地数据目录即可使用——角色类似 better-sqlite3，而不是必须单独部署的网络数据库服务。
 
 ```text
 业务后端（Express / Nest / Fastify / …）
-        │  npm i @jsonsqlite/core
+        │  npm i @webofcat/jsonsqlite
         ▼
    进程内引擎 + 本地 ./data 目录
 ```
@@ -42,7 +42,7 @@ JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**�
 
 | 能力           | 说明                                                        |
 | -------------- | ----------------------------------------------------------- |
-| **嵌入式库**   | `import { open } from '@jsonsqlite/core'`，无需独立 DB 进程 |
+| **嵌入式库**   | `import { open } from '@webofcat/jsonsqlite'`，无需独立 DB 进程 |
 | **文档存储**   | 动态 Schema，集合（collection）即「表」                     |
 | **JSON Query** | 过滤 / 投影 / 排序 / 分页                                   |
 | **三类索引**   | 等值（object）、范围（tree）、全文（inverted）              |
@@ -72,11 +72,11 @@ JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**�
 ### 安装（业务项目）
 
 ```bash
-npm install @jsonsqlite/core
+npm install @webofcat/jsonsqlite
 # 或
-pnpm add @jsonsqlite/core
+pnpm add @webofcat/jsonsqlite
 # 或
-yarn add @jsonsqlite/core
+yarn add @webofcat/jsonsqlite
 ```
 
 > 若当前尚未发布到 npm 公网，可在本 monorepo 内用 `workspace:` 依赖，或 `pnpm pack` 后本地安装 tarball。
@@ -94,7 +94,7 @@ pnpm build
 ## 3. 快速开始
 
 ```ts
-import { open } from "@jsonsqlite/core";
+import { open } from "@webofcat/jsonsqlite";
 
 const db = await open({ storagePath: "./data" });
 
@@ -121,7 +121,7 @@ await db.close();
 CommonJS：
 
 ```js
-const { open } = require("@jsonsqlite/core");
+const { open } = require("@webofcat/jsonsqlite");
 
 (async () => {
   const db = await open({ storagePath: "./data" });
@@ -137,7 +137,7 @@ const { open } = require("@jsonsqlite/core");
 ### `open(options)` / `new JSONSQLite(options).open()`
 
 ```ts
-import { open, JSONSQLite } from "@jsonsqlite/core";
+import { open, JSONSQLite } from "@webofcat/jsonsqlite";
 
 const db = await open({
   storagePath: "./data", // 必填：数据目录
@@ -228,7 +228,7 @@ const one = await db.findById("users", doc._id);
 ## 6. JSON 查询
 
 ```ts
-import type { JsonQuery } from "@jsonsqlite/core";
+import type { JsonQuery } from "@webofcat/jsonsqlite";
 
 const q: JsonQuery = {
   collection: "users",
@@ -404,7 +404,7 @@ const quality = db.analyzeQuality("users", ["name", "age"]);
 错误类型：
 
 ```ts
-import { JSONSQLiteError, ErrorCode } from "@jsonsqlite/core";
+import { JSONSQLiteError, ErrorCode } from "@webofcat/jsonsqlite";
 
 try {
   await db.update("users", "missing", { x: 1 });
@@ -458,7 +458,7 @@ unsubscribe();
 
 ```bash
 # 本仓库内
-pnpm --filter @jsonsqlite/core build
+pnpm --filter @webofcat/jsonsqlite build
 node packages/core/dist/cli.js doctor --path ./data
 node packages/core/dist/cli.js collections --path ./data
 node packages/core/dist/cli.js query '{"collection":"users","limit":5}' --path ./data
@@ -528,7 +528,7 @@ data/
 本仓库为 pnpm monorepo：
 
 ```text
-packages/core     → 可发布的 @jsonsqlite/core
+packages/core     → 可发布的 @webofcat/jsonsqlite
 apps/examples     → 示例
 apps/bench        → 基准
 docs/             → 设计与计划文档

@@ -7,6 +7,6 @@
     "start": "node index.mjs"
   },
   "dependencies": {
-    "@jsonsqlite/core": "workspace:*"
+    "@webofcat/jsonsqlite": "workspace:*"
   }
 }

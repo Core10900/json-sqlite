@@ -1,20 +1,20 @@
-# @jsonsqlite/core
+# @webofcat/jsonsqlite
 
 JSON-native embedded database for Node.js — install into your backend, open a local data directory, query documents with indexes, WAL, backup, and ops APIs.
 
-**Version: 1.0.0** · Requires **Node.js ≥ 20**
+**Version: 1.0.0** · Requires **Node.js ≥ 20** · Author: **hanlin**
 
 ## Install
 
 ```bash
-npm install @jsonsqlite/core
-# or: pnpm add @jsonsqlite/core
+npm install @webofcat/jsonsqlite
+# or: pnpm add @webofcat/jsonsqlite
 ```
 
 ## Quick start
 
 ```ts
-import { open } from '@jsonsqlite/core';
+import { open } from '@webofcat/jsonsqlite';
 
 const db = await open({ storagePath: './data' });
 
@@ -38,28 +38,9 @@ console.log(await db.health());
 await db.close();
 ```
 
-## Highlights
+## Docs
 
-| Area | API |
-|------|-----|
-| CRUD | `insert` / `update` / `delete` / `upsert` / `findById` / `query` |
-| Indexes | `createIndex(collection, field, 'object'\|'tree'\|'inverted')` |
-| Aggregate | `aggregate(collection, pipeline)` |
-| JSONPath | `jsonPath(collection, '$.field')` |
-| Tx | `beginTransaction` / `commitTransaction` / `rollbackTransaction` |
-| Backup | `backupFull` / `backupIncremental` / `restoreBackup` |
-| Time travel | `queryAtTime` / `diffBetweenTimes` / `rollbackToTime` |
-| Ops | `health` / `getMetrics` / `advise` / `analyzeQuality` |
-| HTTP Admin | `startServer({ host, port, adminToken })` |
-| Stream | `subscribe(handler)` |
-| CLI | `jsql doctor \| query \| backup \| collections` |
-
-## Limits (v1)
-
-- **Single writer** per `storagePath` (file lock)
-- Embedded library — not a shared multi-instance network DB
-- Always `await db.close()` on shutdown
-- Nested transactions are not supported
+See the repository root [README.md](https://github.com/Core10900/json-sqlite#readme) for the full Chinese guide.
 
 ## License
 

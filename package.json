@@ -9,10 +9,10 @@
   },
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "build": "pnpm --filter @jsonsqlite/core build",
-    "test": "pnpm --filter @jsonsqlite/core test",
-    "lint": "pnpm --filter @jsonsqlite/core lint",
-    "pack:smoke": "pnpm --filter @jsonsqlite/core pack:smoke"
+    "build": "pnpm --filter @webofcat/jsonsqlite build",
+    "test": "pnpm --filter @webofcat/jsonsqlite test",
+    "lint": "pnpm --filter @webofcat/jsonsqlite lint",
+    "pack:smoke": "pnpm --filter @webofcat/jsonsqlite pack:smoke"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
