@@ -115,6 +115,13 @@ async function handleTable(rest: string[]): Promise<void> {
   }
 
   if (sub === 'create') {
+    const nameFlag = flag(args, '--name');
+    const fieldFlags = multiFlag(args, '--field');
+    if (nameFlag || fieldFlags.length > 0) {
+      await nonInteractiveCreateTable(storagePath, nameFlag, fieldFlags);
+      return;
+    }
+    requireTty('table create（对话模式）');
     await interactiveCreateTable(storagePath);
     return;
   }
@@ -122,14 +129,17 @@ async function handleTable(rest: string[]): Promise<void> {
   if (sub === 'drop') {
     const name = positionalName(args);
     if (!name) {
-      console.error('用法: jsonsqlite table drop <name> [--path ./data]');
+      console.error(
+        '用法: jsonsqlite table drop <name> [--path ./data] [--yes]',
+      );
       process.exitCode = 1;
       return;
     }
-    const skipConfirm = args.includes('--yes') && args.includes('--force');
+    const skipConfirm = args.includes('--yes') || args.includes('-y');
     const db = await open({ storagePath });
     try {
       if (!skipConfirm) {
+        requireTty('table drop（需二次确认；CI 请加 --yes）');
         const ok = await withPrompt((rl) => confirmDropTable(rl, name));
         if (!ok) {
           console.log('已取消删除');
@@ -151,6 +161,7 @@ async function handleTable(rest: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     }
+    requireTty('table alter（对话模式）');
     await interactiveAlterTable(storagePath, name);
     return;
   }
@@ -194,6 +205,39 @@ async function handleTable(rest: string[]): Promise<void> {
   console.error(`Unknown table subcommand: ${sub}`);
   printHelp();
   process.exitCode = 1;
+}
+
+async function nonInteractiveCreateTable(
+  storagePath: string,
+  nameFlag: string | undefined,
+  fieldFlags: string[],
+): Promise<void> {
+  if (!nameFlag) {
+    console.error(
+      '用法: jsonsqlite table create --name <table> [--field name:type]... [--path ./data]',
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const fields: FieldDef[] = [];
+  for (const raw of fieldFlags) {
+    const [fname, ftypeRaw = 'any'] = raw.split(':');
+    if (!fname) continue;
+    const ftype = normalizeFieldType(ftypeRaw.toLowerCase());
+    if (!ftype) {
+      console.error(`无效字段类型: ${ftypeRaw}`);
+      process.exitCode = 1;
+      return;
+    }
+    fields.push({ name: fname, type: ftype });
+  }
+  const db = await open({ storagePath });
+  try {
+    const info = await db.createTable(nameFlag, { fields });
+    console.log(`✓ 已创建表「${info.name}」`);
+  } finally {
+    await db.close();
+  }
 }
 
 async function interactiveCreateTable(storagePath: string): Promise<void> {
@@ -450,7 +494,13 @@ function resolveDbPath(rest: string[], fallback: string): string {
 }
 
 function positionalName(args: string[]): string | undefined {
-  const valueFlags = new Set(['--path', '--page', '--size']);
+  const valueFlags = new Set([
+    '--path',
+    '--page',
+    '--size',
+    '--name',
+    '--field',
+  ]);
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (valueFlags.has(a)) {
@@ -468,6 +518,26 @@ function flag(args: string[], name: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
+function multiFlag(args: string[], name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === name && args[i + 1]) {
+      out.push(args[i + 1]!);
+      i += 1;
+    }
+  }
+  return out;
+}
+
+function requireTty(context: string): void {
+  if (!process.stdin.isTTY) {
+    console.error(
+      `错误: ${context} 需要交互式终端。请在 TTY 中运行，或改用非交互参数（如 --name / --yes）。`,
+    );
+    process.exit(1);
+  }
+}
+
 function printHelp() {
   console.log(`jsonsqlite — JSONSQLite CLI (v${getVersion()})
 
@@ -476,9 +546,10 @@ Usage:
   jsonsqlite create [path] [--force]
   jsonsqlite init [path]
   jsonsqlite tables [--path ./data]
-  jsonsqlite table create [--path ./data]              # 对话式建表
-  jsonsqlite table drop <name> [--path ./data]         # 二次确认
-  jsonsqlite table alter <name> [--path ./data]        # 对话式修改 + 二次确认
+  jsonsqlite table create [--path ./data]              # 对话式建表（需 TTY）
+  jsonsqlite table create --name t --field a:string [--path]
+  jsonsqlite table drop <name> [--path] [--yes]        # 二次确认；CI 用 --yes
+  jsonsqlite table alter <name> [--path ./data]        # 对话式修改 + 二次确认（需 TTY）
   jsonsqlite table show <name> [--path] [--page 1] [--size 20] [-i]
   jsonsqlite table describe <name> [--path]
   jsonsqlite run "<sql>" [--path ./data]

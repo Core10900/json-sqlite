@@ -251,14 +251,44 @@ class Parser {
       return inner;
     }
     const col = this.expectIdent();
+    if (this.matchKw('IS')) {
+      const negated = this.matchKw('NOT');
+      this.expectKw('NULL');
+      if (negated) {
+        return {
+          $and: [{ [col]: { $exists: true } }, { [col]: { $ne: null } }],
+        } as FilterCondition;
+      }
+      return {
+        $or: [{ [col]: null }, { [col]: { $exists: false } }],
+      } as FilterCondition;
+    }
     if (this.matchKw('LIKE')) {
       const v = this.parseValue();
       if (typeof v !== 'string') {
         throw new JSONSQLiteError(ErrorCode.SQL_PARSE, 'LIKE expects a string');
       }
-      // strip % wildcards → contains for soft match
+      // SQL LIKE with % → contains (no full wildcard engine in v1.3)
       const needle = v.replace(/%/g, '');
-      return { [col]: { $contains: needle } };
+      return { [col]: { $contains: needle } } as FilterCondition;
+    }
+    if (this.matchKw('IN')) {
+      this.expectPunct('(');
+      const values: unknown[] = [this.parseValue()];
+      while (this.matchPunct(',')) values.push(this.parseValue());
+      this.expectPunct(')');
+      return { [col]: { $in: values } } as FilterCondition;
+    }
+    if (this.matchKw('BETWEEN')) {
+      const lo = this.parseValue();
+      this.expectKw('AND');
+      const hi = this.parseValue();
+      return {
+        $and: [
+          { [col]: { $gte: lo as number | string } },
+          { [col]: { $lte: hi as number | string } },
+        ],
+      } as FilterCondition;
     }
     const opTok = this.peek();
     if (opTok.kind !== 'op') {

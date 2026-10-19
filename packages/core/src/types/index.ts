@@ -1,8 +1,22 @@
+/**
+ * Transaction isolation.
+ * v1.3+ only **implements** READ_COMMITTED (snapshot-on-touch).
+ * Other values are accepted for API compatibility but coerced to READ_COMMITTED.
+ */
 export type IsolationLevel =
   | 'READ_UNCOMMITTED'
   | 'READ_COMMITTED'
   | 'REPEATABLE_READ'
   | 'SERIALIZABLE';
+
+/** Disk durability: none = fast; normal = fsync data + parent dir; full = also fsync after rename. */
+export type SyncMode = 'none' | 'normal' | 'full';
+
+/**
+ * Soft-schema validation on insert/update.
+ * off = metadata only (default); warn = console.warn; strict = throw.
+ */
+export type SchemaMode = 'off' | 'warn' | 'strict';
 
 export interface Document {
   _id: string;
@@ -55,14 +69,24 @@ export interface JSONSQLiteOptions {
   storagePath: string;
   /** Enable write-ahead log (default true) */
   walMode?: boolean;
-  /** Default isolation for new transactions */
+  /**
+   * Default isolation for new transactions.
+   * Only READ_COMMITTED is implemented; others are coerced.
+   */
   defaultIsolation?: IsolationLevel;
-  /** Query timeout ms (reserved) */
+  /**
+   * Soft limit for query wall time (ms). Exceeding throws QUERY_TIMEOUT.
+   * Default 30000; set 0 to disable.
+   */
   queryTimeout?: number;
   /** L1 query cache size */
   cacheSize?: number;
   /** Optional AES key string (or set JSONSQLITE_KEY) */
   encryptionKey?: string | null;
+  /** Durability sync policy (default 'normal') */
+  syncMode?: SyncMode;
+  /** Soft-schema enforcement (default 'off') */
+  schemaMode?: SchemaMode;
 }
 
 export type IndexType = 'object' | 'tree' | 'inverted';

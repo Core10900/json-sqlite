@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
-import type { Document } from '../types/index.js';
+import type { Document, SyncMode } from '../types/index.js';
+import { writeFileAtomic } from '../utils/fsDurable.js';
 import { ObjectIndex } from './ObjectIndex.js';
 import { TreeIndex } from './TreeIndex.js';
 import { InvertedIndex } from './InvertedIndex.js';
@@ -14,7 +15,10 @@ interface IndexesFile {
 export class IndexManager {
   private readonly indexes = new Map<string, Index>();
 
-  constructor(private readonly storagePath: string) {}
+  constructor(
+    private readonly storagePath: string,
+    private readonly syncMode: SyncMode = 'normal',
+  ) {}
 
   private key(collection: string, field: string): string {
     return `${collection}:${field}`;
@@ -45,8 +49,11 @@ export class IndexManager {
     const data: IndexesFile = {
       indexes: Array.from(this.indexes.values()).map((i) => i.meta),
     };
-    await fs.mkdir(path.dirname(this.file()), { recursive: true });
-    await fs.writeFile(this.file(), JSON.stringify(data, null, 2), 'utf8');
+    await writeFileAtomic(
+      this.file(),
+      JSON.stringify(data, null, 2),
+      this.syncMode,
+    );
   }
 
   list(): IndexMeta[] {

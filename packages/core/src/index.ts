@@ -29,4 +29,7 @@ export type {
   SqlResult,
   OrderBySpec,
   IndexType,
+  SyncMode,
+  SchemaMode,
 } from './types/index.js';
+export { FORMAT_VERSION } from './storage/Catalog.js';

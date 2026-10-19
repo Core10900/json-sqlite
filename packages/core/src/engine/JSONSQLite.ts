@@ -19,9 +19,11 @@ import {
 import { selectJsonPath } from '../query/JsonPath.js';
 import { Catalog } from '../storage/Catalog.js';
 import { ChangeLog } from '../storage/ChangeLog.js';
+import { DdlJournal } from '../storage/DdlJournal.js';
 import { DocumentStore } from '../storage/DocumentStore.js';
 import { FileLock } from '../storage/FileLock.js';
 import { Wal } from '../storage/Wal.js';
+import { matchFilter } from '../query/JsonQuery.js';
 import { TransactionManager } from '../transaction/TransactionManager.js';
 import { BackupManager, type BackupInfo } from '../backup/BackupManager.js';
 import { Monitor } from '../monitor/Monitor.js';
@@ -61,6 +63,7 @@ export class JSONSQLite extends EventEmitter {
   private cache: L1Cache<Document[]> | null = null;
   private changelog: ChangeLog | null = null;
   private backup: BackupManager | null = null;
+  private ddlJournal: DdlJournal | null = null;
   private monitor = new Monitor();
   private httpServer: http.Server | null = null;
   private ready = false;
@@ -102,18 +105,28 @@ export class JSONSQLite extends EventEmitter {
     this.lock = new FileLock(root);
     await this.lock.acquire();
 
-    this.catalog = new Catalog(root);
+    const sync = this.options.syncMode;
+    this.catalog = new Catalog(root, sync);
     await this.catalog.load();
 
-    this.wal = new Wal(root, this.options.walMode);
+    this.wal = new Wal(root, this.options.walMode, sync);
     await this.wal.initialize();
 
-    this.store = new DocumentStore(root, this.catalog, this.wal);
+    this.store = new DocumentStore(
+      root,
+      this.catalog,
+      this.wal,
+      sync,
+      this.options.schemaMode,
+    );
     this.tx = new TransactionManager(this.store);
     this.changelog = new ChangeLog(root);
     this.cache = new L1Cache(this.options.cacheSize);
-    this.indexes = new IndexManager(root);
+    this.indexes = new IndexManager(root, sync);
     this.backup = new BackupManager(root, this.encKey);
+    this.ddlJournal = new DdlJournal(root, sync);
+
+    await this.recoverDdlJournal();
 
     for (const info of this.catalog.list()) {
       await this.store.loadCollection(info.name);
@@ -146,6 +159,7 @@ export class JSONSQLite extends EventEmitter {
     this.tx = null;
     this.indexes = null;
     this.cache = null;
+    this.ddlJournal = null;
     this.changelog = null;
     this.backup = null;
     this.lock = null;
@@ -202,15 +216,26 @@ export class JSONSQLite extends EventEmitter {
         `Collection not found: ${name}`,
       );
     }
+    if (this.tx?.active) {
+      throw new JSONSQLiteError(
+        ErrorCode.TX_ACTIVE,
+        'Cannot drop table while a transaction is active',
+      );
+    }
+
+    await this.ddlJournal!.write({ op: 'drop', name, phase: 'started' });
     await this.indexes!.dropAllForCollection(name);
     this.store!.unload(name);
     this.cache!.invalidateCollection(name);
-    await this.catalog!.drop(name);
 
     const root = this.storagePath;
     await fs.rm(collectionDir(root, name), { recursive: true, force: true });
     await fs.rm(walFile(root, name), { force: true });
     await fs.rm(path.join(root, 'deltas', `${name}.delta`), { force: true });
+    await this.ddlJournal!.write({ op: 'drop', name, phase: 'files_removed' });
+
+    await this.catalog!.drop(name);
+    await this.ddlJournal!.clear();
     this.emit('dataChanged', { op: 'dropTable', collection: name });
   }
 
@@ -260,8 +285,28 @@ export class JSONSQLite extends EventEmitter {
         `Collection not found: ${from}`,
       );
     }
+    if (this.catalog!.has(to)) {
+      throw new JSONSQLiteError(
+        ErrorCode.COLLECTION_EXISTS,
+        `Collection already exists: ${to}`,
+      );
+    }
+    if (this.tx?.active) {
+      throw new JSONSQLiteError(
+        ErrorCode.TX_ACTIVE,
+        'Cannot rename table while a transaction is active',
+      );
+    }
+
     await this.store!.ensureLoaded(from);
     await this.store!.persistCollection(from);
+
+    await this.ddlJournal!.write({
+      op: 'rename',
+      from,
+      to,
+      phase: 'started',
+    });
 
     const root = this.storagePath;
     const fromDir = collectionDir(root, from);
@@ -280,6 +325,12 @@ export class JSONSQLite extends EventEmitter {
     } catch {
       /* delta may not exist */
     }
+    await this.ddlJournal!.write({
+      op: 'rename',
+      from,
+      to,
+      phase: 'files_moved',
+    });
 
     const indexMetas = this.indexes!
       .list()
@@ -297,6 +348,7 @@ export class JSONSQLite extends EventEmitter {
       await this.indexes!.createIndex(to, meta.field, meta.type, docs);
     }
 
+    await this.ddlJournal!.clear();
     this.emit('dataChanged', { op: 'renameTable', from, to });
     return this.describeTable(to);
   }
@@ -307,12 +359,9 @@ export class JSONSQLite extends EventEmitter {
   ): Promise<number> {
     this.assertReady();
     await this.store!.ensureLoaded(collection);
-    const rows = await this.query({
-      collection,
-      filter,
-      // no limit — full match count
-    });
-    return rows.length;
+    const all = this.store!.getAll(collection);
+    if (!filter || Object.keys(filter).length === 0) return all.length;
+    return all.filter((doc) => matchFilter(doc, filter)).length;
   }
 
   /**
@@ -340,7 +389,11 @@ export class JSONSQLite extends EventEmitter {
           stmt.columns === '*'
             ? inferColumns(rows)
             : stmt.columns;
-        const total = await this.count(stmt.table, stmt.filter);
+        const needsTotal =
+          stmt.limit !== undefined || (stmt.offset !== undefined && stmt.offset > 0);
+        const total = needsTotal
+          ? await this.count(stmt.table, stmt.filter)
+          : rows.length;
         return {
           type: 'rows',
           rows,
@@ -621,6 +674,7 @@ export class JSONSQLite extends EventEmitter {
 
     this.cache!.set(cacheKey, planned.docs);
     const durationMs = Date.now() - start;
+    this.checkQueryTimeout(durationMs);
     this.monitor.recordQuery({
       ts: Date.now(),
       collection: query.collection,
@@ -804,6 +858,69 @@ export class JSONSQLite extends EventEmitter {
     return () => this.off('dataChanged', handler);
   }
 
+  private checkQueryTimeout(durationMs: number): void {
+    const limit = this.options.queryTimeout;
+    if (limit > 0 && durationMs > limit) {
+      throw new JSONSQLiteError(
+        ErrorCode.QUERY_TIMEOUT,
+        `Query exceeded queryTimeout ${limit}ms (took ${durationMs}ms)`,
+      );
+    }
+  }
+
+  /** Resume incomplete DDL after crash (files vs catalog). */
+  private async recoverDdlJournal(): Promise<void> {
+    const entry = await this.ddlJournal!.read();
+    if (!entry) return;
+    const root = this.storagePath;
+
+    if (entry.op === 'drop') {
+      await fs.rm(collectionDir(root, entry.name), {
+        recursive: true,
+        force: true,
+      });
+      await fs.rm(walFile(root, entry.name), { force: true });
+      await fs.rm(path.join(root, 'deltas', `${entry.name}.delta`), {
+        force: true,
+      });
+      if (this.catalog!.has(entry.name)) {
+        await this.catalog!.drop(entry.name);
+      }
+      await this.ddlJournal!.clear();
+      return;
+    }
+
+    if (entry.op === 'rename') {
+      const fromDir = collectionDir(root, entry.from);
+      const toDir = collectionDir(root, entry.to);
+      const fromExists = await pathExists(fromDir);
+      const toExists = await pathExists(toDir);
+
+      if (toExists && !fromExists) {
+        // files already moved — ensure catalog points to `to`
+        if (this.catalog!.has(entry.from) && !this.catalog!.has(entry.to)) {
+          await this.catalog!.rename(entry.from, entry.to);
+        } else if (this.catalog!.has(entry.from) && this.catalog!.has(entry.to)) {
+          await this.catalog!.drop(entry.from);
+        }
+      } else if (fromExists && !toExists) {
+        // rename never moved files — abort journal
+        await this.ddlJournal!.clear();
+        return;
+      } else if (fromExists && toExists) {
+        // ambiguous: prefer completing rename (keep `to`, drop `from` files)
+        await fs.rm(fromDir, { recursive: true, force: true });
+        await fs.rm(walFile(root, entry.from), { force: true });
+        if (this.catalog!.has(entry.from) && !this.catalog!.has(entry.to)) {
+          await this.catalog!.rename(entry.from, entry.to);
+        } else if (this.catalog!.has(entry.from)) {
+          await this.catalog!.drop(entry.from);
+        }
+      }
+      await this.ddlJournal!.clear();
+    }
+  }
+
   private assertReady(): void {
     if (!this.ready) {
       throw new JSONSQLiteError(
@@ -811,6 +928,15 @@ export class JSONSQLite extends EventEmitter {
         'Database is not open. Call open() first.',
       );
     }
+  }
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
   }
 }
 

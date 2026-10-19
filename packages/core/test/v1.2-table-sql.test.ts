@@ -26,8 +26,11 @@ afterEach(async () => {
 });
 
 describe('v1.2.0 tables + SQL', () => {
-  it('FT-V12-VER-01 getVersion is 1.2.0', () => {
-    expect(getVersion()).toBe('1.2.0');
+  it('FT-V12-VER-01 getVersion matches package', async () => {
+    const pkg = JSON.parse(
+      await fs.readFile(path.join(__dirname, '../package.json'), 'utf8'),
+    ) as { version: string };
+    expect(getVersion()).toBe(pkg.version);
   });
 
   it('FT-V12-TBL-01 createTable + listTables with fields', async () => {

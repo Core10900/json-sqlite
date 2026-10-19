@@ -49,6 +49,9 @@ const KEYWORDS = new Set([
   'TRUE',
   'FALSE',
   'AS',
+  'IN',
+  'IS',
+  'BETWEEN',
 ]);
 
 export function tokenize(sql: string): Token[] {

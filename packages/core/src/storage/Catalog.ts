@@ -1,10 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
-import type { CollectionInfo, FieldDef } from '../types/index.js';
+import type { CollectionInfo, FieldDef, SyncMode } from '../types/index.js';
 import { catalogFile, collectionDir } from '../utils/path.js';
+import { writeFileAtomic } from '../utils/fsDurable.js';
 
-const FORMAT_VERSION = 1;
+/** Current on-disk catalog format. Bump only with a migration entry. */
+export const FORMAT_VERSION = 1;
 
 interface CatalogCollection {
   name: string;
@@ -18,24 +20,51 @@ interface CatalogData {
   collections: Record<string, CatalogCollection>;
 }
 
+type Migrator = (data: CatalogData) => CatalogData;
+
+/** Migrate catalog from version N → N+1. Add entries when bumping FORMAT_VERSION. */
+const MIGRATIONS: Record<number, Migrator> = {
+  // Example: 1: (data) => ({ ...data, formatVersion: 2, ... }),
+};
+
 export class Catalog {
   private data: CatalogData = {
     formatVersion: FORMAT_VERSION,
     collections: {},
   };
 
-  constructor(private readonly storagePath: string) {}
+  constructor(
+    private readonly storagePath: string,
+    private readonly syncMode: SyncMode = 'normal',
+  ) {}
+
+  get formatVersion(): number {
+    return this.data.formatVersion;
+  }
 
   async load(): Promise<void> {
     const file = catalogFile(this.storagePath);
     try {
       const raw = await fs.readFile(file, 'utf8');
-      this.data = JSON.parse(raw) as CatalogData;
+      let data = JSON.parse(raw) as CatalogData;
+      if (typeof data.formatVersion !== 'number') {
+        throw new JSONSQLiteError(
+          ErrorCode.INTERNAL,
+          'catalog.json missing formatVersion',
+        );
+      }
+      data = migrateCatalog(data);
+      this.data = data;
       if (this.data.formatVersion !== FORMAT_VERSION) {
         throw new JSONSQLiteError(
           ErrorCode.INTERNAL,
-          `Unsupported formatVersion: ${this.data.formatVersion}`,
+          `Unsupported formatVersion: ${this.data.formatVersion} (code=${FORMAT_VERSION})`,
         );
+      }
+      // Persist if migrations advanced the file
+      const onDisk = JSON.parse(raw) as CatalogData;
+      if (onDisk.formatVersion !== this.data.formatVersion) {
+        await this.save();
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -48,8 +77,11 @@ export class Catalog {
 
   async save(): Promise<void> {
     const file = catalogFile(this.storagePath);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, JSON.stringify(this.data, null, 2), 'utf8');
+    await writeFileAtomic(
+      file,
+      JSON.stringify(this.data, null, 2),
+      this.syncMode,
+    );
   }
 
   list(): CollectionInfo[] {
@@ -152,6 +184,27 @@ export class Catalog {
   getDocumentCount(name: string): number {
     return this.data.collections[name]?.documentCount ?? 0;
   }
+}
+
+export function migrateCatalog(data: CatalogData): CatalogData {
+  let cur = { ...data, collections: { ...data.collections } };
+  while (cur.formatVersion < FORMAT_VERSION) {
+    const step = MIGRATIONS[cur.formatVersion];
+    if (!step) {
+      throw new JSONSQLiteError(
+        ErrorCode.INTERNAL,
+        `No migration from formatVersion ${cur.formatVersion} to ${FORMAT_VERSION}`,
+      );
+    }
+    cur = step(cur);
+  }
+  if (cur.formatVersion > FORMAT_VERSION) {
+    throw new JSONSQLiteError(
+      ErrorCode.INTERNAL,
+      `Catalog formatVersion ${cur.formatVersion} is newer than this binary (${FORMAT_VERSION})`,
+    );
+  }
+  return cur;
 }
 
 function toInfo(c: CatalogCollection): CollectionInfo {

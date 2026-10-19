@@ -1,6 +1,6 @@
 # JSONSQLite
 
-**版本：1.2.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：1.3.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
 
@@ -94,7 +94,7 @@ yarn add @webofcat/jsonsqlite
 ```bash
 npm install -g @webofcat/jsonsqlite
 
-jsonsqlite --version          # => 1.2.0
+jsonsqlite --version          # => 1.3.0
 jsonsqlite create ./my-db     # 新建数据库目录
 jsonsqlite init ./my-db       # 幂等初始化（已存在则跳过创建）
 jsonsqlite tables --path ./my-db
@@ -159,7 +159,7 @@ const { open } = require("@webofcat/jsonsqlite");
 ```ts
 import { create, init, getVersion, open } from "@webofcat/jsonsqlite";
 
-console.log(getVersion()); // "1.2.0"
+console.log(getVersion()); // "1.3.0"
 
 // 创建新库（若已存在会抛 DB_EXISTS；force: true 可强制重建）
 await create({ storagePath: "./my-db" });
@@ -553,9 +553,10 @@ jsonsqlite init ./data
 
 # 表管理
 jsonsqlite tables --path ./data
-jsonsqlite table create --path ./data              # 对话式建表
-jsonsqlite table drop users --path ./data          # 二次确认（yes + 再输表名）
-jsonsqlite table alter users --path ./data         # 对话修改 + 二次确认
+jsonsqlite table create --path ./data              # 对话式建表（需 TTY）
+jsonsqlite table create --name users --field name:string --field age:number --path ./data
+jsonsqlite table drop users --path ./data          # 二次确认；CI 加 --yes
+jsonsqlite table alter users --path ./data         # 对话修改 + 二次确认（需 TTY）
 jsonsqlite table show users --path ./data --page 1 --size 20
 jsonsqlite table show users --path ./data -i       # 交互翻页
 jsonsqlite table describe users --path ./data
@@ -575,9 +576,9 @@ jsonsqlite backup --path ./data
 | `--version` / `-V` / `version` | 打印版本号 |
 | `create` / `init` | 建库 / 幂等初始化 |
 | `tables` | 列出所有表 |
-| `table create` | **对话式**新建表 |
-| `table drop <name>` | 删除表（**二次确认**） |
-| `table alter <name>` | 修改表（对话 + **二次确认**） |
+| `table create` | 对话建表，或 `--name` + `--field` 非交互 |
+| `table drop <name>` | 删除表（二次确认；`--yes` 跳过） |
+| `table alter <name>` | 修改表（对话 + 二次确认，需 TTY） |
 | `table show <name>` | 分页表格查看数据（`-i` 交互翻页） |
 | `table describe <name>` | 查看软 Schema |
 | `run "<sql>"` | 执行 SQL 子集 |
@@ -594,10 +595,12 @@ jsonsqlite backup --path ./data
 interface JSONSQLiteOptions {
   storagePath: string; // 必填
   walMode?: boolean; // 默认 true
-  defaultIsolation?: IsolationLevel; // 默认 READ_COMMITTED
-  queryTimeout?: number; // 默认 30000（预留）
+  defaultIsolation?: IsolationLevel; // 仅 READ_COMMITTED 真正实现；其它会降级
+  queryTimeout?: number; // 默认 30000；0 关闭
   cacheSize?: number; // 默认 1000
   encryptionKey?: string | null; // 或环境变量 JSONSQLITE_KEY
+  syncMode?: 'none' | 'normal' | 'full'; // 默认 normal（fsync）
+  schemaMode?: 'off' | 'warn' | 'strict'; // 默认 off（软 Schema）
 }
 ```
 
@@ -628,10 +631,12 @@ data/
 
 1. **单写者**：同一 `storagePath` 同时只能有一个进程持有写锁；第二进程 `open` 会得到 `LOCK_FAILED`。
 2. **不是共享网络库**：多实例水平扩展不要多进程直连同一目录写；需要共享请自建单写者服务或等待后续复制能力。
-3. **进程退出要 `close()`**：确保刷盘与释放锁。
-4. **事务不嵌套**：一次只开一个事务。
-5. **Admin 默认绑定 127.0.0.1**：公网暴露必须加 Token / 反代鉴权。
-6. **磁盘格式**：当前 `formatVersion = 1`；破坏性变更将走 major 版本。
+3. **进程退出要 `close()`**：确保刷盘与释放锁。默认 `syncMode: 'normal'` 会对 WAL/快照做 fsync；极端性能场景可改 `none`（掉电风险自负）。
+4. **事务不嵌套**：一次只开一个事务；隔离级别仅 **READ_COMMITTED** 真正实现。
+5. **软 Schema**：默认不强制校验；需要约束时设 `schemaMode: 'strict'`。
+6. **Admin 默认绑定 127.0.0.1**：公网暴露必须加 Token / 反代鉴权。
+7. **磁盘格式**：当前 `formatVersion = 1`（已具备迁移钩子）；破坏性变更将走 major 或迁移升级。
+8. **内存模型**：集合加载进进程内存；超大库请自行评估规模或等待后续分页存储。
 
 ---
 
@@ -663,8 +668,8 @@ pnpm --filter @jsonsqlite/bench start
 
 | 文档 | 内容 |
 |------|------|
+| [devDocs/releases/v1.3.0/开发计划.md](./devDocs/releases/v1.3.0/开发计划.md) | v1.3.0 硬化（耐久 / DDL / CLI） |
 | [devDocs/releases/v1.2.0/开发计划.md](./devDocs/releases/v1.2.0/开发计划.md) | v1.2.0 表管理 / SQL |
-| [devDocs/releases/v1.2.0/功能测试计划.md](./devDocs/releases/v1.2.0/功能测试计划.md) | v1.2.0 功能测试 |
 | [devDocs/releases/v1.1.0/开发计划.md](./devDocs/releases/v1.1.0/开发计划.md) | v1.1.0 CLI / create / init |
 | [devDocs/releases/v1.0/开发计划.md](./devDocs/releases/v1.0/开发计划.md) | v1.0 开发计划 |
 | [devDocs/design/JSONSQLite 技术实现方案与计划.md](./devDocs/design/JSONSQLite%20技术实现方案与计划.md) | 架构方案 |

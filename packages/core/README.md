@@ -2,7 +2,7 @@
 
 JSON-native embedded database for Node.js.
 
-**Version: 1.2.0** · Node.js ≥ 20 · Author: hanlin
+**Version: 1.3.0** · Node.js ≥ 20 · Author: hanlin
 
 ## Install
 
@@ -18,23 +18,25 @@ jsonsqlite --version
 import { create, open } from '@webofcat/jsonsqlite';
 
 await create({ storagePath: './data' });
-const db = await open({ storagePath: './data' });
+const db = await open({
+  storagePath: './data',
+  syncMode: 'normal',
+  schemaMode: 'off', // or 'warn' | 'strict'
+});
 
 await db.createTable('users', {
-  fields: [{ name: 'name', type: 'string' }],
+  fields: [{ name: 'name', type: 'string', required: true }],
 });
 await db.run("INSERT INTO users (name) VALUES ('寒')");
-const r = await db.run('SELECT * FROM users LIMIT 10');
 await db.close();
 ```
 
 ## CLI
 
 ```bash
-jsonsqlite tables --path ./data
-jsonsqlite table create --path ./data
-jsonsqlite table show users --path ./data --page 1 --size 20
-jsonsqlite run "SELECT * FROM users WHERE name = '寒'" --path ./data
+jsonsqlite table create --name users --field name:string --path ./data
+jsonsqlite table drop users --yes --path ./data
+jsonsqlite run "SELECT * FROM users WHERE name IN ('寒')" --path ./data
 ```
 
 Alias: `jsql`

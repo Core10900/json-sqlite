@@ -1,3 +1,4 @@
+import { coerceIsolation } from '../config/defaults.js';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { Document, IsolationLevel } from '../types/index.js';
 import type { DocumentStore } from '../storage/DocumentStore.js';
@@ -36,10 +37,16 @@ export class TransactionManager {
         'Nested transactions are not supported in v1',
       );
     }
+    const effective = coerceIsolation(isolationLevel);
+    if (effective !== isolationLevel) {
+      console.warn(
+        `[jsonsqlite] isolation ${isolationLevel} is not implemented; using READ_COMMITTED`,
+      );
+    }
     const id = this.nextId++;
     this.current = {
       id,
-      isolationLevel,
+      isolationLevel: effective,
       status: 'active',
       touched: new Set(),
       snapshot: { collections: new Map() },

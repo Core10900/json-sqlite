@@ -1,8 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import type { Document, WriteOpType } from '../types/index.js';
+import type { Document, SyncMode, WriteOpType } from '../types/index.js';
 import { walFile } from '../utils/path.js';
+import { appendFileDurable, writeFileAtomic } from '../utils/fsDurable.js';
 
 export interface WalEntry {
   seq: number;
@@ -22,6 +23,7 @@ export class Wal {
   constructor(
     private readonly storagePath: string,
     private readonly enabled: boolean,
+    private readonly syncMode: SyncMode = 'normal',
   ) {}
 
   async initialize(): Promise<void> {
@@ -48,7 +50,11 @@ export class Wal {
     full.checksum = checksumOf(full);
 
     const file = walFile(this.storagePath, entry.collection);
-    await fs.appendFile(file, `${JSON.stringify(full)}\n`, 'utf8');
+    await appendFileDurable(
+      file,
+      `${JSON.stringify(full)}\n`,
+      this.syncMode,
+    );
     return full;
   }
 
@@ -79,7 +85,7 @@ export class Wal {
     for (const [collection, entries] of byCollection) {
       const file = walFile(this.storagePath, collection);
       const lines = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
-      await fs.appendFile(file, lines, 'utf8');
+      await appendFileDurable(file, lines, this.syncMode);
     }
     this.buffer = [];
   }
@@ -120,7 +126,7 @@ export class Wal {
     if (!this.enabled) return;
     const file = walFile(this.storagePath, collection);
     try {
-      await fs.writeFile(file, '', 'utf8');
+      await writeFileAtomic(file, '', this.syncMode);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }

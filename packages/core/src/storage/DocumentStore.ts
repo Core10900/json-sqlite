@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
-import type { Document } from '../types/index.js';
+import type { Document, FieldDef, SchemaMode, SyncMode } from '../types/index.js';
 import { generateId } from '../utils/id.js';
+import { writeFileAtomic } from '../utils/fsDurable.js';
 import { docsFile } from '../utils/path.js';
 import type { Catalog } from './Catalog.js';
 import type { Wal } from './Wal.js';
@@ -18,6 +18,8 @@ export class DocumentStore {
     private readonly storagePath: string,
     private readonly catalog: Catalog,
     private readonly wal: Wal,
+    private readonly syncMode: SyncMode = 'normal',
+    private readonly schemaMode: SchemaMode = 'off',
   ) {}
 
   async loadCollection(name: string): Promise<void> {
@@ -90,9 +92,11 @@ export class DocumentStore {
     opts?: { durable?: boolean },
   ): Promise<Document> {
     const map = await this.ensureLoaded(name);
+    const stripped = stripSystemFields(data);
+    this.applySchema(name, stripped);
     const now = Date.now();
     const doc: Document = {
-      ...stripSystemFields(data),
+      ...stripped,
       _id: typeof data._id === 'string' ? data._id : generateId(),
       _version: 1,
       _createdAt: now,
@@ -137,6 +141,8 @@ export class DocumentStore {
       );
     }
     const now = Date.now();
+    const merged = { ...stripSystemFields(existing), ...stripSystemFields(patch) };
+    this.applySchema(name, merged);
     const doc: Document = {
       ...existing,
       ...stripSystemFields(patch),
@@ -220,16 +226,26 @@ export class DocumentStore {
     const map = this.mem.get(name);
     if (!map) return;
     const file = docsFile(this.storagePath, name);
-    await fs.mkdir(path.dirname(file), { recursive: true });
     const lines = Array.from(map.values())
       .map((d) => JSON.stringify(d))
       .join('\n');
-    const tmp = `${file}.tmp`;
-    await fs.writeFile(tmp, lines ? `${lines}\n` : '', 'utf8');
-    await fs.rename(tmp, file);
+    await writeFileAtomic(file, lines ? `${lines}\n` : '', this.syncMode);
     this.catalog.setDocumentCount(name, map.size);
     await this.catalog.save();
     await this.wal.truncate(name);
+  }
+
+  private applySchema(name: string, data: Record<string, unknown>): void {
+    if (this.schemaMode === 'off') return;
+    const fields = this.catalog.get(name)?.fields;
+    if (!fields || fields.length === 0) return;
+    const issues = validateAgainstSchema(data, fields);
+    if (issues.length === 0) return;
+    const msg = `Schema violation on ${name}: ${issues.join('; ')}`;
+    if (this.schemaMode === 'strict') {
+      throw new JSONSQLiteError(ErrorCode.SCHEMA_VIOLATION, msg, issues);
+    }
+    console.warn(`[jsonsqlite] ${msg}`);
   }
 
   async flushAll(): Promise<void> {
@@ -251,6 +267,30 @@ export class DocumentStore {
       this.mem.delete(from);
     }
   }
+}
+
+export function validateAgainstSchema(
+  data: Record<string, unknown>,
+  fields: FieldDef[],
+): string[] {
+  const issues: string[] = [];
+  for (const f of fields) {
+    const v = data[f.name];
+    if (f.required && (v === undefined || v === null)) {
+      issues.push(`missing required field '${f.name}'`);
+      continue;
+    }
+    if (v === undefined || v === null) continue;
+    if (f.type === 'any' || f.type === 'json') continue;
+    if (f.type === 'string' && typeof v !== 'string') {
+      issues.push(`field '${f.name}' expected string`);
+    } else if (f.type === 'number' && typeof v !== 'number') {
+      issues.push(`field '${f.name}' expected number`);
+    } else if (f.type === 'boolean' && typeof v !== 'boolean') {
+      issues.push(`field '${f.name}' expected boolean`);
+    }
+  }
+  return issues;
 }
 
 function stripSystemFields(

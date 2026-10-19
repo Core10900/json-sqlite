@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.3.0 — 2026-10-19
+
+### Added
+- `syncMode`: `none` | `normal` | `full` — durable writes (fsync) for catalog / WAL / JSONL
+- `schemaMode`: `off` | `warn` | `strict` — optional soft-schema enforcement on write
+- DDL journal + recovery for `dropTable` / `renameTable` crash windows
+- Catalog `formatVersion` migration framework (`FORMAT_VERSION`, migrators map)
+- SQL: `IN (...)`, `BETWEEN … AND …`, `IS [NOT] NULL`
+- CLI: `table create --name … --field …`; `table drop --yes`; TTY guard for interactive flows
+- `queryTimeout` now enforced (0 disables)
+
+### Changed
+- Unsupported isolation levels coerce to `READ_COMMITTED` (with warn)
+- Atomic catalog / indexes writes via tmp + rename
+- `count()` no longer goes through full query cache path; SELECT `total` only when paginated
+
+### Docs
+- `devDocs/releases/v1.3.0/` harden plan & tests
+
 ## 1.2.0 — 2026-10-19
 
 ### Added
