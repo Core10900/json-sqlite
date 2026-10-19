@@ -668,6 +668,7 @@ pnpm --filter @jsonsqlite/bench start
 
 | 文档 | 内容 |
 |------|------|
+| [devDocs/releases/v1.4.0/开发计划.md](./devDocs/releases/v1.4.0/开发计划.md) | v1.4.0 加密主存 / LIKE·JOIN / 导入导出（规划） |
 | [devDocs/releases/v1.3.0/开发计划.md](./devDocs/releases/v1.3.0/开发计划.md) | v1.3.0 硬化（耐久 / DDL / CLI） |
 | [devDocs/releases/v1.2.0/开发计划.md](./devDocs/releases/v1.2.0/开发计划.md) | v1.2.0 表管理 / SQL |
 | [devDocs/releases/v1.1.0/开发计划.md](./devDocs/releases/v1.1.0/开发计划.md) | v1.1.0 CLI / create / init |
