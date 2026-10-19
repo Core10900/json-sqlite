@@ -1,0 +1,21 @@
+{
+  "name": "json-sqlite",
+  "private": true,
+  "version": "0.0.0",
+  "description": "JSONSQLite monorepo — JSON-native embedded database for Node.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "pnpm --filter @jsonsqlite/core build",
+    "test": "pnpm --filter @jsonsqlite/core test",
+    "lint": "pnpm --filter @jsonsqlite/core lint",
+    "pack:smoke": "pnpm --filter @jsonsqlite/core pack:smoke"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

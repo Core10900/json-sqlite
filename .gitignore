@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.tgz
+.DS_Store
+data/
+.tmp/
+*.log
+.turbo/
+.pnpm-store/
+packages/core/data/
+apps/**/data/
