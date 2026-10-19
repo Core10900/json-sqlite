@@ -668,6 +668,9 @@ pnpm --filter @jsonsqlite/bench start
 
 | 文档 | 内容 |
 |------|------|
+| [devDocs/releases/v1.6.0/开发计划.md](./devDocs/releases/v1.6.0/开发计划.md) | v1.6.0 **LTS 规划**（根目录 `CLI-API.md` / `API.md`） |
+| [devDocs/releases/v1.5.5/开发计划.md](./devDocs/releases/v1.5.5/开发计划.md) | v1.5.5 **CLI LTS 化**（命令扩展 / 交互与脚本契约） |
+| [devDocs/releases/v1.5.0/开发计划.md](./devDocs/releases/v1.5.0/开发计划.md) | v1.5.0 生产就绪（rekey / vacuum / 压测） |
 | [devDocs/releases/v1.4.0/开发计划.md](./devDocs/releases/v1.4.0/开发计划.md) | v1.4.0 加密主存 / LIKE·JOIN / 导入导出（规划） |
 | [devDocs/releases/v1.3.0/开发计划.md](./devDocs/releases/v1.3.0/开发计划.md) | v1.3.0 硬化（耐久 / DDL / CLI） |
 | [devDocs/releases/v1.2.0/开发计划.md](./devDocs/releases/v1.2.0/开发计划.md) | v1.2.0 表管理 / SQL |
