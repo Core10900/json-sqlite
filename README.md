@@ -1,14 +1,18 @@
 # JSONSQLite
 
-**版本：1.0.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：1.1.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
-JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。通过 `npm install` 装进业务工程后，在进程内打开本地数据目录即可使用——角色类似 better-sqlite3，而不是必须单独部署的网络数据库服务。
+JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 命令行本地创建 / 初始化数据库。
 
 ```text
-业务后端（Express / Nest / Fastify / …）
-        │  npm i @webofcat/jsonsqlite
-        ▼
-   进程内引擎 + 本地 ./data 目录
+# 嵌入业务
+业务后端 ── npm i @webofcat/jsonsqlite ──► import { open, create, init }
+
+# 全局 CLI
+npm i -g @webofcat/jsonsqlite
+jsonsqlite --version
+jsonsqlite create ./my-db
+jsonsqlite init ./my-db
 ```
 
 ---
@@ -17,7 +21,9 @@ JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**�
 
 - [1. 能做什么](#1-能做什么)
 - [2. 环境与安装](#2-环境与安装)
+- [2.1 全局 CLI 安装](#21-全局-cli-安装)
 - [3. 快速开始](#3-快速开始)
+- [3.1 create / init API](#31-create--init-api)
 - [4. 打开与关闭](#4-打开与关闭)
 - [5. 集合与文档 CRUD](#5-集合与文档-crud)
 - [6. JSON 查询](#6-json-查询)
@@ -55,7 +61,8 @@ JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**�
 | **备份**       | 全量 / 增量；可选 AES-256-GCM                               |
 | **时间旅行**   | 按时间点查询、差异对比、回滚                                |
 | **可观测**     | health、metrics、慢查询记录、QueryAdvisor                   |
-| **运维入口**   | CLI `jsql`、可选 localhost HTTP Admin                       |
+| **运维入口**   | 全局 CLI `jsonsqlite`（create/init/version…）、可选 HTTP Admin |
+| **本地建库**   | 库 API / CLI：`create` 新建、`init` 幂等初始化                |
 
 **相对传统 SQLite 的定位差异（不是性能全面替代）**：JSON 第一公民、动态 Schema、内置监控/Admin/时间旅行等开发与运维体验；适合中小型后端、配置中心、本地工具、快速迭代场景。
 
@@ -79,14 +86,26 @@ pnpm add @webofcat/jsonsqlite
 yarn add @webofcat/jsonsqlite
 ```
 
-> 若当前尚未发布到 npm 公网，可在本 monorepo 内用 `workspace:` 依赖，或 `pnpm pack` 后本地安装 tarball。
-
-### 从本仓库本地联调
+### 2.1 全局 CLI 安装
 
 ```bash
-pnpm install
-pnpm build
-# 在其他项目：pnpm add /path/to/json-sqlite/packages/core
+npm install -g @webofcat/jsonsqlite
+
+jsonsqlite --version          # => 1.1.0
+jsonsqlite create ./my-db     # 新建数据库目录
+jsonsqlite init ./my-db       # 幂等初始化（已存在则跳过创建）
+jsonsqlite doctor --path ./my-db
+jsonsqlite help
+```
+
+命令别名：`jsql`（与 `jsonsqlite` 相同入口）。
+
+本仓库本地联调 / 全局安装：
+
+```bash
+pnpm install && pnpm build
+npm install -g ./packages/core
+jsonsqlite --version
 ```
 
 ---
@@ -129,6 +148,33 @@ const { open } = require("@webofcat/jsonsqlite");
   await db.close();
 })();
 ```
+
+### 3.1 create / init API
+
+```ts
+import { create, init, getVersion, open } from "@webofcat/jsonsqlite";
+
+console.log(getVersion()); // "1.1.0"
+
+// 创建新库（若已存在会抛 DB_EXISTS；force: true 可强制重建）
+await create({ storagePath: "./my-db" });
+
+// 幂等初始化：不存在则创建，已存在则补齐目录结构
+await init({ storagePath: "./my-db" });
+
+// 再 open 进行读写
+const db = await open({ storagePath: "./my-db" });
+await db.close();
+```
+
+| API | 行为 |
+|-----|------|
+| `create(options)` | 新建数据目录；已存在且未 `force` → `ErrorCode.DB_EXISTS` |
+| `init(options)` | 不存在则创建，存在则确保骨架完整（不删数据） |
+| `getVersion()` | 返回包版本字符串 |
+| `open(options)` | 打开库并持锁，用于 CRUD |
+
+推荐流程：`create` 或 `init` → 业务中 `open` → 用完 `close`。
 
 ---
 
@@ -452,27 +498,36 @@ unsubscribe();
 
 ---
 
-## 14. CLI：`jsql`
+## 14. CLI：`jsonsqlite`
 
-构建产物提供二进制（`packages/core` 的 `bin`）：
+全局安装后直接使用；本仓库也可 `node packages/core/dist/cli.js`。
 
 ```bash
-# 本仓库内
-pnpm --filter @webofcat/jsonsqlite build
-node packages/core/dist/cli.js doctor --path ./data
-node packages/core/dist/cli.js collections --path ./data
-node packages/core/dist/cli.js query '{"collection":"users","limit":5}' --path ./data
-node packages/core/dist/cli.js backup --path ./data
+npm i -g @webofcat/jsonsqlite
+
+jsonsqlite --version
+jsonsqlite create ./data
+jsonsqlite init ./data
+jsonsqlite doctor --path ./data
+jsonsqlite collections --path ./data
+jsonsqlite query '{"collection":"users","limit":5}' --path ./data
+jsonsqlite backup --path ./data
 ```
 
-也可用环境变量：`JSONSQLITE_PATH=./data`。
+环境变量：`JSONSQLITE_PATH`（默认数据目录）。
 
-| 命令           | 作用                              |
-| -------------- | --------------------------------- |
-| `doctor`       | 打印 health，非 healthy 时 exit 1 |
-| `query <json>` | 执行 JSON 查询                    |
-| `backup`       | 全量备份                          |
-| `collections`  | 列出集合                          |
+| 命令 | 作用 |
+|------|------|
+| `--version` / `-V` / `version` | 打印版本号 |
+| `create [path] [--force]` | 创建新库；已存在则失败，加 `--force` 重建 |
+| `init [path]` | 幂等初始化 |
+| `doctor [--path]` | 健康检查，非 healthy 时 exit 1 |
+| `query '<json>' [--path]` | 执行 JSON 查询 |
+| `backup [--path]` | 全量备份 |
+| `collections [--path]` | 列出集合 |
+| `help` | 帮助 |
+
+别名：`jsql` ≡ `jsonsqlite`。
 
 ---
 
@@ -542,6 +597,20 @@ pnpm pack:smoke           # 打包安装冒烟
 pnpm --filter @jsonsqlite/example-basic start
 pnpm --filter @jsonsqlite/bench start
 ```
+
+---
+
+## 19. 更多文档
+
+| 文档 | 内容 |
+|------|------|
+| [docs/v1.1.0 开发计划.md](./docs/v1.1.0%20开发计划.md) | v1.1.0 CLI / create / init |
+| [docs/v1.1.0 功能测试计划.md](./docs/v1.1.0%20功能测试计划.md) | v1.1.0 功能测试 |
+| [packages/core/README.md](./packages/core/README.md) | npm 包简版说明 |
+| [CHANGELOG.md](./CHANGELOG.md) | 版本变更 |
+| [docs/v1.0 开发计划.md](./docs/v1.0%20开发计划.md) | v1.0 开发计划 |
+| [docs/JSONSQLite 技术实现方案与计划.md](./docs/JSONSQLite%20技术实现方案与计划.md) | 架构方案 |
+| [docs/JSONSQLite npm包与后端接入说明.md](./docs/JSONSQLite%20npm包与后端接入说明.md) | 包契约 |
 
 ---
 

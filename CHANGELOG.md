@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.0 — 2026-10-19
+
+### Added
+- Global CLI command **`jsonsqlite`** (`npm i -g @webofcat/jsonsqlite`)
+- `jsonsqlite --version` / `-V` / `version`
+- Library APIs: **`create()`**, **`init()`**, **`getVersion()`**
+- CLI: `jsonsqlite create [path] [--force]`, `jsonsqlite init [path]`
+- Error code `DB_EXISTS` when creating over an existing database without `force`
+- Keep alias `jsql`
+
+### Docs
+- Root README: global install, create/init API & CLI
+- `docs/v1.1.0 开发计划.md`, `docs/v1.1.0 功能测试计划.md`
+
 ## 1.0.0 — 2026-10-19
 
 ### Added

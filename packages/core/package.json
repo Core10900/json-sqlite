@@ -1,7 +1,7 @@
 {
   "name": "@webofcat/jsonsqlite",
-  "version": "1.0.0",
-  "description": "JSON-native embedded database for Node.js with WAL, queries, and ops tooling",
+  "version": "1.1.0",
+  "description": "JSON-native embedded database for Node.js with WAL, CLI (jsonsqlite), create/init, and ops tooling",
   "license": "MIT",
   "author": "hanlin <lincent909@163.com>",
   "repository": {
@@ -26,6 +26,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
+    "jsonsqlite": "./dist/cli.js",
     "jsql": "./dist/cli.js"
   },
   "files": [

@@ -1,46 +1,43 @@
 # @webofcat/jsonsqlite
 
-JSON-native embedded database for Node.js — install into your backend, open a local data directory, query documents with indexes, WAL, backup, and ops APIs.
+JSON-native embedded database for Node.js.
 
-**Version: 1.0.0** · Requires **Node.js ≥ 20** · Author: **hanlin**
+**Version: 1.1.0** · Node.js ≥ 20 · Author: hanlin
 
 ## Install
 
 ```bash
+# project dependency
 npm install @webofcat/jsonsqlite
-# or: pnpm add @webofcat/jsonsqlite
+
+# global CLI
+npm install -g @webofcat/jsonsqlite
+jsonsqlite --version
 ```
 
-## Quick start
+## Library
 
 ```ts
-import { open } from '@webofcat/jsonsqlite';
+import { create, init, open, getVersion } from '@webofcat/jsonsqlite';
 
+await create({ storagePath: './data' }); // or init() for idempotent setup
 const db = await open({ storagePath: './data' });
-
-await db.insert('users', { name: '寒', age: 30 });
-await db.createIndex('users', 'age', 'tree');
-
-const rows = await db.query({
-  collection: 'users',
-  filter: { age: { $gte: 18 } },
-  orderBy: { age: 'desc' },
-  limit: 10,
-});
-
-await db.aggregate('users', [
-  { type: 'group', by: 'age', fields: { n: { op: 'count' } } },
-]);
-
-await db.backupFull();
-console.log(await db.health());
-
+await db.insert('users', { name: '寒' });
 await db.close();
 ```
 
-## Docs
+## CLI
 
-See the repository root [README.md](https://github.com/Core10900/json-sqlite#readme) for the full Chinese guide.
+```bash
+jsonsqlite --version
+jsonsqlite create ./my-db
+jsonsqlite init ./my-db
+jsonsqlite doctor --path ./my-db
+```
+
+Alias: `jsql`
+
+Full docs: https://github.com/Core10900/json-sqlite#readme
 
 ## License
 
