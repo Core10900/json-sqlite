@@ -1,18 +1,18 @@
 # JSONSQLite
 
-**版本：1.1.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：1.2.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
-JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 命令行本地创建 / 初始化数据库。
+JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
 
 ```text
 # 嵌入业务
-业务后端 ── npm i @webofcat/jsonsqlite ──► import { open, create, init }
+业务后端 ── npm i @webofcat/jsonsqlite ──► import { open, create, init }; db.run(sql)
 
 # 全局 CLI
 npm i -g @webofcat/jsonsqlite
 jsonsqlite --version
-jsonsqlite create ./my-db
-jsonsqlite init ./my-db
+jsonsqlite table create --path ./my-db    # 对话式建表
+jsonsqlite run "SELECT * FROM users" --path ./my-db
 ```
 
 ---
@@ -24,6 +24,7 @@ jsonsqlite init ./my-db
 - [2.1 全局 CLI 安装](#21-全局-cli-安装)
 - [3. 快速开始](#3-快速开始)
 - [3.1 create / init API](#31-create--init-api)
+- [3.2 表管理与 SQL（`run`）](#32-表管理与-sqlrun)
 - [4. 打开与关闭](#4-打开与关闭)
 - [5. 集合与文档 CRUD](#5-集合与文档-crud)
 - [6. JSON 查询](#6-json-查询)
@@ -34,7 +35,7 @@ jsonsqlite init ./my-db
 - [11. 时间旅行](#11-时间旅行)
 - [12. 监控、健康检查与建议](#12-监控健康检查与建议)
 - [13. HTTP Admin 与事件订阅](#13-http-admin-与事件订阅)
-- [14. CLI：jsql](#14-clijsql)
+- [14. CLI：`jsonsqlite`](#14-clijsonsqlite)
 - [15. 配置项](#15-配置项)
 - [16. 数据目录结构](#16-数据目录结构)
 - [17. 使用限制与最佳实践](#17-使用限制与最佳实践)
@@ -61,8 +62,10 @@ jsonsqlite init ./my-db
 | **备份**       | 全量 / 增量；可选 AES-256-GCM                               |
 | **时间旅行**   | 按时间点查询、差异对比、回滚                                |
 | **可观测**     | health、metrics、慢查询记录、QueryAdvisor                   |
-| **运维入口**   | 全局 CLI `jsonsqlite`（create/init/version…）、可选 HTTP Admin |
+| **运维入口**   | 全局 CLI `jsonsqlite`（建库 / 表管理 / SQL）、可选 HTTP Admin |
 | **本地建库**   | 库 API / CLI：`create` 新建、`init` 幂等初始化                |
+| **表管理**     | `listTables` / `createTable` / `dropTable` / `alterTable`；CLI 对话建表、二次确认删改 |
+| **SQL 子集**   | `db.run(sql)` / `jsonsqlite run`：SELECT/INSERT/UPDATE/DELETE/DDL |
 
 **相对传统 SQLite 的定位差异（不是性能全面替代）**：JSON 第一公民、动态 Schema、内置监控/Admin/时间旅行等开发与运维体验；适合中小型后端、配置中心、本地工具、快速迭代场景。
 
@@ -91,9 +94,11 @@ yarn add @webofcat/jsonsqlite
 ```bash
 npm install -g @webofcat/jsonsqlite
 
-jsonsqlite --version          # => 1.1.0
+jsonsqlite --version          # => 1.2.0
 jsonsqlite create ./my-db     # 新建数据库目录
 jsonsqlite init ./my-db       # 幂等初始化（已存在则跳过创建）
+jsonsqlite tables --path ./my-db
+jsonsqlite run "SHOW TABLES" --path ./my-db
 jsonsqlite doctor --path ./my-db
 jsonsqlite help
 ```
@@ -154,7 +159,7 @@ const { open } = require("@webofcat/jsonsqlite");
 ```ts
 import { create, init, getVersion, open } from "@webofcat/jsonsqlite";
 
-console.log(getVersion()); // "1.1.0"
+console.log(getVersion()); // "1.2.0"
 
 // 创建新库（若已存在会抛 DB_EXISTS；force: true 可强制重建）
 await create({ storagePath: "./my-db" });
@@ -175,6 +180,45 @@ await db.close();
 | `open(options)` | 打开库并持锁，用于 CRUD |
 
 推荐流程：`create` 或 `init` → 业务中 `open` → 用完 `close`。
+
+### 3.2 表管理与 SQL（`run`）
+
+集合即「表」。可声明软 Schema（字段元数据，不强制校验写入）。
+
+```ts
+import { open } from "@webofcat/jsonsqlite";
+
+const db = await open({ storagePath: "./data" });
+
+await db.createTable("users", {
+  fields: [
+    { name: "name", type: "string" },
+    { name: "age", type: "number" },
+  ],
+});
+
+await db.run("INSERT INTO users (name, age) VALUES ('寒', 30)");
+const result = await db.run(
+  "SELECT name, age FROM users WHERE age >= 18 ORDER BY age DESC LIMIT 10",
+);
+console.log(result); // { type: 'rows', rows, columns, rowCount, total }
+
+await db.alterTable("users", { addFields: [{ name: "city", type: "string" }] });
+// await db.dropTable("users");
+
+await db.close();
+```
+
+| API | 说明 |
+|-----|------|
+| `listTables()` / `describeTable(name)` | 列表 / 结构 |
+| `createTable(name, { fields? })` | 建表（软 Schema） |
+| `dropTable(name)` | 删表并清理磁盘 |
+| `alterTable(name, { renameTo?, addFields?, dropFields? })` | 改名 / 增减字段定义 |
+| `count(name, filter?)` | 计数（分页用） |
+| `run(sql)` | 执行 SQL 子集 |
+
+**SQL 支持**：`SELECT` / `INSERT` / `UPDATE` / `DELETE` / `CREATE TABLE` / `DROP TABLE` / `ALTER TABLE`（`RENAME TO` / `ADD COLUMN` / `DROP COLUMN`）/ `SHOW TABLES` / `DESCRIBE`。不含 JOIN、子查询。
 
 ---
 
@@ -500,17 +544,27 @@ unsubscribe();
 
 ## 14. CLI：`jsonsqlite`
 
-全局安装后直接使用；本仓库也可 `node packages/core/dist/cli.js`。
-
 ```bash
 npm i -g @webofcat/jsonsqlite
 
 jsonsqlite --version
 jsonsqlite create ./data
 jsonsqlite init ./data
+
+# 表管理
+jsonsqlite tables --path ./data
+jsonsqlite table create --path ./data              # 对话式建表
+jsonsqlite table drop users --path ./data          # 二次确认（yes + 再输表名）
+jsonsqlite table alter users --path ./data         # 对话修改 + 二次确认
+jsonsqlite table show users --path ./data --page 1 --size 20
+jsonsqlite table show users --path ./data -i       # 交互翻页
+jsonsqlite table describe users --path ./data
+
+# SQL
+jsonsqlite run "SHOW TABLES" --path ./data
+jsonsqlite run "SELECT * FROM users WHERE age > 18 LIMIT 10" --path ./data
+
 jsonsqlite doctor --path ./data
-jsonsqlite collections --path ./data
-jsonsqlite query '{"collection":"users","limit":5}' --path ./data
 jsonsqlite backup --path ./data
 ```
 
@@ -519,12 +573,15 @@ jsonsqlite backup --path ./data
 | 命令 | 作用 |
 |------|------|
 | `--version` / `-V` / `version` | 打印版本号 |
-| `create [path] [--force]` | 创建新库；已存在则失败，加 `--force` 重建 |
-| `init [path]` | 幂等初始化 |
-| `doctor [--path]` | 健康检查，非 healthy 时 exit 1 |
-| `query '<json>' [--path]` | 执行 JSON 查询 |
-| `backup [--path]` | 全量备份 |
-| `collections [--path]` | 列出集合 |
+| `create` / `init` | 建库 / 幂等初始化 |
+| `tables` | 列出所有表 |
+| `table create` | **对话式**新建表 |
+| `table drop <name>` | 删除表（**二次确认**） |
+| `table alter <name>` | 修改表（对话 + **二次确认**） |
+| `table show <name>` | 分页表格查看数据（`-i` 交互翻页） |
+| `table describe <name>` | 查看软 Schema |
+| `run "<sql>"` | 执行 SQL 子集 |
+| `doctor` / `query` / `backup` / `collections` | 运维 / JSON 查询 |
 | `help` | 帮助 |
 
 别名：`jsql` ≡ `jsonsqlite`。
@@ -606,11 +663,11 @@ pnpm --filter @jsonsqlite/bench start
 
 | 文档 | 内容 |
 |------|------|
+| [devDocs/releases/v1.2.0/开发计划.md](./devDocs/releases/v1.2.0/开发计划.md) | v1.2.0 表管理 / SQL |
+| [devDocs/releases/v1.2.0/功能测试计划.md](./devDocs/releases/v1.2.0/功能测试计划.md) | v1.2.0 功能测试 |
 | [devDocs/releases/v1.1.0/开发计划.md](./devDocs/releases/v1.1.0/开发计划.md) | v1.1.0 CLI / create / init |
-| [devDocs/releases/v1.1.0/功能测试计划.md](./devDocs/releases/v1.1.0/功能测试计划.md) | v1.1.0 功能测试 |
 | [devDocs/releases/v1.0/开发计划.md](./devDocs/releases/v1.0/开发计划.md) | v1.0 开发计划 |
 | [devDocs/design/JSONSQLite 技术实现方案与计划.md](./devDocs/design/JSONSQLite%20技术实现方案与计划.md) | 架构方案 |
-| [devDocs/design/JSONSQLite npm包与后端接入说明.md](./devDocs/design/JSONSQLite%20npm包与后端接入说明.md) | 包契约 |
 | [packages/core/README.md](./packages/core/README.md) | npm 包简版说明 |
 | [CHANGELOG.md](./CHANGELOG.md) | 版本变更 |
 

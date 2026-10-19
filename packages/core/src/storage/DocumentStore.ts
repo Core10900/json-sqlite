@@ -237,6 +237,20 @@ export class DocumentStore {
       await this.persistCollection(name);
     }
   }
+
+  /** Remove collection from memory (after drop). */
+  unload(name: string): void {
+    this.mem.delete(name);
+  }
+
+  /** Move in-memory map to a new collection name. */
+  renameInMemory(from: string, to: string): void {
+    const map = this.mem.get(from);
+    if (map) {
+      this.mem.set(to, map);
+      this.mem.delete(from);
+    }
+  }
 }
 
 function stripSystemFields(

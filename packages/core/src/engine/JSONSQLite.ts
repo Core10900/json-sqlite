@@ -33,12 +33,20 @@ import {
 import { adviseQuery, profileStages } from '../features/QueryAdvisor.js';
 import { analyzeQuality } from '../features/DataQuality.js';
 import { startHttpServer, type HttpServerOptions } from '../api/httpServer.js';
+import { parseSql } from '../sql/parse.js';
+import type { SqlStatement } from '../sql/ast.js';
+import { collectionDir, walFile } from '../utils/path.js';
 import type {
+  AlterTableSpec,
   CollectionInfo,
+  CreateTableOptions,
   Document,
+  FieldDef,
   IsolationLevel,
   JsonQuery,
   JSONSQLiteOptions,
+  SqlResult,
+  TableInfo,
 } from '../types/index.js';
 
 export class JSONSQLite extends EventEmitter {
@@ -144,14 +152,293 @@ export class JSONSQLite extends EventEmitter {
     this.emit('close');
   }
 
-  async createCollection(name: string): Promise<CollectionInfo> {
+  async createCollection(
+    name: string,
+    options?: CreateTableOptions,
+  ): Promise<CollectionInfo> {
     this.assertReady();
-    return this.catalog!.create(name);
+    return this.catalog!.create(name, options?.fields);
+  }
+
+  /** Alias of createCollection with soft-schema fields (CLI「表」). */
+  async createTable(
+    name: string,
+    options?: CreateTableOptions,
+  ): Promise<TableInfo> {
+    return this.createCollection(name, options);
   }
 
   async listCollections(): Promise<CollectionInfo[]> {
     this.assertReady();
     return this.catalog!.list();
+  }
+
+  /** Alias of listCollections. */
+  async listTables(): Promise<TableInfo[]> {
+    return this.listCollections();
+  }
+
+  async describeTable(name: string): Promise<TableInfo> {
+    this.assertReady();
+    const info = this.catalog!.get(name);
+    if (!info) {
+      throw new JSONSQLiteError(
+        ErrorCode.COLLECTION_NOT_FOUND,
+        `Collection not found: ${name}`,
+      );
+    }
+    await this.store!.ensureLoaded(name);
+    return {
+      ...info,
+      documentCount: this.store!.getAll(name).length,
+    };
+  }
+
+  async dropTable(name: string): Promise<void> {
+    this.assertReady();
+    if (!this.catalog!.has(name)) {
+      throw new JSONSQLiteError(
+        ErrorCode.COLLECTION_NOT_FOUND,
+        `Collection not found: ${name}`,
+      );
+    }
+    await this.indexes!.dropAllForCollection(name);
+    this.store!.unload(name);
+    this.cache!.invalidateCollection(name);
+    await this.catalog!.drop(name);
+
+    const root = this.storagePath;
+    await fs.rm(collectionDir(root, name), { recursive: true, force: true });
+    await fs.rm(walFile(root, name), { force: true });
+    await fs.rm(path.join(root, 'deltas', `${name}.delta`), { force: true });
+    this.emit('dataChanged', { op: 'dropTable', collection: name });
+  }
+
+  /** @deprecated Prefer dropTable */
+  async dropCollection(name: string): Promise<void> {
+    return this.dropTable(name);
+  }
+
+  async alterTable(name: string, spec: AlterTableSpec): Promise<TableInfo> {
+    this.assertReady();
+    const current = await this.describeTable(name);
+    let fields: FieldDef[] = [...(current.fields ?? [])];
+
+    if (spec.dropFields?.length) {
+      const drop = new Set(spec.dropFields);
+      fields = fields.filter((f) => !drop.has(f.name));
+    }
+    if (spec.addFields?.length) {
+      const existing = new Set(fields.map((f) => f.name));
+      for (const f of spec.addFields) {
+        if (existing.has(f.name)) {
+          throw new JSONSQLiteError(
+            ErrorCode.INVALID_CONFIG,
+            `Field already exists: ${f.name}`,
+          );
+        }
+        fields.push(f);
+        existing.add(f.name);
+      }
+    }
+
+    let tableName = name;
+    if (spec.renameTo && spec.renameTo !== name) {
+      await this.renameTable(name, spec.renameTo);
+      tableName = spec.renameTo;
+    }
+
+    await this.catalog!.setFields(tableName, fields);
+    return this.describeTable(tableName);
+  }
+
+  async renameTable(from: string, to: string): Promise<TableInfo> {
+    this.assertReady();
+    if (!this.catalog!.has(from)) {
+      throw new JSONSQLiteError(
+        ErrorCode.COLLECTION_NOT_FOUND,
+        `Collection not found: ${from}`,
+      );
+    }
+    await this.store!.ensureLoaded(from);
+    await this.store!.persistCollection(from);
+
+    const root = this.storagePath;
+    const fromDir = collectionDir(root, from);
+    const toDir = collectionDir(root, to);
+    await fs.rename(fromDir, toDir);
+    try {
+      await fs.rename(walFile(root, from), walFile(root, to));
+    } catch {
+      /* wal may not exist */
+    }
+    try {
+      await fs.rename(
+        path.join(root, 'deltas', `${from}.delta`),
+        path.join(root, 'deltas', `${to}.delta`),
+      );
+    } catch {
+      /* delta may not exist */
+    }
+
+    const indexMetas = this.indexes!
+      .list()
+      .filter((m) => m.collection === from);
+    await this.indexes!.dropAllForCollection(from);
+
+    this.store!.renameInMemory(from, to);
+    await this.catalog!.rename(from, to);
+    this.cache!.invalidateCollection(from);
+    this.cache!.invalidateCollection(to);
+
+    await this.store!.ensureLoaded(to);
+    const docs = this.store!.getAll(to);
+    for (const meta of indexMetas) {
+      await this.indexes!.createIndex(to, meta.field, meta.type, docs);
+    }
+
+    this.emit('dataChanged', { op: 'renameTable', from, to });
+    return this.describeTable(to);
+  }
+
+  async count(
+    collection: string,
+    filter?: JsonQuery['filter'],
+  ): Promise<number> {
+    this.assertReady();
+    await this.store!.ensureLoaded(collection);
+    const rows = await this.query({
+      collection,
+      filter,
+      // no limit — full match count
+    });
+    return rows.length;
+  }
+
+  /**
+   * Execute a SQL subset statement.
+   * Compiles to JsonQuery / CRUD / DDL — see docs for supported syntax.
+   */
+  async run(sql: string): Promise<SqlResult> {
+    this.assertReady();
+    const stmt = parseSql(sql);
+    return this.executeSql(stmt);
+  }
+
+  private async executeSql(stmt: SqlStatement): Promise<SqlResult> {
+    switch (stmt.kind) {
+      case 'select': {
+        const rows = await this.query({
+          collection: stmt.table,
+          filter: stmt.filter,
+          projection: stmt.columns === '*' ? undefined : stmt.columns,
+          orderBy: stmt.orderBy,
+          limit: stmt.limit,
+          offset: stmt.offset,
+        });
+        const columns =
+          stmt.columns === '*'
+            ? inferColumns(rows)
+            : stmt.columns;
+        const total = await this.count(stmt.table, stmt.filter);
+        return {
+          type: 'rows',
+          rows,
+          columns,
+          rowCount: rows.length,
+          total,
+        };
+      }
+      case 'insert': {
+        let lastId: string | undefined;
+        let changes = 0;
+        for (const row of stmt.values) {
+          const data: Record<string, unknown> = {};
+          if (stmt.columns) {
+            if (stmt.columns.length !== row.length) {
+              throw new JSONSQLiteError(
+                ErrorCode.SQL_PARSE,
+                'INSERT column count does not match VALUES',
+              );
+            }
+            stmt.columns.forEach((c, i) => {
+              data[c] = row[i];
+            });
+          } else {
+            throw new JSONSQLiteError(
+              ErrorCode.SQL_UNSUPPORTED,
+              'INSERT requires an explicit column list: INSERT INTO t (a,b) VALUES (...)',
+            );
+          }
+          const doc = (await this.insert(stmt.table, data)) as Document;
+          lastId = doc._id;
+          changes += 1;
+        }
+        return { type: 'ok', changes, lastId, message: 'INSERT' };
+      }
+      case 'update': {
+        const matches = await this.query({
+          collection: stmt.table,
+          filter: stmt.filter,
+        });
+        let changes = 0;
+        for (const doc of matches) {
+          await this.update(stmt.table, doc._id, stmt.set);
+          changes += 1;
+        }
+        return { type: 'ok', changes, message: 'UPDATE' };
+      }
+      case 'delete': {
+        const matches = await this.query({
+          collection: stmt.table,
+          filter: stmt.filter,
+        });
+        let changes = 0;
+        for (const doc of matches) {
+          if (await this.delete(stmt.table, doc._id)) changes += 1;
+        }
+        return { type: 'ok', changes, message: 'DELETE' };
+      }
+      case 'create_table': {
+        await this.createTable(stmt.table, { fields: stmt.fields });
+        return {
+          type: 'ok',
+          changes: 0,
+          message: `CREATE TABLE ${stmt.table}`,
+        };
+      }
+      case 'drop_table': {
+        await this.dropTable(stmt.table);
+        return { type: 'ok', changes: 0, message: `DROP TABLE ${stmt.table}` };
+      }
+      case 'alter_table': {
+        await this.alterTable(stmt.table, {
+          renameTo: stmt.renameTo,
+          addFields: stmt.addField ? [stmt.addField] : undefined,
+          dropFields: stmt.dropField ? [stmt.dropField] : undefined,
+        });
+        return { type: 'ok', changes: 0, message: `ALTER TABLE ${stmt.table}` };
+      }
+      case 'show_tables': {
+        return { type: 'tables', tables: await this.listTables() };
+      }
+      case 'describe': {
+        const info = await this.describeTable(stmt.table);
+        return {
+          type: 'schema',
+          table: info.name,
+          fields: info.fields ?? [],
+          documentCount: info.documentCount,
+        };
+      }
+      default: {
+        const _exhaustive: never = stmt;
+        throw new JSONSQLiteError(
+          ErrorCode.SQL_UNSUPPORTED,
+          `Unsupported SQL: ${JSON.stringify(_exhaustive)}`,
+        );
+      }
+    }
   }
 
   async createIndex(
@@ -525,6 +812,16 @@ export class JSONSQLite extends EventEmitter {
       );
     }
   }
+}
+
+function inferColumns(rows: Document[]): string[] {
+  const keys = new Set<string>();
+  for (const row of rows) {
+    for (const k of Object.keys(row)) keys.add(k);
+  }
+  const preferred = ['_id', '_version', '_createdAt', '_updatedAt'];
+  const rest = [...keys].filter((k) => !preferred.includes(k)).sort();
+  return [...preferred.filter((k) => keys.has(k)), ...rest];
 }
 
 export async function open(options: JSONSQLiteOptions): Promise<JSONSQLite> {

@@ -100,6 +100,17 @@ export class IndexManager {
     await this.save();
   }
 
+  async dropAllForCollection(collection: string): Promise<void> {
+    let changed = false;
+    for (const [k, idx] of [...this.indexes.entries()]) {
+      if (idx.meta.collection === collection) {
+        this.indexes.delete(k);
+        changed = true;
+      }
+    }
+    if (changed) await this.save();
+  }
+
   onInsert(collection: string, doc: Document): void {
     for (const idx of this.findForCollection(collection)) idx.insert(doc);
   }

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.0 — 2026-10-19
+
+### Added
+- Table APIs: `listTables`, `createTable`, `dropTable`, `alterTable`, `describeTable`, `count`
+- Soft schema `fields` on collections (catalog metadata)
+- SQL subset via **`db.run(sql)`** and **`parseSql`**: SELECT / INSERT / UPDATE / DELETE / CREATE|DROP|ALTER TABLE / SHOW TABLES / DESCRIBE
+- CLI table management:
+  - `tables` / `table create` (interactive dialogue)
+  - `table drop` (double confirmation)
+  - `table alter` (dialogue + double confirmation)
+  - `table show` (friendly paginated table; `-i` interactive)
+  - `table describe`
+- CLI **`jsonsqlite run "<sql>"`**
+- Error codes `SQL_PARSE`, `SQL_UNSUPPORTED`
+
+### Docs
+- `devDocs/releases/v1.2.0/` 开发计划与功能测试计划
+- Root README: table CLI + SQL section
+
 ## 1.1.0 — 2026-10-19
 
 ### Added

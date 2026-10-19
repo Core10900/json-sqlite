@@ -67,10 +67,58 @@ export interface JSONSQLiteOptions {
 
 export type IndexType = 'object' | 'tree' | 'inverted';
 
+/** Soft schema field types for table DDL / CLI dialogue. */
+export type FieldType = 'string' | 'number' | 'boolean' | 'json' | 'any';
+
+export interface FieldDef {
+  name: string;
+  type: FieldType;
+  required?: boolean;
+}
+
 export interface CollectionInfo {
   name: string;
   createdAt: number;
   documentCount: number;
+  /** Optional soft schema (metadata only; writes are not strictly validated). */
+  fields?: FieldDef[];
 }
+
+export type TableInfo = CollectionInfo;
+
+export interface CreateTableOptions {
+  fields?: FieldDef[];
+}
+
+export interface AlterTableSpec {
+  renameTo?: string;
+  addFields?: FieldDef[];
+  dropFields?: string[];
+}
+
+export type SqlResult =
+  | {
+      type: 'rows';
+      rows: Document[];
+      columns: string[];
+      rowCount: number;
+      total?: number;
+    }
+  | {
+      type: 'ok';
+      changes: number;
+      lastId?: string;
+      message?: string;
+    }
+  | {
+      type: 'tables';
+      tables: TableInfo[];
+    }
+  | {
+      type: 'schema';
+      table: string;
+      fields: FieldDef[];
+      documentCount: number;
+    };
 
 export type WriteOpType = 'insert' | 'update' | 'delete' | 'upsert';
