@@ -12,7 +12,7 @@
 
 ### Docs
 - Root README: global install, create/init API & CLI
-- `docs/v1.1.0 开发计划.md`, `docs/v1.1.0 功能测试计划.md`
+- `devDocs/releases/v1.1.0/` 开发计划与功能测试计划
 
 ## 1.0.0 — 2026-10-19
 

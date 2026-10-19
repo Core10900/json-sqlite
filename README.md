@@ -586,7 +586,7 @@ data/
 packages/core     → 可发布的 @webofcat/jsonsqlite
 apps/examples     → 示例
 apps/bench        → 基准
-docs/             → 设计与计划文档
+devDocs/          → 设计与版本计划（design / releases）
 ```
 
 ```bash
@@ -602,15 +602,17 @@ pnpm --filter @jsonsqlite/bench start
 
 ## 19. 更多文档
 
+完整索引见 [devDocs/README.md](./devDocs/README.md)。
+
 | 文档 | 内容 |
 |------|------|
-| [docs/v1.1.0 开发计划.md](./docs/v1.1.0%20开发计划.md) | v1.1.0 CLI / create / init |
-| [docs/v1.1.0 功能测试计划.md](./docs/v1.1.0%20功能测试计划.md) | v1.1.0 功能测试 |
+| [devDocs/releases/v1.1.0/开发计划.md](./devDocs/releases/v1.1.0/开发计划.md) | v1.1.0 CLI / create / init |
+| [devDocs/releases/v1.1.0/功能测试计划.md](./devDocs/releases/v1.1.0/功能测试计划.md) | v1.1.0 功能测试 |
+| [devDocs/releases/v1.0/开发计划.md](./devDocs/releases/v1.0/开发计划.md) | v1.0 开发计划 |
+| [devDocs/design/JSONSQLite 技术实现方案与计划.md](./devDocs/design/JSONSQLite%20技术实现方案与计划.md) | 架构方案 |
+| [devDocs/design/JSONSQLite npm包与后端接入说明.md](./devDocs/design/JSONSQLite%20npm包与后端接入说明.md) | 包契约 |
 | [packages/core/README.md](./packages/core/README.md) | npm 包简版说明 |
 | [CHANGELOG.md](./CHANGELOG.md) | 版本变更 |
-| [docs/v1.0 开发计划.md](./docs/v1.0%20开发计划.md) | v1.0 开发计划 |
-| [docs/JSONSQLite 技术实现方案与计划.md](./docs/JSONSQLite%20技术实现方案与计划.md) | 架构方案 |
-| [docs/JSONSQLite npm包与后端接入说明.md](./docs/JSONSQLite%20npm包与后端接入说明.md) | 包契约 |
 
 ---
 
