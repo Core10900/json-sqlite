@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { open, type JSONSQLite } from './engine/JSONSQLite.js';
 import { create, getVersion, init } from './lifecycle.js';
@@ -196,6 +197,60 @@ async function handleTable(rest: string[]): Promise<void> {
     try {
       const info = await db.describeTable(name);
       console.log(formatSchema(info.name, info.fields ?? [], info.documentCount));
+    } finally {
+      await db.close();
+    }
+    return;
+  }
+
+  if (sub === 'export') {
+    const name = positionalName(args);
+    const file = flag(args, '--file');
+    if (!name || !file) {
+      console.error(
+        '用法: jsonsqlite table export <name> --file <out.jsonl> [--path ./data]',
+      );
+      process.exitCode = 1;
+      return;
+    }
+    const db = await open({ storagePath });
+    try {
+      const docs = await db.exportCollection(name);
+      const body = docs.map((d) => JSON.stringify(d)).join('\n');
+      await fs.writeFile(file, body ? `${body}\n` : '', 'utf8');
+      console.log(`✓ exported ${docs.length} docs → ${file}`);
+    } finally {
+      await db.close();
+    }
+    return;
+  }
+
+  if (sub === 'import') {
+    const name = positionalName(args);
+    const file = flag(args, '--file');
+    const modeRaw = flag(args, '--mode') ?? 'append';
+    if (!name || !file) {
+      console.error(
+        '用法: jsonsqlite table import <name> --file <in.jsonl> [--mode append|replace] [--path ./data]',
+      );
+      process.exitCode = 1;
+      return;
+    }
+    if (modeRaw !== 'append' && modeRaw !== 'replace') {
+      console.error('--mode must be append or replace');
+      process.exitCode = 1;
+      return;
+    }
+    const raw = await fs.readFile(file, 'utf8');
+    const docs: Record<string, unknown>[] = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      docs.push(JSON.parse(line) as Record<string, unknown>);
+    }
+    const db = await open({ storagePath });
+    try {
+      const result = await db.importCollection(name, docs, { mode: modeRaw });
+      console.log(`✓ imported ${result.imported} docs (${modeRaw}) ← ${file}`);
     } finally {
       await db.close();
     }
@@ -552,6 +607,8 @@ Usage:
   jsonsqlite table alter <name> [--path ./data]        # 对话式修改 + 二次确认（需 TTY）
   jsonsqlite table show <name> [--path] [--page 1] [--size 20] [-i]
   jsonsqlite table describe <name> [--path]
+  jsonsqlite table export <name> --file out.jsonl [--path]
+  jsonsqlite table import <name> --file in.jsonl [--mode append|replace] [--path]
   jsonsqlite run "<sql>" [--path ./data]
   jsonsqlite doctor|query|backup|collections ...
   jsonsqlite help
@@ -560,9 +617,12 @@ SQL 示例:
   jsonsqlite run "SHOW TABLES" --path ./data
   jsonsqlite run "SELECT * FROM users WHERE age > 18 LIMIT 10" --path ./data
   jsonsqlite run "INSERT INTO users (name, age) VALUES ('寒', 30)" --path ./data
+  jsonsqlite run "SELECT * FROM users WHERE name LIKE '寒%'" --path ./data
+  jsonsqlite run "SELECT u.name, o.total FROM users u INNER JOIN orders o ON u._id = o.userId" --path ./data
 
 Env:
   JSONSQLITE_PATH   default storage path
+  JSONSQLITE_KEY    optional AES key for encrypted storage / backups
 
 Alias:
   jsql   same as jsonsqlite

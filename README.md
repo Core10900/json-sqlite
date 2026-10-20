@@ -1,6 +1,6 @@
 # JSONSQLite
 
-**版本：1.3.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：1.4.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
 
@@ -94,7 +94,7 @@ yarn add @webofcat/jsonsqlite
 ```bash
 npm install -g @webofcat/jsonsqlite
 
-jsonsqlite --version          # => 1.3.0
+jsonsqlite --version          # => 1.4.0
 jsonsqlite create ./my-db     # 新建数据库目录
 jsonsqlite init ./my-db       # 幂等初始化（已存在则跳过创建）
 jsonsqlite tables --path ./my-db
@@ -159,7 +159,7 @@ const { open } = require("@webofcat/jsonsqlite");
 ```ts
 import { create, init, getVersion, open } from "@webofcat/jsonsqlite";
 
-console.log(getVersion()); // "1.3.0"
+console.log(getVersion()); // "1.4.0"
 
 // 创建新库（若已存在会抛 DB_EXISTS；force: true 可强制重建）
 await create({ storagePath: "./my-db" });
@@ -217,8 +217,14 @@ await db.close();
 | `alterTable(name, { renameTo?, addFields?, dropFields? })` | 改名 / 增减字段定义 |
 | `count(name, filter?)` | 计数（分页用） |
 | `run(sql)` | 执行 SQL 子集 |
+| `exportCollection(name)` / `importCollection(name, docs, { mode? })` | 导出 / 导入（`append` 按 `_id` upsert；`replace` 整表替换） |
+| `queryCursor({ collection, filter?, orderBy?, cursor?, limit? })` | 游标分页（默认按 `_id`） |
 
-**SQL 支持**：`SELECT` / `INSERT` / `UPDATE` / `DELETE` / `CREATE TABLE` / `DROP TABLE` / `ALTER TABLE`（`RENAME TO` / `ADD COLUMN` / `DROP COLUMN`）/ `SHOW TABLES` / `DESCRIBE`。不含 JOIN、子查询。
+**SQL 支持**：`SELECT`（含 **`LIKE`**、单表等值 **`INNER`/`LEFT JOIN`**）/ `INSERT` / `UPDATE` / `DELETE` / `CREATE TABLE` / `DROP TABLE` / `ALTER TABLE` / `SHOW TABLES` / `DESCRIBE`。
+
+**不支持（会明确报错）**：多表链式 JOIN、子查询、`FULL`/`RIGHT OUTER`、无 `ON` 的笛卡尔积、`ESCAPE` 子句。`LIKE` 中 `\` 可转义下一个字符（含 `%`/`_`）。
+
+JOIN 结果列使用 `alias.field`（或表名）前缀，避免冲突。
 
 ---
 
@@ -444,7 +450,23 @@ const inc = await db.backupIncremental();
 await db.restoreBackup(full.file);
 ```
 
-可选加密：配置 `encryptionKey` 或环境变量 `JSONSQLITE_KEY` 后，备份内容使用 AES-256-GCM。
+### 主存储加密（1.4+）
+
+对新的空库传入 `encryptionKey`（或 `JSONSQLITE_KEY`）时，集合 JSONL 与 WAL 按行 AES-256-GCM 落盘；`catalog.json` 标记 `encryption: true`。无密钥无法打开密文库。
+
+- **明文旧库**在无密钥下行为与 1.3 兼容
+- 已有明文数据的库不会因带 key 打开而自动改密；迁移请：`export` → 新建加密库 → `import`
+- 在线 rekey 不在 1.4 范围
+- 同一密钥仍用于备份 pack 的 AES-GCM（与 1.3 一致）
+
+```ts
+const db = await open({
+  storagePath: "./secure-data",
+  encryptionKey: process.env.JSONSQLITE_KEY,
+});
+```
+
+> 大表仍是**内存模型**：打开时加载集合；适合中小库，不是磁盘列存引擎。
 
 ---
 
@@ -581,6 +603,8 @@ jsonsqlite backup --path ./data
 | `table alter <name>` | 修改表（对话 + 二次确认，需 TTY） |
 | `table show <name>` | 分页表格查看数据（`-i` 交互翻页） |
 | `table describe <name>` | 查看软 Schema |
+| `table export <name> --file out.jsonl` | 导出 JSONL |
+| `table import <name> --file in.jsonl [--mode append\|replace]` | 导入 JSONL |
 | `run "<sql>"` | 执行 SQL 子集 |
 | `doctor` / `query` / `backup` / `collections` | 运维 / JSON 查询 |
 | `help` | 帮助 |
@@ -598,11 +622,13 @@ interface JSONSQLiteOptions {
   defaultIsolation?: IsolationLevel; // 仅 READ_COMMITTED 真正实现；其它会降级
   queryTimeout?: number; // 默认 30000；0 关闭
   cacheSize?: number; // 默认 1000
-  encryptionKey?: string | null; // 或环境变量 JSONSQLITE_KEY
+  encryptionKey?: string | null; // 空库启用主存加密；亦用于备份 AES；或 JSONSQLITE_KEY
   syncMode?: 'none' | 'normal' | 'full'; // 默认 normal（fsync）
   schemaMode?: 'off' | 'warn' | 'strict'; // 默认 off（软 Schema）
 }
 ```
+
+Admin：`startServer({ host, port, adminToken })` — 绑定非 loopback 时**必须**提供 `adminToken`；本机无 token 启动会向 stderr 告警。
 
 ---
 
@@ -671,7 +697,7 @@ pnpm --filter @jsonsqlite/bench start
 | [devDocs/releases/v1.6.0/开发计划.md](./devDocs/releases/v1.6.0/开发计划.md) | v1.6.0 **LTS 规划**（根目录 `CLI-API.md` / `API.md`） |
 | [devDocs/releases/v1.5.5/开发计划.md](./devDocs/releases/v1.5.5/开发计划.md) | v1.5.5 **CLI LTS 化**（命令扩展 / 交互与脚本契约） |
 | [devDocs/releases/v1.5.0/开发计划.md](./devDocs/releases/v1.5.0/开发计划.md) | v1.5.0 生产就绪（rekey / vacuum / 压测） |
-| [devDocs/releases/v1.4.0/开发计划.md](./devDocs/releases/v1.4.0/开发计划.md) | v1.4.0 加密主存 / LIKE·JOIN / 导入导出（规划） |
+| [devDocs/releases/v1.4.0/开发计划.md](./devDocs/releases/v1.4.0/开发计划.md) | v1.4.0 加密主存 / LIKE·JOIN / 导入导出 |
 | [devDocs/releases/v1.3.0/开发计划.md](./devDocs/releases/v1.3.0/开发计划.md) | v1.3.0 硬化（耐久 / DDL / CLI） |
 | [devDocs/releases/v1.2.0/开发计划.md](./devDocs/releases/v1.2.0/开发计划.md) | v1.2.0 表管理 / SQL |
 | [devDocs/releases/v1.1.0/开发计划.md](./devDocs/releases/v1.1.0/开发计划.md) | v1.1.0 CLI / create / init |

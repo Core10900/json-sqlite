@@ -44,6 +44,8 @@ export interface FilterOp {
   $in?: unknown[];
   $nin?: unknown[];
   $contains?: string;
+  /** SQL LIKE pattern (`%` / `_`; `\` escapes the next char). */
+  $like?: string;
   $exists?: boolean;
   $and?: FilterCondition[];
   $or?: FilterCondition[];
@@ -62,6 +64,27 @@ export interface JsonQuery {
   orderBy?: OrderBySpec | OrderBySpec[];
   limit?: number;
   offset?: number;
+}
+
+export interface QueryCursorOptions {
+  collection: string;
+  filter?: FilterCondition;
+  /** Stable sort keys; defaults to `{ _id: 'asc' }`. */
+  orderBy?: OrderBySpec;
+  /** Opaque cursor from a previous page (`nextCursor`). */
+  cursor?: string | null;
+  limit?: number;
+}
+
+export interface QueryCursorResult {
+  docs: Document[];
+  /** Null when no more pages. */
+  nextCursor: string | null;
+}
+
+export interface ImportCollectionOptions {
+  /** `replace` clears the collection first; `append` upserts by `_id` (default). */
+  mode?: 'replace' | 'append';
 }
 
 export interface JSONSQLiteOptions {

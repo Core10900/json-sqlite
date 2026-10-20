@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { decryptLine, encryptLine, isEncryptedLine } from '../crypto/aes.js';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { Document, FieldDef, SchemaMode, SyncMode } from '../types/index.js';
 import { generateId } from '../utils/id.js';
@@ -20,6 +21,7 @@ export class DocumentStore {
     private readonly wal: Wal,
     private readonly syncMode: SyncMode = 'normal',
     private readonly schemaMode: SchemaMode = 'off',
+    private readonly encKey: Buffer | null = null,
   ) {}
 
   async loadCollection(name: string): Promise<void> {
@@ -29,7 +31,14 @@ export class DocumentStore {
       const raw = await fs.readFile(file, 'utf8');
       for (const line of raw.split('\n')) {
         if (!line.trim()) continue;
-        const doc = JSON.parse(line) as Document;
+        if (isEncryptedLine(line) && !this.encKey) {
+          throw new JSONSQLiteError(
+            ErrorCode.ENCRYPTION,
+            'Encrypted collection data requires encryptionKey / JSONSQLITE_KEY',
+          );
+        }
+        const plain = decryptLine(line, this.encKey);
+        const doc = JSON.parse(plain) as Document;
         map.set(doc._id, doc);
       }
     } catch (err) {
@@ -226,8 +235,12 @@ export class DocumentStore {
     const map = this.mem.get(name);
     if (!map) return;
     const file = docsFile(this.storagePath, name);
+    const encrypt = this.catalog.encryption && !!this.encKey;
     const lines = Array.from(map.values())
-      .map((d) => JSON.stringify(d))
+      .map((d) => {
+        const json = JSON.stringify(d);
+        return encrypt ? encryptLine(json, this.encKey!) : json;
+      })
       .join('\n');
     await writeFileAtomic(file, lines ? `${lines}\n` : '', this.syncMode);
     this.catalog.setDocumentCount(name, map.size);

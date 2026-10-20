@@ -23,7 +23,12 @@ import { DdlJournal } from '../storage/DdlJournal.js';
 import { DocumentStore } from '../storage/DocumentStore.js';
 import { FileLock } from '../storage/FileLock.js';
 import { Wal } from '../storage/Wal.js';
-import { matchFilter } from '../query/JsonQuery.js';
+import {
+  compareByOrder,
+  getPath,
+  matchFilter,
+  normalizeOrderBy,
+} from '../query/JsonQuery.js';
 import { TransactionManager } from '../transaction/TransactionManager.js';
 import { BackupManager, type BackupInfo } from '../backup/BackupManager.js';
 import { Monitor } from '../monitor/Monitor.js';
@@ -36,7 +41,8 @@ import { adviseQuery, profileStages } from '../features/QueryAdvisor.js';
 import { analyzeQuality } from '../features/DataQuality.js';
 import { startHttpServer, type HttpServerOptions } from '../api/httpServer.js';
 import { parseSql } from '../sql/parse.js';
-import type { SqlStatement } from '../sql/ast.js';
+import type { SelectStmt, SqlStatement } from '../sql/ast.js';
+import { generateId } from '../utils/id.js';
 import { collectionDir, walFile } from '../utils/path.js';
 import type {
   AlterTableSpec,
@@ -44,9 +50,13 @@ import type {
   CreateTableOptions,
   Document,
   FieldDef,
+  ImportCollectionOptions,
   IsolationLevel,
   JsonQuery,
   JSONSQLiteOptions,
+  OrderBySpec,
+  QueryCursorOptions,
+  QueryCursorResult,
   SqlResult,
   TableInfo,
 } from '../types/index.js';
@@ -109,7 +119,23 @@ export class JSONSQLite extends EventEmitter {
     this.catalog = new Catalog(root, sync);
     await this.catalog.load();
 
-    this.wal = new Wal(root, this.options.walMode, sync);
+    if (this.catalog.encryption && !this.encKey) {
+      throw new JSONSQLiteError(
+        ErrorCode.ENCRYPTION,
+        'This database uses encrypted storage; provide encryptionKey or JSONSQLITE_KEY',
+      );
+    }
+
+    // New/empty DB + key → enable main-store encryption (plaintext DBs with data stay plain)
+    if (this.encKey && !this.catalog.encryption) {
+      const empty = this.catalog.list().length === 0;
+      if (empty) {
+        await this.catalog.setEncryption(true);
+      }
+    }
+
+    this.wal = new Wal(root, this.options.walMode, sync, this.encKey);
+    this.wal.setEncryption(this.catalog.encryption);
     await this.wal.initialize();
 
     this.store = new DocumentStore(
@@ -118,6 +144,7 @@ export class JSONSQLite extends EventEmitter {
       this.wal,
       sync,
       this.options.schemaMode,
+      this.encKey,
     );
     this.tx = new TransactionManager(this.store);
     this.changelog = new ChangeLog(root);
@@ -377,6 +404,9 @@ export class JSONSQLite extends EventEmitter {
   private async executeSql(stmt: SqlStatement): Promise<SqlResult> {
     switch (stmt.kind) {
       case 'select': {
+        if (stmt.join) {
+          return this.executeJoinSelect(stmt);
+        }
         const rows = await this.query({
           collection: stmt.table,
           filter: stmt.filter,
@@ -687,6 +717,114 @@ export class JSONSQLite extends EventEmitter {
     return planned.docs;
   }
 
+  /** Export all documents in a collection (plain array). */
+  async exportCollection(name: string): Promise<Document[]> {
+    this.assertReady();
+    await this.store!.ensureLoaded(name);
+    return this.store!.getAll(name).map((d) => ({ ...d }));
+  }
+
+  /**
+   * Import documents into a collection.
+   * - `append` (default): upsert by `_id`
+   * - `replace`: replace entire collection contents
+   */
+  async importCollection(
+    name: string,
+    docs: Record<string, unknown>[],
+    opts?: ImportCollectionOptions,
+  ): Promise<{ imported: number }> {
+    this.assertReady();
+    const mode = opts?.mode ?? 'append';
+    await this.catalog!.ensure(name);
+    await this.store!.ensureLoaded(name);
+
+    if (mode === 'replace') {
+      const prepared: Document[] = [];
+      const now = Date.now();
+      for (const raw of docs) {
+        const id =
+          typeof raw._id === 'string' && raw._id ? raw._id : undefined;
+        const { _id, _version, _createdAt, _updatedAt, ...rest } = raw;
+        void _id;
+        void _version;
+        void _createdAt;
+        void _updatedAt;
+        prepared.push({
+          ...rest,
+          _id: id ?? generateId(),
+          _version: 1,
+          _createdAt: typeof raw._createdAt === 'number' ? raw._createdAt : now,
+          _updatedAt: typeof raw._updatedAt === 'number' ? raw._updatedAt : now,
+        } as Document);
+      }
+      this.store!.replaceAll(name, prepared);
+      await this.store!.persistCollection(name);
+      for (const idx of this.indexes!.findForCollection(name)) {
+        idx.build(this.store!.getAll(name));
+      }
+      this.cache!.invalidateCollection(name);
+      this.emit('dataChanged', {
+        op: 'import',
+        collection: name,
+        mode,
+        count: prepared.length,
+      });
+      return { imported: prepared.length };
+    }
+
+    let imported = 0;
+    for (const raw of docs) {
+      await this.upsert(name, raw);
+      imported += 1;
+    }
+    this.emit('dataChanged', {
+      op: 'import',
+      collection: name,
+      mode,
+      count: imported,
+    });
+    return { imported };
+  }
+
+  /**
+   * Cursor-based pagination. Stable when `orderBy` includes a unique key
+   * (defaults to `_id` asc).
+   */
+  async queryCursor(opts: QueryCursorOptions): Promise<QueryCursorResult> {
+    this.assertReady();
+    const limit = opts.limit ?? 50;
+    const orderBy: OrderBySpec = opts.orderBy
+      ? { ...opts.orderBy }
+      : { _id: 'asc' };
+    if (!('_id' in orderBy)) {
+      orderBy._id = 'asc';
+    }
+    const specs = normalizeOrderBy(orderBy);
+
+    await this.store!.ensureLoaded(opts.collection);
+    let docs = this.store!.getAll(opts.collection);
+    if (opts.filter && Object.keys(opts.filter).length > 0) {
+      docs = docs.filter((d) => matchFilter(d, opts.filter!));
+    }
+    docs = [...docs].sort((a, b) => compareByOrder(a, b, specs));
+
+    if (opts.cursor) {
+      const cursorDoc = decodeCursor(opts.cursor);
+      docs = docs.filter((d) => compareByOrder(d, cursorDoc, specs) > 0);
+    }
+
+    const page = docs.slice(0, limit);
+    const hasMore = docs.length > page.length;
+    return {
+      docs: page.map((d) => ({ ...d })),
+      nextCursor:
+        hasMore && page.length > 0
+          ? encodeCursor(page[page.length - 1]!, orderBy)
+          : null,
+    };
+  }
+
   async aggregate(
     collection: string,
     pipeline: AggregateStage[],
@@ -852,6 +990,78 @@ export class JSONSQLite extends EventEmitter {
     return this.httpServer;
   }
 
+  private async executeJoinSelect(stmt: SelectStmt): Promise<SqlResult> {
+    const join = stmt.join!;
+    const leftAlias = stmt.alias ?? stmt.table;
+    const rightAlias = join.alias ?? join.table;
+
+    await this.store!.ensureLoaded(stmt.table);
+    await this.store!.ensureLoaded(join.table);
+    const leftDocs = this.store!.getAll(stmt.table);
+    const rightDocs = this.store!.getAll(join.table);
+
+    const onLeft = qualifyJoinField(join.onLeft, leftAlias, rightAlias, 'left');
+    const onRight = qualifyJoinField(
+      join.onRight,
+      leftAlias,
+      rightAlias,
+      'right',
+    );
+
+    const rightIndex = new Map<string, Document[]>();
+    for (const r of rightDocs) {
+      const key = joinKey(getPath(r, stripAlias(onRight, rightAlias)));
+      const list = rightIndex.get(key) ?? [];
+      list.push(r);
+      rightIndex.set(key, list);
+    }
+
+    let rows: Document[] = [];
+    for (const left of leftDocs) {
+      const key = joinKey(getPath(left, stripAlias(onLeft, leftAlias)));
+      const matches = rightIndex.get(key) ?? [];
+      if (matches.length === 0) {
+        if (join.type === 'left') {
+          rows.push(mergeJoinRow(left, null, leftAlias, rightAlias));
+        }
+      } else {
+        for (const right of matches) {
+          rows.push(mergeJoinRow(left, right, leftAlias, rightAlias));
+        }
+      }
+    }
+
+    if (stmt.filter && Object.keys(stmt.filter).length > 0) {
+      rows = rows.filter((d) => matchFilter(d, stmt.filter!));
+    }
+    if (stmt.orderBy) {
+      const specs = normalizeOrderBy(stmt.orderBy);
+      rows = [...rows].sort((a, b) => compareByOrder(a, b, specs));
+    }
+    const total = rows.length;
+    const offset = stmt.offset ?? 0;
+    if (offset > 0 || stmt.limit !== undefined) {
+      rows = rows.slice(
+        offset,
+        stmt.limit === undefined ? undefined : offset + stmt.limit,
+      );
+    }
+
+    if (stmt.columns !== '*') {
+      rows = rows.map((row) => projectJoinRow(row, stmt.columns as string[]));
+    }
+
+    const columns =
+      stmt.columns === '*' ? inferColumns(rows) : (stmt.columns as string[]);
+    return {
+      type: 'rows',
+      rows,
+      columns,
+      rowCount: rows.length,
+      total,
+    };
+  }
+
   /** Subscribe to data changes (stream-like). */
   subscribe(handler: (event: unknown) => void): () => void {
     this.on('dataChanged', handler);
@@ -948,6 +1158,94 @@ function inferColumns(rows: Document[]): string[] {
   const preferred = ['_id', '_version', '_createdAt', '_updatedAt'];
   const rest = [...keys].filter((k) => !preferred.includes(k)).sort();
   return [...preferred.filter((k) => keys.has(k)), ...rest];
+}
+
+function mergeJoinRow(
+  left: Document,
+  right: Document | null,
+  leftAlias: string,
+  rightAlias: string,
+): Document {
+  const out: Document = {
+    _id: left._id,
+    _version: left._version,
+    _createdAt: left._createdAt,
+    _updatedAt: left._updatedAt,
+  };
+  for (const [k, v] of Object.entries(left)) {
+    out[`${leftAlias}.${k}`] = v;
+  }
+  if (right) {
+    for (const [k, v] of Object.entries(right)) {
+      out[`${rightAlias}.${k}`] = v;
+    }
+  } else {
+    // LEFT JOIN miss — expose right alias keys as null for common system fields only
+    out[`${rightAlias}._id`] = null;
+  }
+  return out;
+}
+
+function projectJoinRow(row: Document, columns: string[]): Document {
+  const out: Document = {
+    _id: row._id,
+    _version: row._version,
+    _createdAt: row._createdAt,
+    _updatedAt: row._updatedAt,
+  };
+  for (const c of columns) {
+    out[c] = getPath(row, c);
+  }
+  return out;
+}
+
+function qualifyJoinField(
+  ref: string,
+  leftAlias: string,
+  rightAlias: string,
+  side: 'left' | 'right',
+): string {
+  if (ref.includes('.')) return ref;
+  return side === 'left' ? `${leftAlias}.${ref}` : `${rightAlias}.${ref}`;
+}
+
+function stripAlias(ref: string, alias: string): string {
+  const prefix = `${alias}.`;
+  if (ref.startsWith(prefix)) return ref.slice(prefix.length);
+  if (ref.includes('.')) {
+    // table.col without matching alias — use field after last dot
+    return ref.slice(ref.lastIndexOf('.') + 1);
+  }
+  return ref;
+}
+
+function joinKey(value: unknown): string {
+  return JSON.stringify(value === undefined ? null : value);
+}
+
+function encodeCursor(doc: Document, orderBy: OrderBySpec): string {
+  const payload: Record<string, unknown> = {};
+  for (const field of Object.keys(orderBy)) {
+    payload[field] = getPath(doc, field);
+  }
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+function decodeCursor(cursor: string): Document {
+  try {
+    const obj = JSON.parse(
+      Buffer.from(cursor, 'base64url').toString('utf8'),
+    ) as Record<string, unknown>;
+    return {
+      _id: typeof obj._id === 'string' ? obj._id : '',
+      _version: 0,
+      _createdAt: 0,
+      _updatedAt: 0,
+      ...obj,
+    };
+  } catch {
+    throw new JSONSQLiteError(ErrorCode.INVALID_CONFIG, 'Invalid query cursor');
+  }
 }
 
 export async function open(options: JSONSQLiteOptions): Promise<JSONSQLite> {

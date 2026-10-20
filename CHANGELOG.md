@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.0 — 2026-10-20
+
+### Added
+- Optional **main-store AES-256-GCM encryption** (`encryptionKey` / `JSONSQLITE_KEY`) for collection JSONL + WAL; catalog marks `encryption: true`
+- SQL **`LIKE`** with `%` / `_` wildcards (`\` escape); filter op `$like`
+- SQL **two-table `INNER` / `LEFT JOIN`** (equi-join `ON` only); result columns use `alias.field` prefixes
+- API: `exportCollection`, `importCollection({ mode: 'append'|'replace' })`, `queryCursor`
+- CLI: `table export|import <name> --file … [--mode …]`
+- Admin: non-loopback bind requires `adminToken`; loopback without token warns on stderr
+- Error code `ENCRYPTION`
+
+### Docs
+- README: encryption, LIKE/JOIN bounds, import/export/cursor
+- `devDocs/releases/v1.4.0/` plans
+
 ## 1.3.0 — 2026-10-19
 
 ### Added

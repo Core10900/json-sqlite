@@ -29,8 +29,11 @@ afterEach(async () => {
 });
 
 describe('v1.3.0 harden', () => {
-  it('FT-V13-VER version is 1.3.0', () => {
-    expect(getVersion()).toBe('1.3.0');
+  it('FT-V13-VER getVersion matches package', async () => {
+    const pkg = JSON.parse(
+      await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version: string };
+    expect(getVersion()).toBe(pkg.version);
     expect(FORMAT_VERSION).toBe(1);
   });
 

@@ -52,6 +52,13 @@ const KEYWORDS = new Set([
   'IN',
   'IS',
   'BETWEEN',
+  'JOIN',
+  'INNER',
+  'LEFT',
+  'RIGHT',
+  'FULL',
+  'OUTER',
+  'ON',
 ]);
 
 export function tokenize(sql: string): Token[] {

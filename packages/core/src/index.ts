@@ -31,5 +31,9 @@ export type {
   IndexType,
   SyncMode,
   SchemaMode,
+  QueryCursorOptions,
+  QueryCursorResult,
+  ImportCollectionOptions,
 } from './types/index.js';
 export { FORMAT_VERSION } from './storage/Catalog.js';
+export type { HttpServerOptions } from './api/httpServer.js';

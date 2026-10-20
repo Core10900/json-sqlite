@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { JSONSQLite } from '../engine/JSONSQLite.js';
 import { getAdminHtml } from '../admin/dashboard.js';
 
@@ -15,6 +16,18 @@ export async function startHttpServer(
   const host = opts.host ?? '127.0.0.1';
   const port = opts.port ?? 3000;
   const token = opts.adminToken ?? null;
+
+  if (!isLoopbackHost(host) && !token) {
+    throw new JSONSQLiteError(
+      ErrorCode.INVALID_CONFIG,
+      `Admin server bound to non-loopback host '${host}' requires adminToken`,
+    );
+  }
+  if (isLoopbackHost(host) && !token) {
+    console.warn(
+      '[jsonsqlite] Admin server started on loopback without adminToken — do not expose this port',
+    );
+  }
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -62,6 +75,16 @@ export async function startHttpServer(
     server.listen(port, host, () => resolve());
   });
   return server;
+}
+
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  return (
+    h === '127.0.0.1' ||
+    h === '::1' ||
+    h === 'localhost' ||
+    h === '0:0:0:0:0:0:0:1'
+  );
 }
 
 function json(

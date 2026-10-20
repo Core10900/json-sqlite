@@ -72,13 +72,15 @@ class Parser {
     if (this.matchPunct('*')) {
       columns = '*';
     } else {
-      columns = [this.expectIdent()];
+      columns = [this.expectColumnRef()];
       while (this.matchPunct(',')) {
-        columns.push(this.expectIdent());
+        columns.push(this.expectColumnRef());
       }
     }
     this.expectKw('FROM');
     const table = this.expectIdent();
+    const alias = this.parseOptionalAlias();
+    const join = this.parseJoinAfterFrom();
     let filter: FilterCondition | undefined;
     if (this.matchKw('WHERE')) {
       filter = this.parseOrExpr();
@@ -88,7 +90,7 @@ class Parser {
       this.expectKw('BY');
       orderBy = {};
       do {
-        const col = this.expectIdent();
+        const col = this.expectColumnRef();
         const dir = this.matchKw('DESC')
           ? 'desc'
           : this.matchKw('ASC')
@@ -105,7 +107,77 @@ class Parser {
     if (this.matchKw('OFFSET')) {
       offset = this.expectNumber();
     }
-    return { kind: 'select', table, columns, filter, orderBy, limit, offset };
+    return {
+      kind: 'select',
+      table,
+      alias,
+      join,
+      columns,
+      filter,
+      orderBy,
+      limit,
+      offset,
+    };
+  }
+
+  private parseJoinAfterFrom(): import('./ast.js').JoinClause | undefined {
+    let type: 'inner' | 'left' | undefined;
+    if (this.matchKw('INNER')) {
+      type = 'inner';
+      this.expectKw('JOIN');
+    } else if (this.matchKw('LEFT')) {
+      this.matchKw('OUTER');
+      this.expectKw('JOIN');
+      type = 'left';
+    } else if (this.matchKw('JOIN')) {
+      type = 'inner';
+    } else if (this.matchKw('RIGHT') || this.matchKw('FULL')) {
+      throw new JSONSQLiteError(
+        ErrorCode.SQL_UNSUPPORTED,
+        'Only INNER JOIN and LEFT JOIN are supported',
+      );
+    } else {
+      return undefined;
+    }
+
+    // Reject a second join later via expectEof / extra JOIN token
+    const table = this.expectIdent();
+    const alias = this.parseOptionalAlias();
+    this.expectKw('ON');
+    const onLeft = this.expectColumnRef();
+    this.expectOp('=');
+    const onRight = this.expectColumnRef();
+
+    if (
+      this.peekKw('INNER') ||
+      this.peekKw('LEFT') ||
+      this.peekKw('JOIN') ||
+      this.peekKw('RIGHT') ||
+      this.peekKw('FULL')
+    ) {
+      throw new JSONSQLiteError(
+        ErrorCode.SQL_UNSUPPORTED,
+        'Only a single JOIN is supported',
+      );
+    }
+
+    return { type, table, alias, onLeft, onRight };
+  }
+
+  private parseOptionalAlias(): string | undefined {
+    if (this.matchKw('AS')) {
+      return this.expectIdent();
+    }
+    const t = this.peek();
+    if (t.kind === 'ident') {
+      return this.expectIdent();
+    }
+    return undefined;
+  }
+
+  private peekKw(kw: string): boolean {
+    const t = this.peek();
+    return t.kind === 'kw' && t.value === kw;
   }
 
   private parseInsert(): SqlStatement {
@@ -250,7 +322,7 @@ class Parser {
       this.expectPunct(')');
       return inner;
     }
-    const col = this.expectIdent();
+    const col = this.expectColumnRef();
     if (this.matchKw('IS')) {
       const negated = this.matchKw('NOT');
       this.expectKw('NULL');
@@ -268,9 +340,7 @@ class Parser {
       if (typeof v !== 'string') {
         throw new JSONSQLiteError(ErrorCode.SQL_PARSE, 'LIKE expects a string');
       }
-      // SQL LIKE with % → contains (no full wildcard engine in v1.3)
-      const needle = v.replace(/%/g, '');
-      return { [col]: { $contains: needle } } as FilterCondition;
+      return { [col]: { $like: v } } as FilterCondition;
     }
     if (this.matchKw('IN')) {
       this.expectPunct('(');
@@ -417,6 +487,15 @@ class Parser {
       ErrorCode.SQL_PARSE,
       `Expected identifier, got '${t.raw || t.value}'`,
     );
+  }
+
+  /** Identifier, optionally qualified: `col` or `alias.col`. */
+  private expectColumnRef(): string {
+    const first = this.expectIdent();
+    if (this.matchPunct('.')) {
+      return `${first}.${this.expectIdent()}`;
+    }
+    return first;
   }
 
   private expectNumber(): number {

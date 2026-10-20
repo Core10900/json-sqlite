@@ -6,6 +6,7 @@ import type {
   JsonQuery,
   OrderBySpec,
 } from '../types/index.js';
+import { matchLike } from './like.js';
 
 export function executeJsonQuery(
   docs: Document[],
@@ -72,6 +73,9 @@ function matchCondition(value: unknown, condition: FilterValue): boolean {
   if ('$contains' in op && typeof op.$contains === 'string') {
     return typeof value === 'string' && value.includes(op.$contains);
   }
+  if ('$like' in op && typeof op.$like === 'string') {
+    return matchLike(value, op.$like);
+  }
   if ('$exists' in op) {
     return op.$exists ? value !== undefined : value === undefined;
   }
@@ -80,7 +84,9 @@ function matchCondition(value: unknown, condition: FilterValue): boolean {
   return deepEqual(value, condition);
 }
 
-function getPath(doc: Document, path: string): unknown {
+export function getPath(doc: Document, path: string): unknown {
+  // Prefer exact key (JOIN flat rows use "alias.field")
+  if (Object.prototype.hasOwnProperty.call(doc, path)) return doc[path];
   if (!path.includes('.')) return doc[path];
   const parts = path.split('.');
   let cur: unknown = doc;
@@ -105,11 +111,11 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function normalizeOrderBy(orderBy: OrderBySpec | OrderBySpec[]): OrderBySpec[] {
+export function normalizeOrderBy(orderBy: OrderBySpec | OrderBySpec[]): OrderBySpec[] {
   return Array.isArray(orderBy) ? orderBy : [orderBy];
 }
 
-function compareByOrder(a: Document, b: Document, specs: OrderBySpec[]): number {
+export function compareByOrder(a: Document, b: Document, specs: OrderBySpec[]): number {
   for (const spec of specs) {
     for (const [field, dir] of Object.entries(spec)) {
       const av = getPath(a, field);

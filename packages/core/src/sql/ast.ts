@@ -11,9 +11,20 @@ export type SqlStatement =
   | ShowTablesStmt
   | DescribeStmt;
 
+export interface JoinClause {
+  type: 'inner' | 'left';
+  table: string;
+  alias?: string;
+  /** Equality join: leftField = rightField (may be qualified `alias.col`). */
+  onLeft: string;
+  onRight: string;
+}
+
 export interface SelectStmt {
   kind: 'select';
   table: string;
+  alias?: string;
+  join?: JoinClause;
   columns: '*' | string[];
   filter?: FilterCondition;
   orderBy?: OrderBySpec;

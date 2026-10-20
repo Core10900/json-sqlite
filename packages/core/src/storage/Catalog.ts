@@ -17,6 +17,8 @@ interface CatalogCollection {
 
 interface CatalogData {
   formatVersion: number;
+  /** When true, collection JSONL + WAL lines are AES-GCM envelopes. */
+  encryption?: boolean;
   collections: Record<string, CatalogCollection>;
 }
 
@@ -40,6 +42,16 @@ export class Catalog {
 
   get formatVersion(): number {
     return this.data.formatVersion;
+  }
+
+  get encryption(): boolean {
+    return this.data.encryption === true;
+  }
+
+  async setEncryption(enabled: boolean): Promise<void> {
+    if (enabled) this.data.encryption = true;
+    else delete this.data.encryption;
+    await this.save();
   }
 
   async load(): Promise<void> {
