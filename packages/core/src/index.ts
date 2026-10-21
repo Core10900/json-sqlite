@@ -7,6 +7,7 @@ export type {
 } from './lifecycle.js';
 export { JSONSQLiteError, ErrorCode } from './errors.js';
 export { parseSql } from './sql/parse.js';
+export { rekeyDatabase } from './ops/rekey.js';
 export type { AggregateStage, AggregateField, AggregateOp } from './query/Aggregate.js';
 export type { BackupInfo } from './backup/BackupManager.js';
 export type { Advice } from './features/QueryAdvisor.js';
@@ -34,6 +35,13 @@ export type {
   QueryCursorOptions,
   QueryCursorResult,
   ImportCollectionOptions,
+  RekeyOptions,
+  RekeyResult,
+  VacuumOptions,
+  VacuumResult,
+  DoctorCheck,
+  DoctorReport,
 } from './types/index.js';
 export { FORMAT_VERSION } from './storage/Catalog.js';
 export type { HttpServerOptions } from './api/httpServer.js';
+

@@ -46,6 +46,8 @@ export interface FilterOp {
   $contains?: string;
   /** SQL LIKE pattern (`%` / `_`; `\` escapes the next char). */
   $like?: string;
+  /** SQL NOT LIKE. */
+  $nlike?: string;
   $exists?: boolean;
   $and?: FilterCondition[];
   $or?: FilterCondition[];
@@ -110,6 +112,58 @@ export interface JSONSQLiteOptions {
   syncMode?: SyncMode;
   /** Soft-schema enforcement (default 'off') */
   schemaMode?: SchemaMode;
+  /**
+   * When true (default in 1.5+), open() does not preload all collections;
+   * first touch loads via ensureLoaded. Set false for 1.4-style eager load.
+   */
+  lazyCollections?: boolean;
+  /** Warm these collections during open (works with lazyCollections). */
+  prefetchCollections?: string[];
+}
+
+export interface RekeyOptions {
+  /** Source DB path (defaults to this.storagePath when called as method). */
+  storagePath?: string;
+  /** Current key (or omit to use JSONSQLITE_KEY / plaintext). */
+  fromKey?: string | null;
+  /** New encryption key (required). */
+  toKey: string;
+  /** Write rekeyed DB here (recommended). Required unless inPlace. */
+  targetPath?: string;
+  /** Replace source directory (requires yes: true). */
+  inPlace?: boolean;
+  /** Confirm destructive inplace. */
+  yes?: boolean;
+  syncMode?: SyncMode;
+}
+
+export interface RekeyResult {
+  storagePath: string;
+  mode: 'out' | 'inplace';
+}
+
+export interface VacuumOptions {
+  /** Vacuum one collection; omit for all. */
+  collection?: string;
+}
+
+export interface VacuumResult {
+  collections: string[];
+  documentCounts: Record<string, number>;
+}
+
+export interface DoctorCheck {
+  id: string;
+  ok: boolean;
+  message: string;
+  details?: unknown;
+}
+
+export interface DoctorReport {
+  status: 'healthy' | 'unhealthy';
+  deep: boolean;
+  checks: DoctorCheck[];
+  timestamp: number;
 }
 
 export type IndexType = 'object' | 'tree' | 'inverted';

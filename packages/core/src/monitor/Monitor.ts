@@ -13,6 +13,8 @@ export interface HealthReport {
     storageWritable: boolean;
     cacheHitRate: number;
     openCollections: number;
+    collectionsLoaded: number;
+    loadMs: number;
   };
   timestamp: number;
 }
@@ -24,6 +26,9 @@ export class Monitor {
   writesTotal = 0;
   errorsTotal = 0;
   slowQueryThreshold = 100;
+  collectionsLoaded = 0;
+  loadMs = 0;
+  openLoadMs = 0;
 
   recordQuery(metric: QueryMetric): void {
     this.queriesTotal += 1;
@@ -39,6 +44,15 @@ export class Monitor {
     this.errorsTotal += 1;
   }
 
+  recordCollectionLoad(durationMs: number): void {
+    this.collectionsLoaded += 1;
+    this.loadMs += durationMs;
+  }
+
+  setOpenLoadMs(ms: number): void {
+    this.openLoadMs = ms;
+  }
+
   getSlowQueries(threshold = this.slowQueryThreshold): QueryMetric[] {
     return this.queries.filter((q) => q.durationMs > threshold);
   }
@@ -50,6 +64,9 @@ export class Monitor {
       errorsTotal: this.errorsTotal,
       cacheHitRate,
       openCollections,
+      collectionsLoaded: this.collectionsLoaded,
+      loadMs: this.loadMs,
+      openLoadMs: this.openLoadMs,
       recentSlow: this.getSlowQueries().slice(-20),
       memory: process.memoryUsage(),
     };
@@ -65,7 +82,14 @@ export class Monitor {
       ready && storageWritable ? 'healthy' : 'degraded';
     return {
       status,
-      checks: { ready, storageWritable, cacheHitRate, openCollections },
+      checks: {
+        ready,
+        storageWritable,
+        cacheHitRate,
+        openCollections,
+        collectionsLoaded: this.collectionsLoaded,
+        loadMs: this.loadMs,
+      },
       timestamp: Date.now(),
     };
   }

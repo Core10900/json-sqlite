@@ -1,0 +1,28 @@
+{
+  "version": "1.5.0",
+  "N": 2000,
+  "insertMs": 76502.59,
+  "insertPerSec": 26,
+  "pointQueryAvgMs": 0.0124,
+  "rangeQueryMs": 0.31,
+  "joinMs": 4.52,
+  "metrics": {
+    "queriesTotal": 1002,
+    "writesTotal": 5,
+    "errorsTotal": 0,
+    "cacheHitRate": 0,
+    "openCollections": 2,
+    "collectionsLoaded": 2,
+    "loadMs": 0,
+    "openLoadMs": 26,
+    "recentSlow": [],
+    "memory": {
+      "rss": 112115712,
+      "heapTotal": 45400064,
+      "heapUsed": 11284104,
+      "external": 3894453,
+      "arrayBuffers": 405898
+    }
+  },
+  "recordedAt": "2026-10-21T05:47:41.737Z"
+}

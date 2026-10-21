@@ -26,6 +26,8 @@ export interface SelectStmt {
   alias?: string;
   join?: JoinClause;
   columns: '*' | string[];
+  /** When set, SELECT COUNT(*) shortcut (no JOIN). */
+  aggregate?: 'count';
   filter?: FilterCondition;
   orderBy?: OrderBySpec;
   limit?: number;

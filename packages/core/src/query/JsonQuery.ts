@@ -76,6 +76,9 @@ function matchCondition(value: unknown, condition: FilterValue): boolean {
   if ('$like' in op && typeof op.$like === 'string') {
     return matchLike(value, op.$like);
   }
+  if ('$nlike' in op && typeof op.$nlike === 'string') {
+    return !matchLike(value, op.$nlike);
+  }
   if ('$exists' in op) {
     return op.$exists ? value !== undefined : value === undefined;
   }

@@ -376,8 +376,11 @@ describe('v1.4.0 admin / CLI / version', () => {
     await db2.close();
   });
 
-  it('FT-V14-VER-01 getVersion is 1.4.0', () => {
-    expect(getVersion()).toBe('1.4.0');
+  it('FT-V14-VER-01 getVersion matches package', async () => {
+    const pkg = JSON.parse(
+      await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version: string };
+    expect(getVersion()).toBe(pkg.version);
   });
 });
 

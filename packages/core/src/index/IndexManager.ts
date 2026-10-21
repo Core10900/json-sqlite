@@ -28,7 +28,15 @@ export class IndexManager {
     return path.join(this.storagePath, 'meta', 'indexes.json');
   }
 
-  async load(getDocs: (collection: string) => Document[]): Promise<void> {
+  /**
+   * Load index metadata. When `build` is false, defer idx.build until
+   * `rebuildCollection` (lazyCollections).
+   */
+  async load(
+    getDocs: (collection: string) => Document[],
+    opts?: { build?: boolean },
+  ): Promise<void> {
+    const build = opts?.build !== false;
     let data: IndexesFile = { indexes: [] };
     try {
       const raw = await fs.readFile(this.file(), 'utf8');
@@ -40,8 +48,15 @@ export class IndexManager {
     }
     for (const meta of data.indexes) {
       const idx = this.createInstance(meta);
-      idx.build(getDocs(meta.collection));
+      if (build) idx.build(getDocs(meta.collection));
       this.indexes.set(this.key(meta.collection, meta.field), idx);
+    }
+  }
+
+  /** Rebuild all indexes for a collection after it is loaded into memory. */
+  rebuildCollection(collection: string, docs: Document[]): void {
+    for (const idx of this.findForCollection(collection)) {
+      idx.build(docs);
     }
   }
 

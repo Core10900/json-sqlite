@@ -18,6 +18,8 @@ const optionsSchema = z.object({
   encryptionKey: z.string().min(1).optional().nullable(),
   syncMode: z.enum(['none', 'normal', 'full']).default('normal'),
   schemaMode: z.enum(['off', 'warn', 'strict']).default('off'),
+  lazyCollections: z.boolean().default(true),
+  prefetchCollections: z.array(z.string()).default([]),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;

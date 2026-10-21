@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.0 — 2026-10-21
+
+### Added
+- **Offline rekey**: `rekeyDatabase` / `db.rekey` + CLI `jsonsqlite rekey` (`--out` default; `--in-place --yes` with journal recovery)
+- **`lazyCollections`** (default `true`) + `prefetchCollections`; metrics `collectionsLoaded` / `loadMs` / `openLoadMs`
+- **`vacuum`** API + CLI — rewrite JSONL, truncate WAL (deltas kept for time-travel)
+- **`doctor({ deep })`** + CLI `doctor --deep` — catalog/dir/WAL/index sampling; exit ≠ 0 when unhealthy
+- SQL: **`NOT LIKE`**, **`SELECT COUNT(*)`** (single-table; rows `[{ count }]`)
+- Bench: JOIN smoke + optional `BENCH_WRITE_BASELINE=1` → `apps/bench/baseline.json`
+- `devDocs/releases/v1.6.0/LTS准入检查表.md` draft
+
+### Changed
+- Default open no longer preloads all collections (set `lazyCollections: false` for 1.4-style eager load)
+
+### Deprecated
+- `dropCollection` — prefer `dropTable` (still aliased)
+
+### Docs
+- README: 1.4→1.5 migration, rekey handbook, performance notes
+
 ## 1.4.0 — 2026-10-20
 
 ### Added

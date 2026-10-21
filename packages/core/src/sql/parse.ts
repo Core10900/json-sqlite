@@ -68,8 +68,15 @@ class Parser {
 
   private parseSelect(): SqlStatement {
     this.expectKw('SELECT');
+    let aggregate: 'count' | undefined;
     let columns: '*' | string[];
-    if (this.matchPunct('*')) {
+    if (this.matchKw('COUNT')) {
+      this.expectPunct('(');
+      this.expectPunct('*');
+      this.expectPunct(')');
+      aggregate = 'count';
+      columns = ['count'];
+    } else if (this.matchPunct('*')) {
       columns = '*';
     } else {
       columns = [this.expectColumnRef()];
@@ -81,12 +88,24 @@ class Parser {
     const table = this.expectIdent();
     const alias = this.parseOptionalAlias();
     const join = this.parseJoinAfterFrom();
+    if (aggregate === 'count' && join) {
+      throw new JSONSQLiteError(
+        ErrorCode.SQL_UNSUPPORTED,
+        'COUNT(*) does not support JOIN in v1.5',
+      );
+    }
     let filter: FilterCondition | undefined;
     if (this.matchKw('WHERE')) {
       filter = this.parseOrExpr();
     }
     let orderBy: Record<string, 'asc' | 'desc'> | undefined;
     if (this.matchKw('ORDER')) {
+      if (aggregate === 'count') {
+        throw new JSONSQLiteError(
+          ErrorCode.SQL_UNSUPPORTED,
+          'COUNT(*) does not support ORDER BY',
+        );
+      }
       this.expectKw('BY');
       orderBy = {};
       do {
@@ -113,6 +132,7 @@ class Parser {
       alias,
       join,
       columns,
+      aggregate,
       filter,
       orderBy,
       limit,
@@ -334,6 +354,17 @@ class Parser {
       return {
         $or: [{ [col]: null }, { [col]: { $exists: false } }],
       } as FilterCondition;
+    }
+    if (this.matchKw('NOT')) {
+      this.expectKw('LIKE');
+      const v = this.parseValue();
+      if (typeof v !== 'string') {
+        throw new JSONSQLiteError(
+          ErrorCode.SQL_PARSE,
+          'NOT LIKE expects a string',
+        );
+      }
+      return { [col]: { $nlike: v } } as FilterCondition;
     }
     if (this.matchKw('LIKE')) {
       const v = this.parseValue();

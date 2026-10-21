@@ -9,6 +9,7 @@ import {
   confirmDropTable,
   withPrompt,
 } from './cli/prompt.js';
+import { rekeyDatabase, resolveRekeyKeys } from './ops/rekey.js';
 import type { FieldDef, FieldType } from './types/index.js';
 
 async function main() {
@@ -64,6 +65,14 @@ async function main() {
       await handleRun(rest);
       return;
     }
+    case 'rekey': {
+      await handleRekey(rest);
+      return;
+    }
+    case 'vacuum': {
+      await handleVacuum(rest);
+      return;
+    }
     case 'doctor':
     case 'query':
     case 'backup':
@@ -80,9 +89,16 @@ async function main() {
   try {
     switch (cmd) {
       case 'doctor': {
-        const h = await db.health();
-        console.log(JSON.stringify(h, null, 2));
-        process.exitCode = h.status === 'healthy' ? 0 : 1;
+        const deep = rest.includes('--deep');
+        if (deep) {
+          const report = await db.doctor({ deep: true });
+          console.log(JSON.stringify(report, null, 2));
+          process.exitCode = report.status === 'healthy' ? 0 : 1;
+        } else {
+          const h = await db.health();
+          console.log(JSON.stringify(h, null, 2));
+          process.exitCode = h.status === 'healthy' ? 0 : 1;
+        }
         break;
       }
       case 'query': {
@@ -98,6 +114,51 @@ async function main() {
   } finally {
     await db.close();
   }
+}
+
+async function handleVacuum(args: string[]): Promise<void> {
+  const storagePath = resolveDbPath(args, './data');
+  const collection = flag(args, '--collection') ?? flag(args, '--table');
+  const db = await open({ storagePath });
+  try {
+    const result = await db.vacuum(
+      collection ? { collection } : undefined,
+    );
+    console.log(JSON.stringify({ ok: true, action: 'vacuum', ...result }, null, 2));
+  } finally {
+    await db.close();
+  }
+}
+
+async function handleRekey(args: string[]): Promise<void> {
+  const storagePath = resolveDbPath(args, './data');
+  const targetPath = flag(args, '--out') ?? flag(args, '--target');
+  const inPlace = args.includes('--in-place') || args.includes('--inplace');
+  const yes = args.includes('--yes');
+  const keys = resolveRekeyKeys({
+    fromKey: flag(args, '--from-key'),
+    toKey: flag(args, '--to-key'),
+    fromEnv: flag(args, '--from-env'),
+    toEnv: flag(args, '--to-env'),
+  });
+  if (!inPlace && !targetPath) {
+    console.error(
+      '用法: jsonsqlite rekey --out <newPath> --to-key <k> [--from-key <k>] [--path ./data]\n' +
+        '  或: jsonsqlite rekey --in-place --yes --to-key <k> [--from-key <k>] [--path ./data]\n' +
+        '  密钥也可用 --from-env/--to-env 指定环境变量名',
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const result = await rekeyDatabase({
+    storagePath,
+    fromKey: keys.fromKey,
+    toKey: keys.toKey,
+    targetPath: targetPath,
+    inPlace,
+    yes,
+  });
+  console.log(JSON.stringify({ ok: true, action: 'rekey', ...result }, null, 2));
 }
 
 async function handleTable(rest: string[]): Promise<void> {
@@ -610,7 +671,11 @@ Usage:
   jsonsqlite table export <name> --file out.jsonl [--path]
   jsonsqlite table import <name> --file in.jsonl [--mode append|replace] [--path]
   jsonsqlite run "<sql>" [--path ./data]
-  jsonsqlite doctor|query|backup|collections ...
+  jsonsqlite vacuum [--collection name] [--path ./data]
+  jsonsqlite rekey --out <dir> --to-key <k> [--from-key <k>] [--path]
+  jsonsqlite rekey --in-place --yes --to-key <k> [--from-key <k>] [--path]
+  jsonsqlite doctor [--deep] [--path ./data]
+  jsonsqlite query|backup|collections ...
   jsonsqlite help
 
 SQL 示例:
@@ -618,6 +683,7 @@ SQL 示例:
   jsonsqlite run "SELECT * FROM users WHERE age > 18 LIMIT 10" --path ./data
   jsonsqlite run "INSERT INTO users (name, age) VALUES ('寒', 30)" --path ./data
   jsonsqlite run "SELECT * FROM users WHERE name LIKE '寒%'" --path ./data
+  jsonsqlite run "SELECT COUNT(*) FROM users WHERE age > 18" --path ./data
   jsonsqlite run "SELECT u.name, o.total FROM users u INNER JOIN orders o ON u._id = o.userId" --path ./data
 
 Env:

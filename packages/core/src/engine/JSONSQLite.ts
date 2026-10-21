@@ -42,6 +42,10 @@ import { analyzeQuality } from '../features/DataQuality.js';
 import { startHttpServer, type HttpServerOptions } from '../api/httpServer.js';
 import { parseSql } from '../sql/parse.js';
 import type { SelectStmt, SqlStatement } from '../sql/ast.js';
+import { verifyEncryptionKey, writeKeycheck } from '../crypto/keycheck.js';
+import { recoverRekeyIfNeeded } from '../ops/rekeyJournal.js';
+import { runDoctor } from '../ops/doctor.js';
+import { vacuumDatabase } from '../ops/vacuum.js';
 import { generateId } from '../utils/id.js';
 import { collectionDir, walFile } from '../utils/path.js';
 import type {
@@ -49,6 +53,7 @@ import type {
   CollectionInfo,
   CreateTableOptions,
   Document,
+  DoctorReport,
   FieldDef,
   ImportCollectionOptions,
   IsolationLevel,
@@ -57,8 +62,12 @@ import type {
   OrderBySpec,
   QueryCursorOptions,
   QueryCursorResult,
+  RekeyOptions,
+  RekeyResult,
   SqlResult,
   TableInfo,
+  VacuumOptions,
+  VacuumResult,
 } from '../types/index.js';
 
 export class JSONSQLite extends EventEmitter {
@@ -105,6 +114,11 @@ export class JSONSQLite extends EventEmitter {
     }
 
     const root = this.storagePath;
+    const sync = this.options.syncMode;
+    const openStarted = Date.now();
+
+    await recoverRekeyIfNeeded(root, sync);
+
     await fs.mkdir(root, { recursive: true });
     await fs.mkdir(path.join(root, 'meta'), { recursive: true });
     await fs.mkdir(path.join(root, 'collections'), { recursive: true });
@@ -115,55 +129,97 @@ export class JSONSQLite extends EventEmitter {
     this.lock = new FileLock(root);
     await this.lock.acquire();
 
-    const sync = this.options.syncMode;
-    this.catalog = new Catalog(root, sync);
-    await this.catalog.load();
+    try {
+      this.catalog = new Catalog(root, sync);
+      await this.catalog.load();
 
-    if (this.catalog.encryption && !this.encKey) {
-      throw new JSONSQLiteError(
-        ErrorCode.ENCRYPTION,
-        'This database uses encrypted storage; provide encryptionKey or JSONSQLITE_KEY',
-      );
-    }
-
-    // New/empty DB + key → enable main-store encryption (plaintext DBs with data stay plain)
-    if (this.encKey && !this.catalog.encryption) {
-      const empty = this.catalog.list().length === 0;
-      if (empty) {
-        await this.catalog.setEncryption(true);
+      if (this.catalog.encryption && !this.encKey) {
+        throw new JSONSQLiteError(
+          ErrorCode.ENCRYPTION,
+          'This database uses encrypted storage; provide encryptionKey or JSONSQLITE_KEY',
+        );
       }
+
+      // New/empty DB + key → enable main-store encryption (plaintext DBs with data stay plain)
+      if (this.encKey && !this.catalog.encryption) {
+        const empty = this.catalog.list().length === 0;
+        if (empty) {
+          await this.catalog.setEncryption(true);
+          await writeKeycheck(root, this.encKey);
+        }
+      }
+
+      if (this.catalog.encryption && this.encKey) {
+        await verifyEncryptionKey(
+          root,
+          this.encKey,
+          this.catalog.list().map((c) => c.name),
+        );
+      }
+
+      this.wal = new Wal(root, this.options.walMode, sync, this.encKey);
+      this.wal.setEncryption(this.catalog.encryption);
+      await this.wal.initialize();
+
+      this.indexes = new IndexManager(root, sync);
+      this.store = new DocumentStore(
+        root,
+        this.catalog,
+        this.wal,
+        sync,
+        this.options.schemaMode,
+        this.encKey,
+        (name, loadMs) => {
+          this.indexes?.rebuildCollection(name, this.store!.getAll(name));
+          this.monitor.recordCollectionLoad(loadMs);
+        },
+      );
+      this.tx = new TransactionManager(this.store);
+      this.changelog = new ChangeLog(root);
+      this.cache = new L1Cache(this.options.cacheSize);
+      this.backup = new BackupManager(root, this.encKey);
+      this.ddlJournal = new DdlJournal(root, sync);
+
+      await this.recoverDdlJournal();
+
+      const lazy = this.options.lazyCollections;
+      const prefetch = new Set(this.options.prefetchCollections ?? []);
+
+      if (!lazy) {
+        for (const info of this.catalog.list()) {
+          await this.store.loadCollection(info.name);
+        }
+        await this.indexes.load((name) => this.store!.getAll(name), {
+          build: true,
+        });
+      } else {
+        await this.indexes.load(() => [], { build: false });
+        for (const name of prefetch) {
+          if (this.catalog.has(name)) {
+            await this.store.loadCollection(name);
+          }
+        }
+      }
+
+      this.monitor.setOpenLoadMs(Date.now() - openStarted);
+      this.ready = true;
+      this.emit('ready');
+      return this;
+    } catch (err) {
+      await this.lock.release().catch(() => undefined);
+      this.lock = null;
+      this.catalog = null;
+      this.wal = null;
+      this.store = null;
+      this.tx = null;
+      this.indexes = null;
+      this.cache = null;
+      this.ddlJournal = null;
+      this.changelog = null;
+      this.backup = null;
+      this.ready = false;
+      throw err;
     }
-
-    this.wal = new Wal(root, this.options.walMode, sync, this.encKey);
-    this.wal.setEncryption(this.catalog.encryption);
-    await this.wal.initialize();
-
-    this.store = new DocumentStore(
-      root,
-      this.catalog,
-      this.wal,
-      sync,
-      this.options.schemaMode,
-      this.encKey,
-    );
-    this.tx = new TransactionManager(this.store);
-    this.changelog = new ChangeLog(root);
-    this.cache = new L1Cache(this.options.cacheSize);
-    this.indexes = new IndexManager(root, sync);
-    this.backup = new BackupManager(root, this.encKey);
-    this.ddlJournal = new DdlJournal(root, sync);
-
-    await this.recoverDdlJournal();
-
-    for (const info of this.catalog.list()) {
-      await this.store.loadCollection(info.name);
-    }
-
-    await this.indexes.load((name) => this.store!.getAll(name));
-
-    this.ready = true;
-    this.emit('ready');
-    return this;
   }
 
   async close(opts?: { flush?: boolean }): Promise<void> {
@@ -404,6 +460,29 @@ export class JSONSQLite extends EventEmitter {
   private async executeSql(stmt: SqlStatement): Promise<SqlResult> {
     switch (stmt.kind) {
       case 'select': {
+        if (stmt.aggregate === 'count') {
+          if (stmt.join) {
+            throw new JSONSQLiteError(
+              ErrorCode.SQL_UNSUPPORTED,
+              'COUNT(*) does not support JOIN',
+            );
+          }
+          const n = await this.count(stmt.table, stmt.filter);
+          const row: Document = {
+            _id: '__count__',
+            _version: 0,
+            _createdAt: 0,
+            _updatedAt: 0,
+            count: n,
+          };
+          return {
+            type: 'rows',
+            rows: [row],
+            columns: ['count'],
+            rowCount: 1,
+            total: 1,
+          };
+        }
         if (stmt.join) {
           return this.executeJoinSelect(stmt);
         }
@@ -966,6 +1045,12 @@ export class JSONSQLite extends EventEmitter {
     );
   }
 
+  /** Number of collections currently resident in memory. */
+  loadedCollectionCount(): number {
+    this.assertReady();
+    return this.store!.loadedCollections().length;
+  }
+
   async health() {
     this.assertReady();
     let writable = true;
@@ -981,6 +1066,31 @@ export class JSONSQLite extends EventEmitter {
       this.cache!.stats.hitRate,
       this.catalog!.list().length,
     );
+  }
+
+  async vacuum(opts?: VacuumOptions): Promise<VacuumResult> {
+    this.assertReady();
+    return vacuumDatabase(this, opts);
+  }
+
+  async doctor(opts?: { deep?: boolean }): Promise<DoctorReport> {
+    this.assertReady();
+    return runDoctor(this, opts);
+  }
+
+  /**
+   * Offline rekey helper bound to this DB's storagePath.
+   * Closes the current handle first when inplace (caller should reopen).
+   */
+  async rekey(
+    opts: Omit<RekeyOptions, 'storagePath'> & { storagePath?: string },
+  ): Promise<RekeyResult> {
+    const storagePath = opts.storagePath ?? this.storagePath;
+    if (this.ready && path.resolve(storagePath) === this.storagePath) {
+      await this.close({ flush: true });
+    }
+    const { rekeyDatabase } = await import('../ops/rekey.js');
+    return rekeyDatabase({ ...opts, storagePath });
   }
 
   async startServer(opts?: HttpServerOptions): Promise<http.Server> {

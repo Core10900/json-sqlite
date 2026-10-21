@@ -22,9 +22,22 @@ export class DocumentStore {
     private readonly syncMode: SyncMode = 'normal',
     private readonly schemaMode: SchemaMode = 'off',
     private readonly encKey: Buffer | null = null,
+    private readonly onCollectionLoaded?: (
+      name: string,
+      loadMs: number,
+    ) => void,
   ) {}
 
+  isLoaded(name: string): boolean {
+    return this.mem.has(name);
+  }
+
+  loadedCollections(): string[] {
+    return [...this.mem.keys()];
+  }
+
   async loadCollection(name: string): Promise<void> {
+    const t0 = Date.now();
     const map = new Map<string, Document>();
     const file = docsFile(this.storagePath, name);
     try {
@@ -58,6 +71,7 @@ export class DocumentStore {
 
     this.mem.set(name, map);
     this.catalog.setDocumentCount(name, map.size);
+    this.onCollectionLoaded?.(name, Date.now() - t0);
   }
 
   async ensureLoaded(name: string): Promise<Map<string, Document>> {

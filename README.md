@@ -1,6 +1,6 @@
 # JSONSQLite
 
-**版本：1.4.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：1.5.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
 
@@ -94,7 +94,7 @@ yarn add @webofcat/jsonsqlite
 ```bash
 npm install -g @webofcat/jsonsqlite
 
-jsonsqlite --version          # => 1.4.0
+jsonsqlite --version          # => 1.5.0
 jsonsqlite create ./my-db     # 新建数据库目录
 jsonsqlite init ./my-db       # 幂等初始化（已存在则跳过创建）
 jsonsqlite tables --path ./my-db
@@ -159,7 +159,7 @@ const { open } = require("@webofcat/jsonsqlite");
 ```ts
 import { create, init, getVersion, open } from "@webofcat/jsonsqlite";
 
-console.log(getVersion()); // "1.4.0"
+console.log(getVersion()); // "1.5.0"
 
 // 创建新库（若已存在会抛 DB_EXISTS；force: true 可强制重建）
 await create({ storagePath: "./my-db" });
@@ -219,12 +219,13 @@ await db.close();
 | `run(sql)` | 执行 SQL 子集 |
 | `exportCollection(name)` / `importCollection(name, docs, { mode? })` | 导出 / 导入（`append` 按 `_id` upsert；`replace` 整表替换） |
 | `queryCursor({ collection, filter?, orderBy?, cursor?, limit? })` | 游标分页（默认按 `_id`） |
+| `vacuum({ collection? })` / `doctor({ deep? })` / `rekey({…})` | 运维：压缩、深度诊断、离线换钥 |
 
-**SQL 支持**：`SELECT`（含 **`LIKE`**、单表等值 **`INNER`/`LEFT JOIN`**）/ `INSERT` / `UPDATE` / `DELETE` / `CREATE TABLE` / `DROP TABLE` / `ALTER TABLE` / `SHOW TABLES` / `DESCRIBE`。
+**SQL 支持**：`SELECT`（含 **`LIKE` / `NOT LIKE`**、**`COUNT(*)`**、单表等值 **`INNER`/`LEFT JOIN`**）/ `INSERT` / `UPDATE` / `DELETE` / DDL / `SHOW` / `DESCRIBE`。
 
-**不支持（会明确报错）**：多表链式 JOIN、子查询、`FULL`/`RIGHT OUTER`、无 `ON` 的笛卡尔积、`ESCAPE` 子句。`LIKE` 中 `\` 可转义下一个字符（含 `%`/`_`）。
+**不支持（稳定 ErrorCode）**：多表链式 JOIN、子查询、`FULL`/`RIGHT OUTER`、无 `ON` 的笛卡尔积、`ESCAPE` 子句。`LIKE` 中 `\` 可转义下一个字符。
 
-JOIN 结果列使用 `alias.field`（或表名）前缀，避免冲突。
+JOIN 结果列使用 `alias.field`（或表名）前缀。`COUNT(*)` 返回一行 `{ count: N }`（与 `count()` API 一致）。
 
 ---
 
@@ -450,23 +451,36 @@ const inc = await db.backupIncremental();
 await db.restoreBackup(full.file);
 ```
 
-### 主存储加密（1.4+）
+### 主存储加密与 rekey（1.4 / 1.5）
 
-对新的空库传入 `encryptionKey`（或 `JSONSQLITE_KEY`）时，集合 JSONL 与 WAL 按行 AES-256-GCM 落盘；`catalog.json` 标记 `encryption: true`。无密钥无法打开密文库。
+对新的空库传入 `encryptionKey`（或 `JSONSQLITE_KEY`）时，集合 JSONL 与 WAL 按行 AES-256-GCM 落盘；`catalog.json` 标记 `encryption: true`。
 
-- **明文旧库**在无密钥下行为与 1.3 兼容
-- 已有明文数据的库不会因带 key 打开而自动改密；迁移请：`export` → 新建加密库 → `import`
-- 在线 rekey 不在 1.4 范围
-- 同一密钥仍用于备份 pack 的 AES-GCM（与 1.3 一致）
+**离线换钥（1.5，推荐写出新路径）**：
+
+```bash
+jsonsqlite rekey --path ./data --out ./data-new --from-key OLD --to-key NEW
+# 或原地（需 --yes；有 journal 崩溃恢复）
+jsonsqlite rekey --path ./data --in-place --yes --from-key OLD --to-key NEW
+```
 
 ```ts
-const db = await open({
-  storagePath: "./secure-data",
-  encryptionKey: process.env.JSONSQLITE_KEY,
+import { rekeyDatabase } from "@webofcat/jsonsqlite";
+await rekeyDatabase({
+  storagePath: "./data",
+  fromKey: "old",
+  toKey: "new",
+  targetPath: "./data-v2",
 });
 ```
 
-> 大表仍是**内存模型**：打开时加载集合；适合中小库，不是磁盘列存引擎。
+> 大表仍是**内存模型**。1.5 默认 **`lazyCollections: true`**（open 不预加载全部表；首次访问再加载）。需要 1.4 行为时设 `lazyCollections: false`，或用 `prefetchCollections: ['hot']` 预热。
+
+### 1.4 → 1.5 迁移
+
+1. 依赖升到 `1.5.0`
+2. 确认懒加载默认可接受；热点表可 `prefetchCollections`
+3. 加密库换钥用 `rekey`（不要手工改文件）
+4. CI 可加：`jsonsqlite doctor --deep --path …`、`jsonsqlite vacuum --path …`
 
 ---
 
@@ -606,7 +620,10 @@ jsonsqlite backup --path ./data
 | `table export <name> --file out.jsonl` | 导出 JSONL |
 | `table import <name> --file in.jsonl [--mode append\|replace]` | 导入 JSONL |
 | `run "<sql>"` | 执行 SQL 子集 |
-| `doctor` / `query` / `backup` / `collections` | 运维 / JSON 查询 |
+| `vacuum [--collection name]` | 重写 JSONL / 截断 WAL |
+| `rekey --out …` / `--in-place --yes` | 离线换钥 |
+| `doctor [--deep]` | 健康检查；`--deep` 一致性 |
+| `query` / `backup` / `collections` | JSON 查询 / 备份 |
 | `help` | 帮助 |
 
 别名：`jsql` ≡ `jsonsqlite`。
@@ -625,10 +642,14 @@ interface JSONSQLiteOptions {
   encryptionKey?: string | null; // 空库启用主存加密；亦用于备份 AES；或 JSONSQLITE_KEY
   syncMode?: 'none' | 'normal' | 'full'; // 默认 normal（fsync）
   schemaMode?: 'off' | 'warn' | 'strict'; // 默认 off（软 Schema）
+  lazyCollections?: boolean; // 默认 true（1.5+）
+  prefetchCollections?: string[]; // open 时预热
 }
 ```
 
 Admin：`startServer({ host, port, adminToken })` — 绑定非 loopback 时**必须**提供 `adminToken`；本机无 token 启动会向 stderr 告警。
+
+**弃用**：`dropCollection` → 请用 `dropTable`（1.5 仍可用，1.6 冻结前保留）。
 
 ---
 

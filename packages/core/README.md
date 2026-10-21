@@ -2,7 +2,7 @@
 
 JSON-native embedded database for Node.js.
 
-**Version: 1.4.0** · Node.js ≥ 20 · Author: hanlin
+**Version: 1.5.0** · Node.js ≥ 20 · Author: hanlin
 
 ## Install
 
@@ -15,32 +15,34 @@ jsonsqlite --version
 ## Library
 
 ```ts
-import { create, open } from '@webofcat/jsonsqlite';
+import { create, open, rekeyDatabase } from '@webofcat/jsonsqlite';
 
 await create({ storagePath: './data' });
 const db = await open({
   storagePath: './data',
-  encryptionKey: process.env.JSONSQLITE_KEY, // optional main-store AES
-  syncMode: 'normal',
-  schemaMode: 'off', // or 'warn' | 'strict'
+  lazyCollections: true,
+  encryptionKey: process.env.JSONSQLITE_KEY,
 });
 
-await db.createTable('users', {
-  fields: [{ name: 'name', type: 'string', required: true }],
-});
-await db.run("INSERT INTO users (name) VALUES ('寒')");
-await db.run("SELECT * FROM users WHERE name LIKE '寒%'");
-await db.exportCollection('users');
+await db.run("SELECT COUNT(*) FROM users WHERE name NOT LIKE 'test%'");
+await db.vacuum();
+await db.doctor({ deep: true });
 await db.close();
+
+await rekeyDatabase({
+  storagePath: './data',
+  fromKey: 'old',
+  toKey: 'new',
+  targetPath: './data-v2',
+});
 ```
 
 ## CLI
 
 ```bash
-jsonsqlite table create --name users --field name:string --path ./data
-jsonsqlite table export users --file users.jsonl --path ./data
-jsonsqlite table import users --file users.jsonl --mode replace --path ./data
-jsonsqlite run "SELECT u.name, o.total FROM users u INNER JOIN orders o ON u._id = o.userId" --path ./data
+jsonsqlite vacuum --path ./data
+jsonsqlite doctor --deep --path ./data
+jsonsqlite rekey --path ./data --out ./data-v2 --from-key OLD --to-key NEW
 ```
 
 Alias: `jsql`
