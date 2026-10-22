@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.5 — 2026-10-22
+
+### Added
+- CLI LTS surface: unified `-p/--path`, `-y/--yes`, `--json`, `-q/--quiet`, hierarchical `--help`
+- Exit codes: `0/1/2/3` (lock → 3); JSON errors `{ ok:false, code, message }`
+- New commands: `insert`, `update`, `delete`, `get`, `count`, `index`, `stats`, `explain`, `sql` (TTY REPL)
+- Command inventory: `devDocs/releases/v1.5.5/cli-command-inventory.md` (1.6 CLI-API draft)
+
+### Changed
+- CLI modularized under `src/cli/` (`args`, `output`, `exit`, `help`, `commands`)
+- Non-TTY guards for interactive `table create/alter`, `drop` without `--yes`, `sql` REPL
+
 ## 1.5.0 — 2026-10-21
 
 ### Added

@@ -352,7 +352,10 @@ describe('v1.5.0 QA / deprecation / version', () => {
     await db.close();
   });
 
-  it('FT-V15-VER-01 getVersion is 1.5.0', () => {
-    expect(getVersion()).toBe('1.5.0');
+  it('FT-V15-VER-01 getVersion matches package', async () => {
+    const pkg = JSON.parse(
+      await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version: string };
+    expect(getVersion()).toBe(pkg.version);
   });
 });

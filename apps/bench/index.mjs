@@ -60,7 +60,7 @@ await db.run(
 const joinMs = ms(tJoin);
 
 const result = {
-  version: '1.5.0',
+  version: '1.5.5',
   N,
   insertMs: Number(insertMs.toFixed(2)),
   insertPerSec: Math.round(N / (insertMs / 1000)),

@@ -1,6 +1,6 @@
 # JSONSQLite
 
-**版本：1.5.0** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：1.5.5** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
 
@@ -62,7 +62,7 @@ jsonsqlite run "SELECT * FROM users" --path ./my-db
 | **备份**       | 全量 / 增量；可选 AES-256-GCM                               |
 | **时间旅行**   | 按时间点查询、差异对比、回滚                                |
 | **可观测**     | health、metrics、慢查询记录、QueryAdvisor                   |
-| **运维入口**   | 全局 CLI `jsonsqlite`（建库 / 表管理 / SQL）、可选 HTTP Admin |
+| **运维入口**   | 全局 CLI `jsonsqlite`（建库 / 表·行 CRUD / 索引 / SQL / vacuum·rekey·doctor）、可选 HTTP Admin |
 | **本地建库**   | 库 API / CLI：`create` 新建、`init` 幂等初始化                |
 | **表管理**     | `listTables` / `createTable` / `dropTable` / `alterTable`；CLI 对话建表、二次确认删改 |
 | **SQL 子集**   | `db.run(sql)` / `jsonsqlite run`：SELECT/INSERT/UPDATE/DELETE/DDL |
@@ -94,12 +94,13 @@ yarn add @webofcat/jsonsqlite
 ```bash
 npm install -g @webofcat/jsonsqlite
 
-jsonsqlite --version          # => 1.5.0
+jsonsqlite --version          # => 1.5.5
 jsonsqlite create ./my-db     # 新建数据库目录
 jsonsqlite init ./my-db       # 幂等初始化（已存在则跳过创建）
-jsonsqlite tables --path ./my-db
-jsonsqlite run "SHOW TABLES" --path ./my-db
-jsonsqlite doctor --path ./my-db
+jsonsqlite tables -p ./my-db --json
+jsonsqlite insert users --data '{"name":"寒"}' -p ./my-db
+jsonsqlite run "SHOW TABLES" -p ./my-db
+jsonsqlite doctor --deep -p ./my-db
 jsonsqlite help
 ```
 
@@ -159,7 +160,7 @@ const { open } = require("@webofcat/jsonsqlite");
 ```ts
 import { create, init, getVersion, open } from "@webofcat/jsonsqlite";
 
-console.log(getVersion()); // "1.5.0"
+console.log(getVersion()); // "1.5.5"
 
 // 创建新库（若已存在会抛 DB_EXISTS；force: true 可强制重建）
 await create({ storagePath: "./my-db" });
@@ -477,7 +478,7 @@ await rekeyDatabase({
 
 ### 1.4 → 1.5 迁移
 
-1. 依赖升到 `1.5.0`
+1. 依赖升到 `1.5.5`
 2. 确认懒加载默认可接受；热点表可 `prefetchCollections`
 3. 加密库换钥用 `rekey`（不要手工改文件）
 4. CI 可加：`jsonsqlite doctor --deep --path …`、`jsonsqlite vacuum --path …`
@@ -580,6 +581,9 @@ unsubscribe();
 
 ## 14. CLI：`jsonsqlite`
 
+全局 flags（1.5.5）：`-p/--path`、`-y/--yes`、`--json`、`-q/--quiet`、`-h/--help`。  
+Exit：`0` 成功 · `1` 用法/业务 · `2` IO · `3` 锁失败。失败且 `--json` 时：`{ ok:false, code, message }`。
+
 ```bash
 npm i -g @webofcat/jsonsqlite
 
@@ -588,24 +592,35 @@ jsonsqlite create ./data
 jsonsqlite init ./data
 
 # 表管理
-jsonsqlite tables --path ./data
-jsonsqlite table create --path ./data              # 对话式建表（需 TTY）
-jsonsqlite table create --name users --field name:string --field age:number --path ./data
-jsonsqlite table drop users --path ./data          # 二次确认；CI 加 --yes
-jsonsqlite table alter users --path ./data         # 对话修改 + 二次确认（需 TTY）
-jsonsqlite table show users --path ./data --page 1 --size 20
-jsonsqlite table show users --path ./data -i       # 交互翻页
-jsonsqlite table describe users --path ./data
+jsonsqlite tables -p ./data --json
+jsonsqlite table create -p ./data                  # 对话式建表（需 TTY）
+jsonsqlite table create --name users --field name:string --field age:number -p ./data
+jsonsqlite table drop users -p ./data              # 二次确认；CI 加 --yes
+jsonsqlite table alter users -p ./data             # 对话修改 + 二次确认（需 TTY）
+jsonsqlite table show users -p ./data --page 1 --size 20 --json
+jsonsqlite table describe users -p ./data
+
+# 行 CRUD / 索引 / 统计（1.5.5）
+jsonsqlite insert users --data '{"name":"寒","age":30}' -p ./data --json
+jsonsqlite get users --id <id> -p ./data --json
+jsonsqlite update users --id <id> --set age=31 -p ./data
+jsonsqlite delete users --id <id> --yes -p ./data
+jsonsqlite count users --where '{"age":{"$gt":18}}' -p ./data --json
+jsonsqlite index create users age --type tree -p ./data
+jsonsqlite stats -p ./data --json
+jsonsqlite explain "SELECT * FROM users WHERE age > 18" -p ./data
 
 # SQL
-jsonsqlite run "SHOW TABLES" --path ./data
-jsonsqlite run "SELECT * FROM users WHERE age > 18 LIMIT 10" --path ./data
+jsonsqlite run "SHOW TABLES" -p ./data
+jsonsqlite run "SELECT * FROM users WHERE age > 18 LIMIT 10" -p ./data
+jsonsqlite sql -p ./data                           # TTY REPL（.tables / .quit）
 
-jsonsqlite doctor --path ./data
-jsonsqlite backup --path ./data
+jsonsqlite doctor --deep -p ./data
+jsonsqlite vacuum -y -p ./data
+jsonsqlite backup -p ./data
 ```
 
-环境变量：`JSONSQLITE_PATH`（默认数据目录）。
+环境变量：`JSONSQLITE_PATH`（默认数据目录）、`JSONSQLITE_KEY`、`NO_COLOR`。
 
 | 命令 | 作用 |
 |------|------|
@@ -619,12 +634,18 @@ jsonsqlite backup --path ./data
 | `table describe <name>` | 查看软 Schema |
 | `table export <name> --file out.jsonl` | 导出 JSONL |
 | `table import <name> --file in.jsonl [--mode append\|replace]` | 导入 JSONL |
-| `run "<sql>"` | 执行 SQL 子集 |
+| `insert` / `update` / `delete` / `get` / `count` | 行级 CRUD 与计数 |
+| `index list\|create\|drop` | 索引管理 |
+| `stats` / `explain` | 库统计 / 查询建议 |
+| `run "<sql>"` | 执行 SQL 子集（单语句） |
+| `sql` | TTY 交互 REPL |
 | `vacuum [--collection name]` | 重写 JSONL / 截断 WAL |
 | `rekey --out …` / `--in-place --yes` | 离线换钥 |
 | `doctor [--deep]` | 健康检查；`--deep` 一致性 |
 | `query` / `backup` / `collections` | JSON 查询 / 备份 |
-| `help` | 帮助 |
+| `help` | 分级帮助（`table --help` 等） |
+
+完整命令表见 [cli-command-inventory.md](./devDocs/releases/v1.5.5/cli-command-inventory.md)（1.6 `CLI-API.md` 底稿）。
 
 别名：`jsql` ≡ `jsonsqlite`。
 

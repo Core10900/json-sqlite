@@ -2,7 +2,7 @@
 
 JSON-native embedded database for Node.js.
 
-**Version: 1.5.0** · Node.js ≥ 20 · Author: hanlin
+**Version: 1.5.5** · Node.js ≥ 20 · Author: hanlin
 
 ## Install
 
@@ -37,13 +37,23 @@ await rekeyDatabase({
 });
 ```
 
-## CLI
+## CLI (1.5.5 LTS surface)
 
 ```bash
-jsonsqlite vacuum --path ./data
-jsonsqlite doctor --deep --path ./data
+jsonsqlite help
+jsonsqlite insert users --data '{"name":"寒"}' -p ./data --json
+jsonsqlite get users --id <id> -p ./data
+jsonsqlite update users --id <id> --set age=30 -p ./data
+jsonsqlite count users --where '{"age":{"$gt":18}}' -p ./data --json
+jsonsqlite index create users age --type tree -p ./data
+jsonsqlite stats -p ./data --json
+jsonsqlite explain "SELECT * FROM users WHERE age > 18" -p ./data
+jsonsqlite vacuum -y -p ./data
+jsonsqlite doctor --deep -p ./data
 jsonsqlite rekey --path ./data --out ./data-v2 --from-key OLD --to-key NEW
 ```
+
+Global flags: `-p/--path`, `-y/--yes`, `--json`, `-q/--quiet`. Exit codes: `0/1/2/3` (lock → 3).
 
 Alias: `jsql`
 

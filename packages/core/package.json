@@ -1,7 +1,7 @@
 {
   "name": "@webofcat/jsonsqlite",
-  "version": "1.5.0",
-  "description": "JSON-native embedded database for Node.js — production-ready: rekey, lazy load, vacuum, doctor",
+  "version": "1.5.5",
+  "description": "JSON-native embedded database for Node.js — CLI LTS: unified flags, CRUD commands, sql REPL",
   "license": "MIT",
   "author": "hanlin <lincent909@163.com>",
   "repository": {
