@@ -11,7 +11,15 @@ JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**�
 | **[`API.md`](./API.md)** | Node 后端：全部稳定 `import` API |
 | **[`CLI-API.md`](./CLI-API.md)** | CLI / 运维：命令面冻结自 **1.5.5** |
 
-**LTS 政策**：1.6.x 仅安全与正确性补丁；不扩张 CLI 子命令；新功能进 1.7+ 或 2.0。
+**LTS 政策（摘要）**
+
+| 线 | 版本 | 说明 |
+|----|------|------|
+| **LTS-1** | `1.6.x`（当前） | 单写者契约冻结；仅安全/正确性补丁；不扩张 CLI |
+| **LTS-2** | `2.2.x`（规划） | 2.x 首个推荐长期 pin |
+| **LTS-3** | `3.0.x`（规划） | 设计采纳能力完工（Vision Complete） |
+
+完整路线与能力勾选见 [ROADMAP](./devDocs/releases/ROADMAP.md) / [FEATURE-MATRIX](./devDocs/releases/FEATURE-MATRIX.md)。
 
 ```text
 # 嵌入业务
@@ -749,7 +757,17 @@ pnpm --filter @jsonsqlite/bench start
 |------|------|
 | [API.md](./API.md) | **1.6 LTS** 库 API 权威手册 |
 | [CLI-API.md](./CLI-API.md) | **1.6 LTS** CLI 权威手册（冻结自 1.5.5） |
-| [devDocs/releases/v1.6.0/开发计划.md](./devDocs/releases/v1.6.0/开发计划.md) | v1.6.0 **LTS 规划** |
+| [devDocs/releases/ROADMAP.md](./devDocs/releases/ROADMAP.md) | **完整路线至 3.0** + **LTS-1/2/3** 标注 |
+| [devDocs/releases/FEATURE-MATRIX.md](./devDocs/releases/FEATURE-MATRIX.md) | 设计能力采纳矩阵（完工勾选真源） |
+| [devDocs/releases/CLI-EVOLUTION.md](./devDocs/releases/CLI-EVOLUTION.md) | 1.7→3.0 **CLI / CLI-API** 适配与再冻结点 |
+| [devDocs/releases/v1.6.0/开发计划.md](./devDocs/releases/v1.6.0/开发计划.md) | **LTS-1** `1.6.x`（已发布） |
+| [devDocs/releases/v1.7.0/开发计划.md](./devDocs/releases/v1.7.0/开发计划.md) | v1.7 体验补齐（非 LTS） |
+| [devDocs/releases/v1.8.0/开发计划.md](./devDocs/releases/v1.8.0/开发计划.md) | v1.8 性能预备（非 LTS） |
+| [devDocs/releases/v2.0/开发计划.md](./devDocs/releases/v2.0/开发计划.md) | v2.0 破坏性一代（非 LTS） |
+| [devDocs/releases/v2.1.0/开发计划.md](./devDocs/releases/v2.1.0/开发计划.md) | v2.1 硬化（非 LTS） |
+| [devDocs/releases/v2.2.0/开发计划.md](./devDocs/releases/v2.2.0/开发计划.md) | **LTS-2** `2.2.x`（规划） |
+| [devDocs/releases/v2.3.0/开发计划.md](./devDocs/releases/v2.3.0/开发计划.md) | v2.3 适配器（非 LTS） |
+| [devDocs/releases/v3.0.0/开发计划.md](./devDocs/releases/v3.0.0/开发计划.md) | **LTS-3 / Vision Complete**（规划） |
 | [devDocs/releases/v1.5.5/开发计划.md](./devDocs/releases/v1.5.5/开发计划.md) | v1.5.5 **CLI LTS 化**（命令扩展 / 交互与脚本契约） |
 | [devDocs/releases/v1.5.0/开发计划.md](./devDocs/releases/v1.5.0/开发计划.md) | v1.5.0 生产就绪（rekey / vacuum / 压测） |
 | [devDocs/releases/v1.4.0/开发计划.md](./devDocs/releases/v1.4.0/开发计划.md) | v1.4.0 加密主存 / LIKE·JOIN / 导入导出 |
