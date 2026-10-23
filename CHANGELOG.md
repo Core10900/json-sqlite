@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.0 — 2026-10-23 · **LTS**
+
+### Added
+- Root authority docs: [`API.md`](./API.md), [`CLI-API.md`](./CLI-API.md) (CLI surface frozen from **1.5.5**)
+- `getCompatibilityInfo()` → `{ version, formatVersion, lts: true, cliSurface: '1.5.5', features }`
+- FT-V16 LTS contract tests (exports ⊆ API.md, help ⊆ CLI-API.md, inventory alignment)
+- Verified on Node 20 + 22 (macOS); Ubuntu CI workflow deferred (token lacks `workflow` scope)
+
+### Changed
+- Package version / docs mark **1.6 LTS**; support policy: patches only on 1.6.x; no CLI feature expansion
+- README / package README link to root `API.md` + `CLI-API.md`
+
+### Notes
+- No new CLI subcommands vs 1.5.5 — this release freezes and documents the contract
+
 ## 1.5.5 — 2026-10-22
 
 ### Added

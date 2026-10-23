@@ -398,9 +398,12 @@ describe('v1.5.5 ops + version + inventory', () => {
   });
 
   it('FT-V155-VER-01 version', async () => {
-    expect(getVersion()).toBe('1.5.5');
+    const pkg = JSON.parse(
+      await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version: string };
+    expect(getVersion()).toBe(pkg.version);
     const r = await cli(['--version']);
-    expect(r.stdout.trim()).toBe('1.5.5');
+    expect(r.stdout.trim()).toBe(pkg.version);
   });
 
   it('FT-V155-INV-01 inventory file exists', async () => {

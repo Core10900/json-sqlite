@@ -2,12 +2,23 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { resolveOptions } from './config/defaults.js';
 import { ErrorCode, JSONSQLiteError } from './errors.js';
-import { Catalog } from './storage/Catalog.js';
+import { Catalog, FORMAT_VERSION } from './storage/Catalog.js';
 import { catalogFile } from './utils/path.js';
 import type { JSONSQLiteOptions } from './types/index.js';
 
 /** Injected by tsup from package.json at build time. */
 declare const __JSONSQLITE_VERSION__: string;
+
+/** LTS compatibility snapshot (frozen for 1.6.x). */
+export interface CompatibilityInfo {
+  version: string;
+  formatVersion: number;
+  /** Always true on the 1.6 LTS line. */
+  lts: true;
+  /** CLI command surface frozen from this release. */
+  cliSurface: '1.5.5';
+  features: string[];
+}
 
 export interface CreateDatabaseOptions extends JSONSQLiteOptions {
   /** If true, remove existing storagePath and recreate (destructive). */
@@ -30,6 +41,25 @@ export interface InitDatabaseResult {
 /** Return the published package version string. */
 export function getVersion(): string {
   return __JSONSQLITE_VERSION__;
+}
+
+/** LTS metadata for tooling / ops (version, format, CLI surface). */
+export function getCompatibilityInfo(): CompatibilityInfo {
+  return {
+    version: getVersion(),
+    formatVersion: FORMAT_VERSION,
+    lts: true,
+    cliSurface: '1.5.5',
+    features: [
+      'encryption',
+      'sql-like-join-count',
+      'lazy-collections',
+      'rekey',
+      'vacuum',
+      'doctor-deep',
+      'cli-1.5.5',
+    ],
+  };
 }
 
 async function pathExists(p: string): Promise<boolean> {

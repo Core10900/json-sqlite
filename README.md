@@ -1,8 +1,17 @@
 # JSONSQLite
 
-**版本：1.5.5** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：1.6.0（LTS）** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
+
+### 权威文档（1.6 LTS）
+
+| 文档 | 受众 |
+|------|------|
+| **[`API.md`](./API.md)** | Node 后端：全部稳定 `import` API |
+| **[`CLI-API.md`](./CLI-API.md)** | CLI / 运维：命令面冻结自 **1.5.5** |
+
+**LTS 政策**：1.6.x 仅安全与正确性补丁；不扩张 CLI 子命令；新功能进 1.7+ 或 2.0。
 
 ```text
 # 嵌入业务
@@ -94,7 +103,7 @@ yarn add @webofcat/jsonsqlite
 ```bash
 npm install -g @webofcat/jsonsqlite
 
-jsonsqlite --version          # => 1.5.5
+jsonsqlite --version          # => 1.6.0
 jsonsqlite create ./my-db     # 新建数据库目录
 jsonsqlite init ./my-db       # 幂等初始化（已存在则跳过创建）
 jsonsqlite tables -p ./my-db --json
@@ -160,7 +169,7 @@ const { open } = require("@webofcat/jsonsqlite");
 ```ts
 import { create, init, getVersion, open } from "@webofcat/jsonsqlite";
 
-console.log(getVersion()); // "1.5.5"
+console.log(getVersion()); // "1.6.0"
 
 // 创建新库（若已存在会抛 DB_EXISTS；force: true 可强制重建）
 await create({ storagePath: "./my-db" });
@@ -478,7 +487,7 @@ await rekeyDatabase({
 
 ### 1.4 → 1.5 迁移
 
-1. 依赖升到 `1.5.5`
+1. 依赖升到 `1.6.0`
 2. 确认懒加载默认可接受；热点表可 `prefetchCollections`
 3. 加密库换钥用 `rekey`（不要手工改文件）
 4. CI 可加：`jsonsqlite doctor --deep --path …`、`jsonsqlite vacuum --path …`
@@ -645,7 +654,7 @@ jsonsqlite backup -p ./data
 | `query` / `backup` / `collections` | JSON 查询 / 备份 |
 | `help` | 分级帮助（`table --help` 等） |
 
-完整命令表见 [cli-command-inventory.md](./devDocs/releases/v1.5.5/cli-command-inventory.md)（1.6 `CLI-API.md` 底稿）。
+完整命令契约见根目录 **[CLI-API.md](./CLI-API.md)**（底稿：[cli-command-inventory.md](./devDocs/releases/v1.5.5/cli-command-inventory.md)）。
 
 别名：`jsql` ≡ `jsonsqlite`。
 
@@ -732,11 +741,15 @@ pnpm --filter @jsonsqlite/bench start
 
 ## 19. 更多文档
 
+**权威契约（置顶）**：[API.md](./API.md) · [CLI-API.md](./CLI-API.md)
+
 完整索引见 [devDocs/README.md](./devDocs/README.md)。
 
 | 文档 | 内容 |
 |------|------|
-| [devDocs/releases/v1.6.0/开发计划.md](./devDocs/releases/v1.6.0/开发计划.md) | v1.6.0 **LTS 规划**（根目录 `CLI-API.md` / `API.md`） |
+| [API.md](./API.md) | **1.6 LTS** 库 API 权威手册 |
+| [CLI-API.md](./CLI-API.md) | **1.6 LTS** CLI 权威手册（冻结自 1.5.5） |
+| [devDocs/releases/v1.6.0/开发计划.md](./devDocs/releases/v1.6.0/开发计划.md) | v1.6.0 **LTS 规划** |
 | [devDocs/releases/v1.5.5/开发计划.md](./devDocs/releases/v1.5.5/开发计划.md) | v1.5.5 **CLI LTS 化**（命令扩展 / 交互与脚本契约） |
 | [devDocs/releases/v1.5.0/开发计划.md](./devDocs/releases/v1.5.0/开发计划.md) | v1.5.0 生产就绪（rekey / vacuum / 压测） |
 | [devDocs/releases/v1.4.0/开发计划.md](./devDocs/releases/v1.4.0/开发计划.md) | v1.4.0 加密主存 / LIKE·JOIN / 导入导出 |

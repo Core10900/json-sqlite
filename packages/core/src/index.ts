@@ -1,9 +1,15 @@
 export { JSONSQLite, open } from './engine/JSONSQLite.js';
-export { create, init, getVersion } from './lifecycle.js';
+export {
+  create,
+  init,
+  getVersion,
+  getCompatibilityInfo,
+} from './lifecycle.js';
 export type {
   CreateDatabaseOptions,
   CreateDatabaseResult,
   InitDatabaseResult,
+  CompatibilityInfo,
 } from './lifecycle.js';
 export { JSONSQLiteError, ErrorCode } from './errors.js';
 export { parseSql } from './sql/parse.js';

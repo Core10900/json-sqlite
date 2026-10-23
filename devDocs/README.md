@@ -83,5 +83,5 @@ mkdir -p devDocs/releases/v2.0
 | v1.4.0 | [开发计划](./releases/v1.4.0/开发计划.md) | [功能测试](./releases/v1.4.0/功能测试计划.md) |
 | v1.5.0 | [开发计划](./releases/v1.5.0/开发计划.md) | [功能测试](./releases/v1.5.0/功能测试计划.md) |
 | v1.5.5 | [开发计划](./releases/v1.5.5/开发计划.md) | [功能测试](./releases/v1.5.5/功能测试计划.md) · [命令清单](./releases/v1.5.5/cli-command-inventory.md) |
-| v1.6.0（LTS 规划） | [开发计划](./releases/v1.6.0/开发计划.md) | [功能测试](./releases/v1.6.0/功能测试计划.md) |
+| v1.6.0（**当前 LTS**） | [开发计划](./releases/v1.6.0/开发计划.md) | [功能测试](./releases/v1.6.0/功能测试计划.md) · [准入检查表](./releases/v1.6.0/LTS准入检查表.md) |
 | v2.0 | （待建） | （待建） |

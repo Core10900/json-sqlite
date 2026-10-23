@@ -1,7 +1,7 @@
 {
   "name": "@webofcat/jsonsqlite",
-  "version": "1.5.5",
-  "description": "JSON-native embedded database for Node.js — CLI LTS: unified flags, CRUD commands, sql REPL",
+  "version": "1.6.0",
+  "description": "JSON-native embedded database for Node.js — 1.6 LTS: frozen library + CLI contracts",
   "license": "MIT",
   "author": "hanlin <lincent909@163.com>",
   "repository": {

@@ -2,7 +2,12 @@
 
 JSON-native embedded database for Node.js.
 
-**Version: 1.5.5** · Node.js ≥ 20 · Author: hanlin
+**Version: 1.6.0 (LTS)** · Node.js ≥ 20 · Author: hanlin
+
+## Authority docs
+
+- Library API: [API.md](https://github.com/Core10900/json-sqlite/blob/main/API.md)
+- CLI (frozen from 1.5.5): [CLI-API.md](https://github.com/Core10900/json-sqlite/blob/main/CLI-API.md)
 
 ## Install
 
@@ -15,7 +20,15 @@ jsonsqlite --version
 ## Library
 
 ```ts
-import { create, open, rekeyDatabase } from '@webofcat/jsonsqlite';
+import {
+  create,
+  open,
+  getCompatibilityInfo,
+  rekeyDatabase,
+} from '@webofcat/jsonsqlite';
+
+console.log(getCompatibilityInfo());
+// { version, formatVersion, lts: true, cliSurface: '1.5.5', features }
 
 await create({ storagePath: './data' });
 const db = await open({
@@ -37,27 +50,21 @@ await rekeyDatabase({
 });
 ```
 
-## CLI (1.5.5 LTS surface)
+## CLI
 
 ```bash
 jsonsqlite help
 jsonsqlite insert users --data '{"name":"寒"}' -p ./data --json
-jsonsqlite get users --id <id> -p ./data
-jsonsqlite update users --id <id> --set age=30 -p ./data
-jsonsqlite count users --where '{"age":{"$gt":18}}' -p ./data --json
-jsonsqlite index create users age --type tree -p ./data
-jsonsqlite stats -p ./data --json
-jsonsqlite explain "SELECT * FROM users WHERE age > 18" -p ./data
-jsonsqlite vacuum -y -p ./data
 jsonsqlite doctor --deep -p ./data
-jsonsqlite rekey --path ./data --out ./data-v2 --from-key OLD --to-key NEW
 ```
 
-Global flags: `-p/--path`, `-y/--yes`, `--json`, `-q/--quiet`. Exit codes: `0/1/2/3` (lock → 3).
+Global flags: `-p/--path`, `-y/--yes`, `--json`, `-q/--quiet`. Exit codes: `0/1/2/3`.
 
 Alias: `jsql`
 
-Full docs: https://github.com/Core10900/json-sqlite#readme
+## LTS
+
+1.6.x receives security and correctness patches only. CLI command surface does not expand (frozen at 1.5.5). New features go to 1.7+ or 2.0.
 
 ## License
 
