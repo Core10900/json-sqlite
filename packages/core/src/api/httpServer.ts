@@ -2,6 +2,7 @@ import http from 'node:http';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { JSONSQLite } from '../engine/JSONSQLite.js';
 import { getAdminHtml } from '../admin/dashboard.js';
+import type { JsonQuery } from '../types/index.js';
 
 export interface HttpServerOptions {
   host?: string;
@@ -29,6 +30,18 @@ export async function startHttpServer(
     );
   }
 
+  const sseClients = new Set<http.ServerResponse>();
+  const unsubData = db.subscribe((event) => {
+    broadcast(sseClients, 'dataChanged', event);
+  });
+  const metricsTimer = setInterval(() => {
+    try {
+      broadcast(sseClients, 'metrics', db.getMetrics());
+    } catch {
+      /* closed */
+    }
+  }, 5000);
+
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', `http://${host}:${port}`);
@@ -38,25 +51,104 @@ export async function startHttpServer(
         return json(res, 200, h);
       }
 
-      if (url.pathname.startsWith('/admin')) {
-        if (token) {
-          const auth = req.headers.authorization ?? '';
-          if (auth !== `Bearer ${token}`) {
-            return json(res, 401, { error: 'unauthorized' });
-          }
+      if (url.pathname === '/events' || url.pathname === '/admin/events') {
+        if (!authorize(req, token, url)) {
+          return json(res, 401, { error: 'unauthorized' });
         }
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+        res.write(': ok\n\n');
+        sseClients.add(res);
+        req.on('close', () => sseClients.delete(res));
+        return;
+      }
+
+      if (
+        url.pathname.startsWith('/admin') ||
+        url.pathname === '/metrics' ||
+        url.pathname === '/advise' ||
+        url.pathname === '/profile' ||
+        url.pathname === '/backup' ||
+        url.pathname === '/tables' ||
+        url.pathname === '/slow' ||
+        url.pathname === '/timetravel'
+      ) {
+        if (!authorize(req, token, url)) {
+          return json(res, 401, { error: 'unauthorized' });
+        }
+
         if (url.pathname === '/admin' || url.pathname === '/admin/') {
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(getAdminHtml());
           return;
         }
-        if (url.pathname === '/admin/metrics') {
+
+        const route = url.pathname.replace(/^\/admin/, '') || '/';
+        if (route === '/metrics' || url.pathname === '/metrics') {
           return json(res, 200, db.getMetrics());
+        }
+        if (route === '/slow' || url.pathname === '/slow') {
+          return json(res, 200, { slow: db.getSlowQueries() });
+        }
+        if (route === '/tables' || url.pathname === '/tables') {
+          const tables = await db.listTables();
+          return json(res, 200, { tables });
+        }
+        if (
+          (route === '/advise' || url.pathname === '/advise') &&
+          req.method === 'POST'
+        ) {
+          const body = JSON.parse(await readBody(req)) as JsonQuery;
+          return json(res, 200, { advice: db.advise(body) });
+        }
+        if (
+          (route === '/profile' || url.pathname === '/profile') &&
+          req.method === 'POST'
+        ) {
+          const body = JSON.parse(await readBody(req)) as {
+            usedIndex?: string;
+            planMs?: number;
+            executeMs?: number;
+          };
+          return json(
+            res,
+            200,
+            db.profileQuery(body.usedIndex, body.planMs ?? 0, body.executeMs ?? 0),
+          );
+        }
+        if (
+          (route === '/backup' || url.pathname === '/backup') &&
+          req.method === 'POST'
+        ) {
+          const info = await db.backupFull();
+          return json(res, 200, { backup: info });
+        }
+        if (
+          (route === '/timetravel' || url.pathname === '/timetravel') &&
+          req.method === 'POST'
+        ) {
+          const body = JSON.parse(await readBody(req)) as {
+            collection: string;
+            timestamp: number;
+            query?: Omit<JsonQuery, 'collection'>;
+          };
+          const rows = await db.queryAtTime(
+            body.collection,
+            body.timestamp,
+            body.query ?? {},
+          );
+          return json(res, 200, { rows });
+        }
+        if (route === '/indexes' || url.pathname === '/admin/indexes') {
+          return json(res, 200, { indexes: await db.listIndexes() });
         }
       }
 
       if (url.pathname === '/query' && req.method === 'POST') {
-        if (token && req.headers.authorization !== `Bearer ${token}`) {
+        if (!authorize(req, token, url)) {
           return json(res, 401, { error: 'unauthorized' });
         }
         const body = await readBody(req);
@@ -69,6 +161,13 @@ export async function startHttpServer(
     } catch (err) {
       json(res, 500, { error: (err as Error).message });
     }
+  });
+
+  server.on('close', () => {
+    clearInterval(metricsTimer);
+    unsubData();
+    for (const c of sseClients) c.end();
+    sseClients.clear();
   });
 
   await new Promise<void>((resolve) => {
@@ -85,6 +184,34 @@ export function isLoopbackHost(host: string): boolean {
     h === 'localhost' ||
     h === '0:0:0:0:0:0:0:1'
   );
+}
+
+function authorize(
+  req: http.IncomingMessage,
+  token: string | null,
+  url?: URL,
+): boolean {
+  if (!token) return true;
+  const auth = req.headers.authorization ?? '';
+  if (auth === `Bearer ${token}`) return true;
+  // EventSource cannot set Authorization — allow ?token=
+  if (url?.searchParams.get('token') === token) return true;
+  return false;
+}
+
+function broadcast(
+  clients: Set<http.ServerResponse>,
+  event: string,
+  data: unknown,
+): void {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of clients) {
+    try {
+      res.write(payload);
+    } catch {
+      clients.delete(res);
+    }
+  }
 }
 
 function json(

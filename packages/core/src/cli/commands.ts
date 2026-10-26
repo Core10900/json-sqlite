@@ -31,6 +31,7 @@ import {
   helpTableCreate,
   helpUpdate,
   helpDelete,
+  helpAdmin as helpAdminText,
 } from './help.js';
 import { fail, printData, printSuccess, requireTty } from './output.js';
 import { formatDocsPage, formatSchema, formatSqlResult, formatTables } from './format.js';
@@ -49,8 +50,26 @@ export async function dispatch(argv: string[]): Promise<void> {
   }
 
   if (cmd === 'version') {
-    const { getVersion } = await import('../lifecycle.js');
+    const { getVersion, getCompatibilityInfo } = await import('../lifecycle.js');
+    if (globals.json || hasFlag(rest, '--json')) {
+      printData(
+        { json: true, quiet: globals.quiet },
+        '',
+        { action: 'version', ...getCompatibilityInfo() },
+      );
+      return;
+    }
     console.log(getVersion());
+    return;
+  }
+
+  if (cmd === 'compat') {
+    const { getCompatibilityInfo } = await import('../lifecycle.js');
+    const info = getCompatibilityInfo();
+    printData(makeContext(globals, rest).out, JSON.stringify(info, null, 2), {
+      action: 'compat',
+      ...info,
+    });
     return;
   }
 
@@ -105,6 +124,14 @@ export async function dispatch(argv: string[]): Promise<void> {
       return cmdRekey(ctx, rest, globals);
     case 'doctor':
       return cmdDoctor(ctx, rest);
+    case 'admin':
+      return cmdAdmin(ctx, rest);
+    case 'advise':
+      return cmdAdvise(ctx, rest);
+    case 'aggregate':
+      return cmdAggregate(ctx, rest);
+    case 'watch':
+      return cmdWatch(ctx, rest);
     default:
       fail(
         ctx.out,
@@ -745,12 +772,49 @@ async function cmdIndex(ctx: CliContext, rest: string[]): Promise<void> {
       return;
     }
     if (sub === 'create') {
-      const [table, field] = positionals(args);
-      const type = (flag(args, '--type') ?? 'object') as 'object' | 'tree' | 'inverted';
-      if (!table || !field) {
-        fail(ctx.out, '用法: jsonsqlite index create <table> <field> [--type object|tree|inverted]', 'USAGE');
+      const [table, fieldPos] = positionals(args);
+      const type = (flag(args, '--type') ?? 'object') as
+        | 'object'
+        | 'tree'
+        | 'inverted'
+        | 'composite';
+      const fieldsRaw = flag(args, '--fields');
+      const fields = fieldsRaw
+        ? fieldsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+        : undefined;
+      if (!table) {
+        fail(
+          ctx.out,
+          '用法: jsonsqlite index create <table> <field> [--type object|tree|inverted|composite] [--fields a,b]',
+          'USAGE',
+        );
       }
-      const meta = await db.createIndex(table, field, type);
+      if (type === 'composite') {
+        if (!fields || fields.length < 2) {
+          fail(
+            ctx.out,
+            'composite 需要 --fields a,b（至少两个字段）',
+            'USAGE',
+          );
+        }
+        const meta = await db.createIndex(table, fields.join('+'), type, {
+          fields,
+        });
+        printSuccess(
+          ctx.out,
+          `✓ index ${meta.collection}.${meta.field} (${meta.type})`,
+          { action: 'index.create', index: meta },
+        );
+        return;
+      }
+      if (!fieldPos) {
+        fail(
+          ctx.out,
+          '用法: jsonsqlite index create <table> <field> [--type object|tree|inverted]',
+          'USAGE',
+        );
+      }
+      const meta = await db.createIndex(table, fieldPos, type);
       printSuccess(ctx.out, `✓ index ${meta.collection}.${meta.field} (${meta.type})`, {
         action: 'index.create',
         index: meta,
@@ -950,6 +1014,162 @@ async function cmdDoctor(ctx: CliContext, rest: string[]): Promise<void> {
       if (h.status !== 'healthy') setExit(ExitCode.USAGE);
     }
   });
+}
+
+async function cmdAdmin(ctx: CliContext, rest: string[]): Promise<void> {
+  const sub = rest[0];
+  if (!sub || sub === '--help' || hasFlag(rest, '--help', '-h')) {
+    console.log(helpFor(['admin']) ?? helpAdmin());
+    if (!sub) setExit(ExitCode.USAGE);
+    return;
+  }
+  if (sub !== 'serve') {
+    fail(ctx.out, `Unknown admin subcommand: ${sub}`, 'USAGE', ExitCode.USAGE, helpAdmin());
+  }
+  const args = rest.slice(1);
+  const host = flag(args, '--host') ?? '127.0.0.1';
+  const port = Number(flag(args, '--port') ?? '3000');
+  const token = flag(args, '--token') ?? null;
+  await withDb(ctx, async (db) => {
+    const server = await db.startServer({ host, port, adminToken: token });
+    const addr = `http://${host}:${port}/admin`;
+    printSuccess(ctx.out, `✓ admin listening ${addr}`, {
+      action: 'admin.serve',
+      host,
+      port,
+      url: addr,
+    });
+    // Keep process alive until SIGINT (or --once for tests)
+    if (hasFlag(args, '--once')) {
+      server.close();
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const stop = () => {
+        server.close(() => resolve());
+      };
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+    });
+  });
+}
+
+async function cmdAdvise(ctx: CliContext, rest: string[]): Promise<void> {
+  const text = rest.filter((a) => !a.startsWith('-')).join(' ').trim();
+  if (!text) {
+    fail(ctx.out, "用法: jsonsqlite advise '<sql|json>'", 'USAGE');
+  }
+  await withDb(ctx, async (db) => {
+    let query: JsonQuery;
+    if (text.trim().startsWith('{')) {
+      query = JSON.parse(text) as JsonQuery;
+    } else {
+      const { parseSql } = await import('../sql/parse.js');
+      const stmt = parseSql(text);
+      if (stmt.kind !== 'select' || stmt.join || stmt.aggregate) {
+        fail(
+          ctx.out,
+          'advise 目前支持单表 SELECT 或 JSON JsonQuery',
+          'SQL_UNSUPPORTED',
+        );
+      }
+      query = {
+        collection: stmt.table,
+        filter: stmt.filter,
+        orderBy: stmt.orderBy,
+        limit: stmt.limit,
+        offset: stmt.offset,
+        projection: stmt.columns === '*' ? undefined : stmt.columns,
+      };
+    }
+    const advice = db.advise(query);
+    const indexes = (await db.listIndexes()).filter(
+      (i) => i.collection === query.collection,
+    );
+    const human = [
+      `collection: ${query.collection}`,
+      `indexes: ${indexes.map((i) => `${i.field}(${i.type})`).join(', ') || '(none)'}`,
+      ...advice.map((a) => `- [${a.type}] ${a.message}`),
+    ].join('\n');
+    printData(ctx.out, human, {
+      action: 'advise',
+      collection: query.collection,
+      query,
+      indexes,
+      advice,
+    });
+  });
+}
+
+async function cmdAggregate(ctx: CliContext, rest: string[]): Promise<void> {
+  const table =
+    flagAny(rest, ['--table', '--collection']) ??
+    positionals(rest).find((p) => !p.trim().startsWith('['));
+  const pipelineRaw =
+    rest.find((a) => a.trim().startsWith('[')) ??
+    flag(rest, '--pipeline');
+  if (!table || !pipelineRaw) {
+    fail(
+      ctx.out,
+      `用法: jsonsqlite aggregate <table> '<pipeline-json>'`,
+      'USAGE',
+    );
+  }
+  await withDb(ctx, async (db) => {
+    const pipeline = JSON.parse(pipelineRaw);
+    const rows = await db.aggregate(table, pipeline);
+    printData(ctx.out, JSON.stringify(rows, null, 2), {
+      action: 'aggregate',
+      table,
+      rows,
+    });
+  });
+}
+
+async function cmdWatch(ctx: CliContext, rest: string[]): Promise<void> {
+  const once = hasFlag(rest, '--once');
+  const timeoutMs = Number(flag(rest, '--timeout') ?? '0');
+  if (!process.stdout.isTTY && !once && !timeoutMs) {
+    fail(
+      ctx.out,
+      '非 TTY 必须提供 --once 或 --timeout <ms>',
+      'USAGE',
+    );
+  }
+  await withDb(ctx, async (db) => {
+    await new Promise<void>((resolve, reject) => {
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              unsub();
+              resolve();
+            }, timeoutMs)
+          : null;
+      const unsub = db.subscribe((event) => {
+        printData(ctx.out, JSON.stringify(event), {
+          action: 'watch',
+          event,
+        });
+        if (once) {
+          if (timer) clearTimeout(timer);
+          unsub();
+          resolve();
+        }
+      });
+      if (!once && !timeoutMs) {
+        process.once('SIGINT', () => {
+          unsub();
+          resolve();
+        });
+      }
+      // If --once with no writes, hang until timeout — require timeout when once without activity expectation
+      void reject;
+    });
+  });
+}
+
+function helpAdmin(): string {
+  return helpAdminText();
 }
 
 function normalizeFieldType(raw: string): FieldType | null {

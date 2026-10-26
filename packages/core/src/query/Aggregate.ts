@@ -13,20 +13,41 @@ export type AggregateStage =
   | { type: 'group'; by: string; fields: Record<string, AggregateField> }
   | { type: 'sort'; orderBy: Record<string, 'asc' | 'desc'> }
   | { type: 'limit'; limit: number }
-  | { type: 'project'; fields: string[] };
+  | { type: 'project'; fields: string[] }
+  | { type: 'unwind'; path: string; /** Keep docs with empty/missing array */ preserveNullAndEmpty?: boolean }
+  | {
+      type: 'lookup';
+      /** Foreign collection name (resolved via AggregateContext.getCollection). */
+      from: string;
+      /** Local field on current docs. */
+      localField: string;
+      /** Field on foreign docs. */
+      foreignField: string;
+      /** Output array field name. */
+      as: string;
+    };
+
+export interface AggregateContext {
+  getCollection?: (name: string) => Document[];
+}
 
 export function executeAggregate(
   docs: Document[],
   pipeline: AggregateStage[],
+  ctx: AggregateContext = {},
 ): unknown[] {
   let current: unknown[] = docs;
   for (const stage of pipeline) {
-    current = runStage(current, stage);
+    current = runStage(current, stage, ctx);
   }
   return current;
 }
 
-function runStage(data: unknown[], stage: AggregateStage): unknown[] {
+function runStage(
+  data: unknown[],
+  stage: AggregateStage,
+  ctx: AggregateContext,
+): unknown[] {
   switch (stage.type) {
     case 'match':
       return (data as Document[]).filter((d) => matchFilter(d, stage.filter));
@@ -56,9 +77,57 @@ function runStage(data: unknown[], stage: AggregateStage): unknown[] {
         for (const f of stage.fields) out[f] = src[f];
         return out;
       });
+    case 'unwind':
+      return unwind(data as Document[], stage.path, stage.preserveNullAndEmpty);
+    case 'lookup':
+      return lookup(
+        data as Document[],
+        stage,
+        ctx.getCollection?.(stage.from) ?? [],
+      );
     default:
       return data;
   }
+}
+
+function unwind(
+  docs: Document[],
+  path: string,
+  preserveNullAndEmpty?: boolean,
+): Document[] {
+  const out: Document[] = [];
+  for (const doc of docs) {
+    const raw = doc[path];
+    if (!Array.isArray(raw) || raw.length === 0) {
+      if (preserveNullAndEmpty) {
+        out.push({ ...doc, [path]: Array.isArray(raw) ? null : raw ?? null });
+      }
+      continue;
+    }
+    for (const item of raw) {
+      out.push({ ...doc, [path]: item });
+    }
+  }
+  return out;
+}
+
+function lookup(
+  docs: Document[],
+  stage: Extract<AggregateStage, { type: 'lookup' }>,
+  foreign: Document[],
+): Document[] {
+  const hash = new Map<string, Document[]>();
+  for (const f of foreign) {
+    const key = JSON.stringify(f[stage.foreignField]);
+    const list = hash.get(key) ?? [];
+    list.push(f);
+    hash.set(key, list);
+  }
+  return docs.map((doc) => {
+    const key = JSON.stringify(doc[stage.localField]);
+    const matches = hash.get(key) ?? [];
+    return { ...doc, [stage.as]: matches.map((m) => ({ ...m })) };
+  });
 }
 
 function groupBy(

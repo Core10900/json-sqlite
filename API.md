@@ -317,3 +317,49 @@ unsubscribe();
 4. 相对 **2.0**：预期可能引入多写者、硬 Schema 默认、存储格式大变——勿假设 1.6 API 在 2.0 不变  
 
 从更早版本升级：先读 1.4 / 1.5 README 迁移节（加密、lazy、rekey），再升到 1.6。  
+
+---
+
+## 18. 1.7 增补（非 LTS）
+
+> 以下为 **1.7.0+** 新增能力；**1.6.x LTS 契约符号仍全部保留**。生产 pin LTS 请继续使用 `1.6.x`。
+
+### 新增导出
+
+| 符号 | 说明 |
+|------|------|
+| `StreamProcessor` | 进程内滑动窗口（基于 `subscribe`） |
+| `autoSelectIndexType` | 索引类型启发式选择 |
+| `isLoopbackHost` | Admin 绑定判定辅助 |
+| 类型 `SlidingWindowOptions` / `AutoTuneAuditEntry` / `AutoSelectSample` | 配套类型 |
+
+### `JSONSQLiteOptions` 增补
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `autoTune` | `false` | 开启后对慢查询跑 Advisor；配合 `autoTuneDryRun` |
+| `autoTuneDryRun` | `true` | 只推荐不建索引 |
+
+### 实例方法增补
+
+| 方法 | 说明 |
+|------|------|
+| `createIndex(col, field, type, { fields? })` | `type: 'composite'` + `fields` |
+| `autoSelectIndexType(sample, field?)` | 返回 `object\|tree\|inverted\|composite` |
+| `getSlowQueries(threshold?)` | 慢查询缓冲 |
+| `setAutoTune` / `runAutoTune` / `getAutoTuneAudit` | AutoTune 控制与审计 |
+| `createStreamProcessor()` | 滑动窗口工厂 |
+
+### 聚合阶段增补
+
+- `{ type: 'unwind', path, preserveNullAndEmpty? }`
+- `{ type: 'lookup', from, localField, foreignField, as }`（内存哈希）
+
+### Admin / 实时
+
+- `startServer`：仪表盘 + `/admin/metrics|slow|tables|advise|profile|backup|timetravel|events`
+- SSE：`/admin/events`（`metrics` / `dataChanged`）；token 可用 `Authorization` 或 `?token=`
+
+### `getCompatibilityInfo()`（1.7）
+
+- `lts: false`，`cliSurface: '1.7.0'`，`features` 含 `admin-sse` / `composite-index` 等

@@ -34,6 +34,11 @@ const VALUE_FLAGS = new Set([
   '--from-env',
   '--to-env',
   '--limit',
+  '--host',
+  '--port',
+  '--token',
+  '--fields',
+  '--timeout',
 ]);
 
 /**

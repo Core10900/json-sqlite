@@ -171,11 +171,16 @@ describe('v1.6.0 API contract', () => {
 
   it('FT-V16-API-05 getCompatibilityInfo', () => {
     const info = getCompatibilityInfo();
-    expect(info.lts).toBe(true);
-    expect(info.cliSurface).toBe('1.5.5');
+    expect(typeof info.lts).toBe('boolean');
+    expect(typeof info.cliSurface).toBe('string');
     expect(info.formatVersion).toBe(FORMAT_VERSION);
     expect(info.version).toBe(getVersion());
     expect(info.features.length).toBeGreaterThan(0);
+    // 1.6 LTS line freeze; 1.7+ may extend cliSurface while keeping 1.5.5 commands
+    if (info.version.startsWith('1.6.')) {
+      expect(info.lts).toBe(true);
+      expect(info.cliSurface).toBe('1.5.5');
+    }
   });
 });
 
@@ -338,10 +343,10 @@ describe('v1.6.0 LTS behavior freeze', () => {
 });
 
 describe('v1.6.0 version + release artifacts', () => {
-  it('FT-V16-VER-01 getVersion is 1.6.0', () => {
-    expect(getVersion()).toBe('1.6.0');
+  it('FT-V16-VER-01 getVersion matches package.json', () => {
     const pj = require('../package.json') as { version: string };
-    expect(pj.version).toBe('1.6.0');
+    expect(getVersion()).toBe(pj.version);
+    expect(pj.version).toMatch(/^\d+\.\d+\.\d+/);
   });
 
   it('FT-V16-DOC-05 smoke examples (lib + CLI)', async () => {

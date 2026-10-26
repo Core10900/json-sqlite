@@ -9,14 +9,14 @@ import type { JSONSQLiteOptions } from './types/index.js';
 /** Injected by tsup from package.json at build time. */
 declare const __JSONSQLITE_VERSION__: string;
 
-/** LTS compatibility snapshot (frozen for 1.6.x). */
+/** Compatibility snapshot for tooling / ops. */
 export interface CompatibilityInfo {
   version: string;
   formatVersion: number;
-  /** Always true on the 1.6 LTS line. */
-  lts: true;
-  /** CLI command surface frozen from this release. */
-  cliSurface: '1.5.5';
+  /** True only on an LTS line (1.6.x / future 2.2 / 3.0). 1.7 is not LTS. */
+  lts: boolean;
+  /** CLI command surface generation. */
+  cliSurface: string;
   features: string[];
 }
 
@@ -43,13 +43,13 @@ export function getVersion(): string {
   return __JSONSQLITE_VERSION__;
 }
 
-/** LTS metadata for tooling / ops (version, format, CLI surface). */
+/** Compatibility metadata for tooling / ops (version, format, CLI surface). */
 export function getCompatibilityInfo(): CompatibilityInfo {
   return {
     version: getVersion(),
     formatVersion: FORMAT_VERSION,
-    lts: true,
-    cliSurface: '1.5.5',
+    lts: false,
+    cliSurface: '1.7.0',
     features: [
       'encryption',
       'sql-like-join-count',
@@ -58,6 +58,12 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'vacuum',
       'doctor-deep',
       'cli-1.5.5',
+      'cli-1.7',
+      'admin-sse',
+      'composite-index',
+      'aggregate-unwind-lookup',
+      'stream-processor',
+      'auto-tune',
     ],
   };
 }

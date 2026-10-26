@@ -6,10 +6,15 @@ import { writeFileAtomic } from '../utils/fsDurable.js';
 import { ObjectIndex } from './ObjectIndex.js';
 import { TreeIndex } from './TreeIndex.js';
 import { InvertedIndex } from './InvertedIndex.js';
+import { CompositeIndex } from './CompositeIndex.js';
 import type { Index, IndexMeta, IndexType } from './types.js';
 
 interface IndexesFile {
   indexes: IndexMeta[];
+}
+
+export interface CreateIndexOptions {
+  fields?: string[];
 }
 
 export class IndexManager {
@@ -90,8 +95,26 @@ export class IndexManager {
     field: string,
     type: IndexType,
     docs: Document[],
+    opts?: CreateIndexOptions,
   ): Promise<IndexMeta> {
-    const k = this.key(collection, field);
+    let fields = opts?.fields;
+    let resolvedField = field;
+
+    if (type === 'composite') {
+      fields =
+        fields && fields.length > 0
+          ? fields
+          : field.split(/[+,\s]+/).filter(Boolean);
+      if (!fields || fields.length < 2) {
+        throw new JSONSQLiteError(
+          ErrorCode.INVALID_CONFIG,
+          'Composite index requires at least 2 fields (--fields a,b)',
+        );
+      }
+      resolvedField = fields.join('+');
+    }
+
+    const k = this.key(collection, resolvedField);
     if (this.indexes.has(k)) {
       throw new JSONSQLiteError(
         ErrorCode.INVALID_CONFIG,
@@ -100,9 +123,10 @@ export class IndexManager {
     }
     const meta: IndexMeta = {
       collection,
-      field,
+      field: resolvedField,
       type,
       createdAt: Date.now(),
+      ...(fields && fields.length > 0 ? { fields } : {}),
     };
     const idx = this.createInstance(meta);
     idx.build(docs);
@@ -153,6 +177,8 @@ export class IndexManager {
         return new TreeIndex(meta);
       case 'inverted':
         return new InvertedIndex(meta);
+      case 'composite':
+        return new CompositeIndex(meta);
       default:
         throw new JSONSQLiteError(
           ErrorCode.INVALID_CONFIG,

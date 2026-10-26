@@ -12,7 +12,7 @@
 
 ```bash
 npm install -g @webofcat/jsonsqlite
-jsonsqlite --version    # => 1.6.0
+jsonsqlite --version    # => 1.7.0（1.6.x LTS 契约仍适用；见 §13 增补）
 jsql --version          # 同入口别名
 ```
 
@@ -219,3 +219,27 @@ jsonsqlite insert|update|delete|index|sql --help
 - **1.6.x**：安全与正确性补丁；CLI **不扩张**功能面  
 - **1.7+**：可选新功能（含新 CLI 命令）  
 - **2.0**：允许破坏兼容（多写者、硬 Schema 默认等）  
+
+---
+
+## 13. 1.7 增补（命令面扩展）
+
+> 以下命令在 **1.7.0+** 可用；**不删除** §10 既有 1.5.5/1.6 命令。  
+> 演进总览见 [`devDocs/releases/CLI-EVOLUTION.md`](./devDocs/releases/CLI-EVOLUTION.md)。
+
+### 速查
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `admin serve [--host] [--port] [--token] [--once]` | ✅；非 loopback 强制 token | Admin HTTP + SSE |
+| `advise '<sql\|json>'` | ✅ | Advisor（字段对齐 explain） |
+| `aggregate <table> '<pipeline-json>'` | ✅ | 含 unwind / lookup |
+| `index create … --type composite --fields a,b` | ✅ | 复合索引 |
+| `compat` / `version --json` | ✅ | `getCompatibilityInfo()` |
+| `watch [--once\|--timeout ms]` | 非 TTY 须 once/timeout | 订阅 dataChanged |
+
+### Help 要点
+
+- `jsonsqlite admin serve --help` 含 host / port  
+- `jsonsqlite index --help` 含 `composite` / `--fields`  
+- 根 help 列出 advise / aggregate / admin / watch / compat  

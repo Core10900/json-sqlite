@@ -39,7 +39,10 @@ import {
 } from '../features/TimeTravel.js';
 import { adviseQuery, profileStages } from '../features/QueryAdvisor.js';
 import { analyzeQuality } from '../features/DataQuality.js';
+import { AutoTune } from '../features/AutoTune.js';
+import { StreamProcessor } from '../features/StreamProcessor.js';
 import { startHttpServer, type HttpServerOptions } from '../api/httpServer.js';
+import { autoSelectIndexType } from '../index/autoSelect.js';
 import { parseSql } from '../sql/parse.js';
 import type { SelectStmt, SqlStatement } from '../sql/ast.js';
 import { verifyEncryptionKey, writeKeycheck } from '../crypto/keycheck.js';
@@ -84,6 +87,7 @@ export class JSONSQLite extends EventEmitter {
   private backup: BackupManager | null = null;
   private ddlJournal: DdlJournal | null = null;
   private monitor = new Monitor();
+  private autoTune: AutoTune | null = null;
   private httpServer: http.Server | null = null;
   private ready = false;
   private lastBackupTs = 0;
@@ -202,6 +206,17 @@ export class JSONSQLite extends EventEmitter {
       }
 
       this.monitor.setOpenLoadMs(Date.now() - openStarted);
+      this.autoTune = new AutoTune(
+        {
+          listIndexes: () => this.indexes!.list(),
+          createIndex: (c, f, t) => this.createIndex(c, f, t),
+          getSlowQueries: (th) => this.monitor.getSlowQueries(th),
+        },
+        {
+          enabled: this.options.autoTune === true,
+          dryRun: this.options.autoTuneDryRun !== false,
+        },
+      );
       this.ready = true;
       this.emit('ready');
       return this;
@@ -246,6 +261,7 @@ export class JSONSQLite extends EventEmitter {
     this.changelog = null;
     this.backup = null;
     this.lock = null;
+    this.autoTune = null;
     this.emit('close');
   }
 
@@ -428,7 +444,9 @@ export class JSONSQLite extends EventEmitter {
     await this.store!.ensureLoaded(to);
     const docs = this.store!.getAll(to);
     for (const meta of indexMetas) {
-      await this.indexes!.createIndex(to, meta.field, meta.type, docs);
+      await this.indexes!.createIndex(to, meta.field, meta.type, docs, {
+        fields: meta.fields,
+      });
     }
 
     await this.ddlJournal!.clear();
@@ -607,6 +625,7 @@ export class JSONSQLite extends EventEmitter {
     collection: string,
     field: string,
     type: IndexType = 'object',
+    opts?: { fields?: string[] },
   ) {
     this.assertReady();
     await this.store!.ensureLoaded(collection);
@@ -615,9 +634,18 @@ export class JSONSQLite extends EventEmitter {
       field,
       type,
       this.store!.getAll(collection),
+      opts,
     );
     this.cache!.invalidateCollection(collection);
     return meta;
+  }
+
+  /** Heuristic index type picker (1.7). */
+  autoSelectIndexType(
+    sample: Parameters<typeof autoSelectIndexType>[0],
+    field?: string | string[],
+  ): IndexType {
+    return autoSelectIndexType(sample, field);
   }
 
   async listIndexes() {
@@ -793,6 +821,9 @@ export class JSONSQLite extends EventEmitter {
         ? `${planned.usedIndex.type}:${planned.usedIndex.field}`
         : undefined,
     });
+    if (this.autoTune?.enabled && durationMs > this.monitor.slowQueryThreshold) {
+      void this.autoTune.tick(query).catch(() => undefined);
+    }
     return planned.docs;
   }
 
@@ -910,7 +941,17 @@ export class JSONSQLite extends EventEmitter {
   ): Promise<unknown[]> {
     this.assertReady();
     await this.store!.ensureLoaded(collection);
-    return executeAggregate(this.store!.getAll(collection), pipeline);
+    const fromNames = new Set(
+      pipeline
+        .filter((s): s is Extract<AggregateStage, { type: 'lookup' }> => s.type === 'lookup')
+        .map((s) => s.from),
+    );
+    for (const name of fromNames) {
+      await this.store!.ensureLoaded(name);
+    }
+    return executeAggregate(this.store!.getAll(collection), pipeline, {
+      getCollection: (name) => this.store!.getAll(name),
+    });
   }
 
   async jsonPath(collection: string, pathExpr: string): Promise<unknown[]> {
@@ -1030,6 +1071,34 @@ export class JSONSQLite extends EventEmitter {
       totalMs: planMs + executeMs,
       usedIndex,
     });
+  }
+
+  getSlowQueries(threshold?: number) {
+    this.assertReady();
+    return this.monitor.getSlowQueries(threshold);
+  }
+
+  /** Configure AutoTune at runtime (default off). */
+  setAutoTune(opts: { enabled?: boolean; dryRun?: boolean }): void {
+    this.assertReady();
+    this.autoTune?.setConfig(opts);
+  }
+
+  getAutoTuneAudit() {
+    this.assertReady();
+    return this.autoTune?.getAuditLog() ?? [];
+  }
+
+  /** Run AutoTune once (no-op when disabled). */
+  async runAutoTune(seed?: JsonQuery) {
+    this.assertReady();
+    return this.autoTune?.tick(seed) ?? [];
+  }
+
+  /** In-process sliding-window stream helper (1.7). */
+  createStreamProcessor(): StreamProcessor {
+    this.assertReady();
+    return new StreamProcessor(this);
   }
 
   analyzeQuality(collection: string, requiredFields: string[] = []) {

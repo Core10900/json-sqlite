@@ -9,7 +9,7 @@ export interface PlanResult {
 }
 
 /**
- * Prefer equality/range/text indexes when filter is a single-field predicate.
+ * Prefer equality/range/text/composite indexes when filter matches.
  */
 export function planAndExecute(
   allDocs: Document[],
@@ -23,11 +23,16 @@ export function planAndExecute(
     return { docs, scanned: allDocs.length };
   }
 
-  const { index, mode, value, min, max, text } = candidate;
+  const { index, mode, value, min, max, text, prefixValues } = candidate;
   let ids: string[] = [];
   if (mode === 'eq') ids = index.lookupEq(value);
   else if (mode === 'range') ids = index.lookupRange(min, max);
   else if (mode === 'text') ids = index.lookupText(String(text ?? ''), query.limit ?? 100);
+  else if (mode === 'composite' && prefixValues) {
+    ids = index.lookupPrefix
+      ? index.lookupPrefix(prefixValues)
+      : index.lookupEq(prefixValues);
+  }
 
   let docs = resolveByIds(ids);
   // Apply remaining filter / sort / limit via shared executor
@@ -50,26 +55,72 @@ export function planAndExecute(
   };
 }
 
+function eqValue(condition: unknown): unknown | undefined {
+  if (condition === null || typeof condition !== 'object' || Array.isArray(condition)) {
+    return condition;
+  }
+  const op = condition as FilterOp;
+  if ('$eq' in op) return op.$eq;
+  return undefined;
+}
+
 function pickIndex(
   filter: FilterCondition | undefined,
   indexes: Index[],
 ):
   | {
       index: Index;
-      mode: 'eq' | 'range' | 'text';
+      mode: 'eq' | 'range' | 'text' | 'composite';
       value?: unknown;
       min?: unknown;
       max?: unknown;
       text?: string;
+      prefixValues?: unknown[];
     }
   | null {
   if (!filter) return null;
   const entries = Object.entries(filter).filter(
     ([k]) => k !== '$and' && k !== '$or',
   );
+
+  // Prefer composite indexes when filter has equality prefix on fields
+  const composites = indexes.filter((i) => i.meta.type === 'composite');
+  let bestComposite: {
+    index: Index;
+    prefixValues: unknown[];
+  } | null = null;
+  for (const index of composites) {
+    const fields =
+      index.meta.fields ?? index.meta.field.split('+').filter(Boolean);
+    const values: unknown[] = [];
+    for (const f of fields) {
+      const entry = entries.find(([k]) => k === f);
+      if (!entry) break;
+      const v = eqValue(entry[1]);
+      if (v === undefined) break;
+      values.push(v);
+    }
+    if (values.length === 0) continue;
+    if (
+      !bestComposite ||
+      values.length > bestComposite.prefixValues.length
+    ) {
+      bestComposite = { index, prefixValues: values };
+    }
+  }
+  if (bestComposite) {
+    return {
+      index: bestComposite.index,
+      mode: 'composite',
+      prefixValues: bestComposite.prefixValues,
+    };
+  }
+
   if (entries.length !== 1) return null;
   const [field, condition] = entries[0]!;
-  const index = indexes.find((i) => i.meta.field === field);
+  const index = indexes.find(
+    (i) => i.meta.field === field && i.meta.type !== 'composite',
+  );
   if (!index) return null;
 
   if (condition === null || typeof condition !== 'object' || Array.isArray(condition)) {
@@ -91,7 +142,6 @@ function pickIndex(
       op.$gte !== undefined ? op.$gte : op.$gt !== undefined ? op.$gt : undefined;
     const max =
       op.$lte !== undefined ? op.$lte : op.$lt !== undefined ? op.$lt : undefined;
-    // Note: strict gt/lt still filtered exactly in executeJsonQuery
     return { index, mode: 'range', min, max };
   }
   if (index.meta.type === 'inverted' && '$contains' in op) {

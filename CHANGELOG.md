@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.7.0 — 2026-10-26
+
+### Added
+- **Admin**：仪表盘（指标 / 慢查询 / advise / 备份 / 时间点查询）+ REST 对齐 + **SSE**（`metrics` / `dataChanged`）
+- **CompositeIndex** + `autoSelectIndexType`；Planner 等值前缀命中
+- 聚合阶段 **`unwind` / `lookup`**（内存哈希）
+- **StreamProcessor** 滑动窗口 API（进程内、可单测）
+- **AutoTune**（默认关；`autoTuneDryRun` 默认 true；审计日志）
+- CLI：`admin serve`、`advise`、`aggregate`、`compat` / `version --json`、`watch`、`index create --type composite --fields`
+- 根文档 `API.md` / `CLI-API.md`「1.7 增补」；FT-V17 契约测试
+
+### Changed
+- 版本 **1.7.0**（非 LTS）；`getCompatibilityInfo().lts === false`，`cliSurface: '1.7.0'`
+- 保留全部 1.6 稳定符号与 1.5.5 CLI 语义
+
+### Notes
+- 生产长期 pin 仍建议 **LTS-1 = 1.6.x**；1.7 为体验列车
+
 ## 1.6.0 — 2026-10-23 · **LTS**
 
 ### Added

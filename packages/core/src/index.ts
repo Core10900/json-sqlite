@@ -17,8 +17,20 @@ export { rekeyDatabase } from './ops/rekey.js';
 export type { AggregateStage, AggregateField, AggregateOp } from './query/Aggregate.js';
 export type { BackupInfo } from './backup/BackupManager.js';
 export type { Advice } from './features/QueryAdvisor.js';
+export type {
+  AutoTuneAuditEntry,
+  AutoTuneConfig,
+} from './features/AutoTune.js';
+export { StreamProcessor } from './features/StreamProcessor.js';
+export type {
+  SlidingWindowOptions,
+  SlidingWindowSnapshot,
+  StreamAggOp,
+} from './features/StreamProcessor.js';
 export type { HealthReport } from './monitor/Monitor.js';
 export type { IndexMeta } from './index/types.js';
+export { autoSelectIndexType } from './index/autoSelect.js';
+export type { AutoSelectSample } from './index/autoSelect.js';
 export type { SqlStatement } from './sql/ast.js';
 export type {
   JSONSQLiteOptions,
@@ -50,4 +62,5 @@ export type {
 } from './types/index.js';
 export { FORMAT_VERSION } from './storage/Catalog.js';
 export type { HttpServerOptions } from './api/httpServer.js';
+export { isLoopbackHost } from './api/httpServer.js';
 

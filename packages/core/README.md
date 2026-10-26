@@ -2,12 +2,13 @@
 
 JSON-native embedded database for Node.js.
 
-**Version: 1.6.0 (LTS)** · Node.js ≥ 20 · Author: hanlin
+**Version: 1.7.0** · Node.js ≥ 20 · Author: hanlin  
+**LTS pin:** production long-term → **1.6.x** ([ROADMAP](https://github.com/Core10900/json-sqlite/blob/main/devDocs/releases/ROADMAP.md))
 
 ## Authority docs
 
-- Library API: [API.md](https://github.com/Core10900/json-sqlite/blob/main/API.md)
-- CLI (frozen from 1.5.5): [CLI-API.md](https://github.com/Core10900/json-sqlite/blob/main/CLI-API.md)
+- Library API: [API.md](https://github.com/Core10900/json-sqlite/blob/main/API.md)（含 1.7 增补）
+- CLI: [CLI-API.md](https://github.com/Core10900/json-sqlite/blob/main/CLI-API.md)（1.5.5 冻结面 + 1.7 增补）
 
 ## Install
 
@@ -28,7 +29,7 @@ import {
 } from '@webofcat/jsonsqlite';
 
 console.log(getCompatibilityInfo());
-// { version, formatVersion, lts: true, cliSurface: '1.5.5', features }
+// 1.7: { version, formatVersion, lts: false, cliSurface: '1.7.0', features }
 
 await create({ storagePath: './data' });
 const db = await open({

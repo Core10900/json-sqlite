@@ -1,6 +1,6 @@
 # JSONSQLite
 
-**版本：1.6.0（LTS）** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：1.7.0** · **LTS pin：1.6.x** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
 
@@ -111,7 +111,7 @@ yarn add @webofcat/jsonsqlite
 ```bash
 npm install -g @webofcat/jsonsqlite
 
-jsonsqlite --version          # => 1.6.0
+jsonsqlite --version          # => 1.7.0
 jsonsqlite create ./my-db     # 新建数据库目录
 jsonsqlite init ./my-db       # 幂等初始化（已存在则跳过创建）
 jsonsqlite tables -p ./my-db --json
@@ -177,7 +177,7 @@ const { open } = require("@webofcat/jsonsqlite");
 ```ts
 import { create, init, getVersion, open } from "@webofcat/jsonsqlite";
 
-console.log(getVersion()); // "1.6.0"
+console.log(getVersion()); // "1.7.0"
 
 // 创建新库（若已存在会抛 DB_EXISTS；force: true 可强制重建）
 await create({ storagePath: "./my-db" });

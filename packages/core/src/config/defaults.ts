@@ -20,6 +20,8 @@ const optionsSchema = z.object({
   schemaMode: z.enum(['off', 'warn', 'strict']).default('off'),
   lazyCollections: z.boolean().default(true),
   prefetchCollections: z.array(z.string()).default([]),
+  autoTune: z.boolean().default(false),
+  autoTuneDryRun: z.boolean().default(true),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;

@@ -72,7 +72,9 @@ export async function rekeyDatabase(opts: RekeyOptions): Promise<RekeyResult> {
     }
 
     for (const idx of await src.listIndexes()) {
-      await dst.createIndex(idx.collection, idx.field, idx.type);
+      await dst.createIndex(idx.collection, idx.field, idx.type, {
+        fields: idx.fields,
+      });
     }
 
     await copyDeltas(source, target);

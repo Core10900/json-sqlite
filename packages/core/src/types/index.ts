@@ -119,6 +119,13 @@ export interface JSONSQLiteOptions {
   lazyCollections?: boolean;
   /** Warm these collections during open (works with lazyCollections). */
   prefetchCollections?: string[];
+  /**
+   * AutoTune: recommend/create indexes from slow queries + Advisor (1.7+).
+   * Default **false**. When true without autoTuneDryRun, may create indexes.
+   */
+  autoTune?: boolean;
+  /** When autoTune is on, only record recommendations (default true). */
+  autoTuneDryRun?: boolean;
 }
 
 export interface RekeyOptions {
@@ -166,7 +173,7 @@ export interface DoctorReport {
   timestamp: number;
 }
 
-export type IndexType = 'object' | 'tree' | 'inverted';
+export type IndexType = 'object' | 'tree' | 'inverted' | 'composite';
 
 /** Soft schema field types for table DDL / CLI dialogue. */
 export type FieldType = 'string' | 'number' | 'boolean' | 'json' | 'any';

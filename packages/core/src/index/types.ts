@@ -5,9 +5,12 @@ export type { IndexType };
 
 export interface IndexMeta {
   collection: string;
+  /** Primary field, or `a+b` joined key for composite indexes. */
   field: string;
   type: IndexType;
   createdAt: number;
+  /** Composite field list (equality prefix order). */
+  fields?: string[];
 }
 
 export interface Index {
@@ -22,4 +25,6 @@ export interface Index {
   lookupRange(min?: unknown, max?: unknown): string[];
   /** Full-text search (inverted); others may return [] */
   lookupText(query: string, limit?: number): string[];
+  /** Composite prefix equality (optional). */
+  lookupPrefix?(values: unknown[]): string[];
 }

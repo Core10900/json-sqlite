@@ -24,6 +24,11 @@ Commands:
   index list|create|drop     index management
   stats                      database / table statistics
   explain                    query advice / plan hints
+  advise                     Advisor (aligns with explain fields)
+  aggregate                  aggregation pipeline (unwind/lookup)
+  admin serve                start Admin HTTP + SSE
+  watch                      subscribe to dataChanged
+  compat / version [--json]  compatibility / version
   backup / vacuum / rekey    ops
   doctor [--deep]            health / consistency
   version                    print version
@@ -85,6 +90,7 @@ export function helpDelete(): string {
 export function helpIndex(): string {
   return `jsonsqlite index list
 jsonsqlite index create <table> <field> [--type object|tree|inverted]
+jsonsqlite index create <table> --type composite --fields a,b
 jsonsqlite index drop <table> <field>
 `;
 }
@@ -93,6 +99,40 @@ export function helpSql(): string {
   return `jsonsqlite sql   # TTY REPL only
 Meta: .tables  .schema [table]  .quit
 Non-TTY: use jsonsqlite run "<sql>"
+`;
+}
+
+export function helpAdmin(): string {
+  return `jsonsqlite admin serve [--host 127.0.0.1] [--port 3000] [--token SECRET] [--once]
+
+Start Admin HTTP (dashboard + REST + SSE).
+Non-loopback host requires --token.
+--once starts then exits (smoke / tests).
+`;
+}
+
+export function helpAdvise(): string {
+  return `jsonsqlite advise '<sql|json-query>' [--json]
+Advisor suggestions (same fields as explain).
+`;
+}
+
+export function helpAggregate(): string {
+  return `jsonsqlite aggregate <table> '<pipeline-json>' [--json]
+Pipeline stages: match, group, sort, limit, project, unwind, lookup
+`;
+}
+
+export function helpWatch(): string {
+  return `jsonsqlite watch [--once] [--timeout ms] [--json]
+Subscribe to dataChanged. Non-TTY requires --once or --timeout.
+`;
+}
+
+export function helpCompat(): string {
+  return `jsonsqlite compat [--json]
+jsonsqlite version [--json]
+Print getCompatibilityInfo() / version.
 `;
 }
 
@@ -116,6 +156,18 @@ export function helpFor(path: string[]): string | null {
       return helpIndex();
     case 'sql':
       return helpSql();
+    case 'admin':
+    case 'admin serve':
+      return helpAdmin();
+    case 'advise':
+      return helpAdvise();
+    case 'aggregate':
+      return helpAggregate();
+    case 'watch':
+      return helpWatch();
+    case 'compat':
+    case 'version':
+      return helpCompat();
     default:
       return null;
   }
