@@ -22,6 +22,21 @@ const optionsSchema = z.object({
   prefetchCollections: z.array(z.string()).default([]),
   autoTune: z.boolean().default(false),
   autoTuneDryRun: z.boolean().default(true),
+  /** Persist index postings so reopen can skip a full rebuild (default on). */
+  persistIndexes: z.boolean().default(true),
+  /** Process-local L2 query cache. Default off — same behavior as 1.7. */
+  l2Cache: z.boolean().default(false),
+  l2CacheSize: z.number().int().positive().default(5000),
+  /** Gzip JSONL lines at or above `compressionThreshold` bytes. Default off. */
+  compression: z.boolean().default(false),
+  compressionThreshold: z.number().int().nonnegative().default(1024),
+  /**
+   * Experimental hot/cold split. Default off. Cold docs stay out of the
+   * hot JSONL until read. Not a stable on-disk promise for 2.0.
+   */
+  tiering: z.boolean().default(false),
+  /** Docs with access count <= this value are swept to cold on close. */
+  tierColdAfter: z.number().int().nonnegative().default(0),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;

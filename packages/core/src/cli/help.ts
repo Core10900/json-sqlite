@@ -21,7 +21,7 @@ Commands:
   get / count                row read helpers
   run / sql                  SQL execute / interactive REPL
   query                      JSON query
-  index list|create|drop     index management
+  index list|create|drop|rebuild   index management
   stats                      database / table statistics
   explain                    query advice / plan hints
   advise                     Advisor (aligns with explain fields)
@@ -29,7 +29,7 @@ Commands:
   admin serve                start Admin HTTP + SSE
   watch                      subscribe to dataChanged
   compat / version [--json]  compatibility / version
-  backup / vacuum / rekey    ops
+  backup / vacuum [--compress] / rekey    ops
   doctor [--deep]            health / consistency
   version                    print version
 
@@ -92,6 +92,7 @@ export function helpIndex(): string {
 jsonsqlite index create <table> <field> [--type object|tree|inverted]
 jsonsqlite index create <table> --type composite --fields a,b
 jsonsqlite index drop <table> <field>
+jsonsqlite index rebuild [table]
 `;
 }
 

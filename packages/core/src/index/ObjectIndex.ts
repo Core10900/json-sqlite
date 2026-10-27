@@ -1,5 +1,5 @@
 import type { Document } from '../types/index.js';
-import type { Index, IndexMeta } from './types.js';
+import type { Index, IndexMeta, IndexSnapshot } from './types.js';
 
 function keyOf(value: unknown): string {
   return JSON.stringify(value);
@@ -56,5 +56,16 @@ export class ObjectIndex implements Index {
 
   lookupText(): string[] {
     return [];
+  }
+
+  exportEntries(): IndexSnapshot {
+    return {
+      entries: [...this.map].map(([k, ids]) => [k, [...ids]]),
+    };
+  }
+
+  importEntries(snapshot: IndexSnapshot): void {
+    this.map.clear();
+    for (const [k, ids] of snapshot.entries) this.map.set(k, new Set(ids));
   }
 }

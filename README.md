@@ -1,6 +1,6 @@
 # JSONSQLite
 
-**版本：1.7.0** · **LTS pin：1.6.x** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：1.8.0** · **LTS pin：1.6.x** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
 
@@ -111,7 +111,7 @@ yarn add @webofcat/jsonsqlite
 ```bash
 npm install -g @webofcat/jsonsqlite
 
-jsonsqlite --version          # => 1.7.0
+jsonsqlite --version          # => 1.8.0
 jsonsqlite create ./my-db     # 新建数据库目录
 jsonsqlite init ./my-db       # 幂等初始化（已存在则跳过创建）
 jsonsqlite tables -p ./my-db --json
@@ -177,7 +177,7 @@ const { open } = require("@webofcat/jsonsqlite");
 ```ts
 import { create, init, getVersion, open } from "@webofcat/jsonsqlite";
 
-console.log(getVersion()); // "1.7.0"
+console.log(getVersion()); // "1.8.0"
 
 // 创建新库（若已存在会抛 DB_EXISTS；force: true 可强制重建）
 await create({ storagePath: "./my-db" });
@@ -699,10 +699,13 @@ Admin：`startServer({ host, port, adminToken })` — 绑定非 loopback 时**�
 data/
 ├── meta/
 │   ├── catalog.json      # 集合目录
-│   ├── indexes.json      # 索引元数据
+│   ├── indexes.json      # 索引元数据 + 段校验
+│   ├── idx/*.seg.json    # 索引 postings（1.8，可重建）
 │   └── .lock             # 单写者文件锁
 ├── collections/
-│   └── {name}/docs/data.jsonl
+│   └── {name}/docs/
+│       ├── data.jsonl
+│       └── cold.jsonl    # 仅 tiering 实验旗标
 ├── wal/                  # 预写日志
 ├── deltas/               # 变更日志（备份增量 / 时间旅行）
 └── backups/              # 备份文件与 manifest
@@ -721,7 +724,40 @@ data/
 5. **软 Schema**：默认不强制校验；需要约束时设 `schemaMode: 'strict'`。
 6. **Admin 默认绑定 127.0.0.1**：公网暴露必须加 Token / 反代鉴权。
 7. **磁盘格式**：当前 `formatVersion = 1`（已具备迁移钩子）；破坏性变更将走 major 或迁移升级。
-8. **内存模型**：集合加载进进程内存；超大库请自行评估规模或等待后续分页存储。
+8. **内存模型**：默认把已加载集合放在进程内存。`tiering: true` 是实验旗标（默认关），冷文档按需加载；不要在生产依赖这份冷文件布局。
+
+---
+
+## 17.1 性能与存储选项（1.8）
+
+默认查询结果与 1.7 相同。`persistIndexes` 默认开启，只影响重启时是否重放索引；L2、压缩、热冷都要显式打开。
+
+| 选项 | 默认 | 何时开 | 风险 |
+|------|------|--------|------|
+| `persistIndexes` | `true` | 大表重启希望跳过索引 rebuild | 段损坏会自动 rebuild；`doctor` 能看到 `index-segments` |
+| `l2Cache` | `false` | 同一进程里重复查询、L1 太小 | 只在本进程；写入会失效。看 `getMetrics().l2` |
+| `compression` | `false` | 单条 JSON 经常超过 `compressionThreshold`（默认 1024） | 与加密叠加时先 gzip 再 AES；小文档不会变大 |
+| `tiering` | `false` | 想把几乎不读的文档挪出热 JSONL | **实验**。默认关。`close()` 才扫冷热。全表 `query` 会把冷文档拉回内存 |
+
+```ts
+const db = await open({
+  storagePath: './data',
+  l2Cache: true,
+  compression: true,
+  compressionThreshold: 1024,
+  // tiering: true, // 实验，生产先不要开
+});
+```
+
+```bash
+jsonsqlite index rebuild users -p ./data --json
+jsonsqlite vacuum --compress -p ./data
+jsonsqlite doctor -p ./data --json          # indexSegments / compression / tiering / l2
+jsonsqlite stats -p ./data --json           # l2 / tiers / compression
+pnpm --filter @jsonsqlite/bench start       # 报告含 threshold；BENCH_SKIP_THRESHOLD=1 可跳过
+```
+
+阈值在 `apps/bench/thresholds.json`，对照 `apps/bench/baseline.json`（仅当 `N` 相同）。数字是回归上限，不是对外性能承诺。
 
 ---
 

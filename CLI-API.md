@@ -12,7 +12,7 @@
 
 ```bash
 npm install -g @webofcat/jsonsqlite
-jsonsqlite --version    # => 1.7.0（1.6.x LTS 契约仍适用；见 §13 增补）
+jsonsqlite --version    # => 1.8.0（1.6.x LTS 契约仍适用；见 §13 / §14 增补）
 jsql --version          # 同入口别名
 ```
 
@@ -242,4 +242,19 @@ jsonsqlite insert|update|delete|index|sql --help
 
 - `jsonsqlite admin serve --help` 含 host / port  
 - `jsonsqlite index --help` 含 `composite` / `--fields`  
-- 根 help 列出 advise / aggregate / admin / watch / compat  
+- 根 help 列出 advise / aggregate / admin / watch / compat
+
+---
+
+## 14. 1.8 增补（性能 / 存储）
+
+> 以下在 **1.8.0+** 可用；不删除 §10 / §13 命令。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `index rebuild [table]` | ✅ | 从文档重建 postings 并重写落盘段。省略 table 则全部表 |
+| `vacuum --compress` | ✅ | 按压缩阈值重写 JSONL（`JSQC1:`；加密库先压缩再加密） |
+| `doctor --json` | ✅ | 增加 `indexSegments`、`compression`、`tiering`、`l2` |
+| `stats --json` | ✅ | 增加 `l2`、`tiers`、`compression` |
+
+`index --help` 含 `index rebuild [table]`。损坏段时 `doctor` 的 `index-segments` 检查为失败，数据仍可按 rebuild 恢复。  

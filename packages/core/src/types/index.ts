@@ -126,6 +126,28 @@ export interface JSONSQLiteOptions {
   autoTune?: boolean;
   /** When autoTune is on, only record recommendations (default true). */
   autoTuneDryRun?: boolean;
+  /**
+   * Persist index segments (checksummed) so the next open can serve
+   * equality/range lookups without rebuilding. Default true. Set false
+   * to keep the 1.7 rebuild-on-load path. Missing or corrupt segments
+   * still rebuild.
+   */
+  persistIndexes?: boolean;
+  /** Process-local L2 query cache (default false). */
+  l2Cache?: boolean;
+  /** L2 entry cap when `l2Cache` is on (default 5000). */
+  l2CacheSize?: number;
+  /** Gzip stored JSON at/above `compressionThreshold` (default false). */
+  compression?: boolean;
+  /** Minimum JSON length in bytes before gzip (default 1024). */
+  compressionThreshold?: number;
+  /**
+   * Experimental hot/cold tiering (default false). Cold documents are
+   * loaded on demand. Do not rely on the file layout across majors.
+   */
+  tiering?: boolean;
+  /** Access count at or below this is swept to cold (default 0). */
+  tierColdAfter?: number;
 }
 
 export interface RekeyOptions {
@@ -152,11 +174,14 @@ export interface RekeyResult {
 export interface VacuumOptions {
   /** Vacuum one collection; omit for all. */
   collection?: string;
+  /** Rewrite JSONL with gzip for docs at/above the compression threshold. */
+  compress?: boolean;
 }
 
 export interface VacuumResult {
   collections: string[];
   documentCounts: Record<string, number>;
+  compressed?: boolean;
 }
 
 export interface DoctorCheck {

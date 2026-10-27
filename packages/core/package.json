@@ -1,7 +1,7 @@
 {
   "name": "@webofcat/jsonsqlite",
-  "version": "1.7.0",
-  "description": "JSON-native embedded database for Node.js — Admin/SSE, composite index, unwind/lookup, AutoTune",
+  "version": "1.8.0",
+  "description": "JSON-native embedded database for Node.js — index segments, L2 cache, compression, tiering",
   "license": "MIT",
   "author": "hanlin <lincent909@163.com>",
   "repository": {

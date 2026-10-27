@@ -1,5 +1,5 @@
 import type { Document } from '../types/index.js';
-import type { Index, IndexMeta } from './types.js';
+import type { Index, IndexMeta, IndexSnapshot } from './types.js';
 
 function fieldValue(doc: Document, field: string): unknown {
   if (!field.includes('.')) return doc[field];
@@ -79,5 +79,22 @@ export class TreeIndex implements Index {
 
   lookupText(): string[] {
     return [];
+  }
+
+  exportEntries(): IndexSnapshot {
+    return {
+      entries: [...this.map].map(([k, ids]) => [k, [...ids]]),
+      keys: [...this.keys],
+    };
+  }
+
+  importEntries(snapshot: IndexSnapshot): void {
+    this.map.clear();
+    this.keys = snapshot.keys ? [...snapshot.keys] : [];
+    for (const [k, ids] of snapshot.entries) this.map.set(k, new Set(ids));
+    if (!snapshot.keys) {
+      this.keys = snapshot.entries.map(([k]) => JSON.parse(k) as unknown);
+      this.keys.sort(cmp);
+    }
   }
 }

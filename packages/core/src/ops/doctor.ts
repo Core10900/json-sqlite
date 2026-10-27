@@ -14,6 +14,30 @@ export async function runDoctor(
   const root = db.storagePath;
 
   const health = await db.health();
+  const storage = db.storageSummary();
+  checks.push({
+    id: 'index-segments',
+    ok: storage.indexSegments.corrupt.length === 0,
+    message:
+      storage.indexSegments.corrupt.length === 0
+        ? `index segments=${storage.indexSegments.segmentCount} restored=${storage.indexSegments.restored.length}`
+        : `corrupt index segments: ${storage.indexSegments.corrupt
+            .map((c) => c.key)
+            .join(', ')}`,
+    details: storage.indexSegments,
+  });
+  checks.push({
+    id: 'compression',
+    ok: true,
+    message: `compression=${storage.compression.enabled} threshold=${storage.compression.threshold}`,
+    details: storage.compression,
+  });
+  checks.push({
+    id: 'tiering',
+    ok: true,
+    message: `tiering=${storage.tiering.enabled} hot=${storage.tiering.hot} cold=${storage.tiering.cold} delayedLoads=${storage.tiering.delayedLoads}`,
+    details: storage.tiering,
+  });
   checks.push({
     id: 'health',
     ok: health.status === 'healthy',

@@ -28,6 +28,8 @@ export interface SelectStmt {
   columns: '*' | string[];
   /** When set, SELECT COUNT(*) shortcut (no JOIN). */
   aggregate?: 'count';
+  /** Single-column GROUP BY (v1.8, COUNT(*) only, no JOIN). */
+  groupBy?: string;
   filter?: FilterCondition;
   orderBy?: OrderBySpec;
   limit?: number;

@@ -83,6 +83,7 @@ export class JSONSQLite extends EventEmitter {
   private tx: TransactionManager | null = null;
   private indexes: IndexManager | null = null;
   private cache: L1Cache<Document[]> | null = null;
+  private l2: L1Cache<Document[]> | null = null;
   private changelog: ChangeLog | null = null;
   private backup: BackupManager | null = null;
   private ddlJournal: DdlJournal | null = null;
@@ -165,7 +166,7 @@ export class JSONSQLite extends EventEmitter {
       this.wal.setEncryption(this.catalog.encryption);
       await this.wal.initialize();
 
-      this.indexes = new IndexManager(root, sync);
+      this.indexes = new IndexManager(root, sync, this.options.persistIndexes);
       this.store = new DocumentStore(
         root,
         this.catalog,
@@ -174,13 +175,26 @@ export class JSONSQLite extends EventEmitter {
         this.options.schemaMode,
         this.encKey,
         (name, loadMs) => {
-          this.indexes?.rebuildCollection(name, this.store!.getAll(name));
+          const docs = this.store!.docsForIndex(name);
+          const wal = this.store!.hadWalReplay(name);
+          if (!this.indexes!.trustSegment(name, docs, wal)) {
+            this.indexes!.rebuildCollection(name, docs);
+          }
           this.monitor.recordCollectionLoad(loadMs);
         },
       );
+      this.store.configure({
+        compression: this.options.compression,
+        compressionThreshold: this.options.compressionThreshold,
+        tiering: this.options.tiering,
+        tierColdAfter: this.options.tierColdAfter,
+      });
       this.tx = new TransactionManager(this.store);
       this.changelog = new ChangeLog(root);
       this.cache = new L1Cache(this.options.cacheSize);
+      this.l2 = this.options.l2Cache
+        ? new L1Cache(this.options.l2CacheSize)
+        : null;
       this.backup = new BackupManager(root, this.encKey);
       this.ddlJournal = new DdlJournal(root, sync);
 
@@ -189,15 +203,12 @@ export class JSONSQLite extends EventEmitter {
       const lazy = this.options.lazyCollections;
       const prefetch = new Set(this.options.prefetchCollections ?? []);
 
+      await this.indexes.load();
       if (!lazy) {
         for (const info of this.catalog.list()) {
           await this.store.loadCollection(info.name);
         }
-        await this.indexes.load((name) => this.store!.getAll(name), {
-          build: true,
-        });
       } else {
-        await this.indexes.load(() => [], { build: false });
         for (const name of prefetch) {
           if (this.catalog.has(name)) {
             await this.store.loadCollection(name);
@@ -229,6 +240,7 @@ export class JSONSQLite extends EventEmitter {
       this.tx = null;
       this.indexes = null;
       this.cache = null;
+      this.l2 = null;
       this.ddlJournal = null;
       this.changelog = null;
       this.backup = null;
@@ -245,8 +257,14 @@ export class JSONSQLite extends EventEmitter {
       this.httpServer = null;
     }
     if (opts?.flush !== false) {
-      await this.store?.flushAll();
+      if (this.options.tiering) await this.store?.sweepTiers();
+      else await this.store?.flushAll();
       await this.catalog?.save();
+      if (this.store && this.indexes && this.options.persistIndexes) {
+        for (const name of this.store.loadedCollections()) {
+          await this.indexes.flushCollection(name, this.store.docsForIndex(name));
+        }
+      }
       await this.indexes?.save();
     }
     await this.lock?.release();
@@ -257,6 +275,7 @@ export class JSONSQLite extends EventEmitter {
     this.tx = null;
     this.indexes = null;
     this.cache = null;
+    this.l2 = null;
     this.ddlJournal = null;
     this.changelog = null;
     this.backup = null;
@@ -325,7 +344,7 @@ export class JSONSQLite extends EventEmitter {
     await this.ddlJournal!.write({ op: 'drop', name, phase: 'started' });
     await this.indexes!.dropAllForCollection(name);
     this.store!.unload(name);
-    this.cache!.invalidateCollection(name);
+    this.touchCaches(name);
 
     const root = this.storagePath;
     await fs.rm(collectionDir(root, name), { recursive: true, force: true });
@@ -438,8 +457,8 @@ export class JSONSQLite extends EventEmitter {
 
     this.store!.renameInMemory(from, to);
     await this.catalog!.rename(from, to);
-    this.cache!.invalidateCollection(from);
-    this.cache!.invalidateCollection(to);
+    this.touchCaches(from);
+    this.touchCaches(to);
 
     await this.store!.ensureLoaded(to);
     const docs = this.store!.getAll(to);
@@ -478,6 +497,9 @@ export class JSONSQLite extends EventEmitter {
   private async executeSql(stmt: SqlStatement): Promise<SqlResult> {
     switch (stmt.kind) {
       case 'select': {
+        if (stmt.groupBy) {
+          return this.executeGroupByCount(stmt);
+        }
         if (stmt.aggregate === 'count') {
           if (stmt.join) {
             throw new JSONSQLiteError(
@@ -636,7 +658,7 @@ export class JSONSQLite extends EventEmitter {
       this.store!.getAll(collection),
       opts,
     );
-    this.cache!.invalidateCollection(collection);
+    this.touchCaches(collection);
     return meta;
   }
 
@@ -656,7 +678,7 @@ export class JSONSQLite extends EventEmitter {
   async dropIndex(collection: string, field: string) {
     this.assertReady();
     await this.indexes!.dropIndex(collection, field);
-    this.cache!.invalidateCollection(collection);
+    this.touchCaches(collection);
   }
 
   async insert(
@@ -687,8 +709,9 @@ export class JSONSQLite extends EventEmitter {
         out.push(doc);
       }
       if (!inTx) {
-        this.cache!.invalidateCollection(collection);
+        this.touchCaches(collection);
         this.monitor.recordWrite();
+        await this.persistIndexState(collection);
       }
       this.emit('dataChanged', { op: 'insert', collection, count: out.length });
       return out;
@@ -705,8 +728,9 @@ export class JSONSQLite extends EventEmitter {
         before: null,
         after: doc,
       });
-      this.cache!.invalidateCollection(collection);
+      this.touchCaches(collection);
       this.monitor.recordWrite();
+      await this.persistIndexState(collection);
     }
     this.emit('dataChanged', { op: 'insert', collection, id: doc._id });
     return doc;
@@ -736,8 +760,9 @@ export class JSONSQLite extends EventEmitter {
         before: prev ?? null,
         after: doc,
       });
-      this.cache!.invalidateCollection(collection);
+      this.touchCaches(collection);
       this.monitor.recordWrite();
+      await this.persistIndexState(collection);
     }
     this.emit('dataChanged', { op: 'update', collection, id });
     return doc;
@@ -759,8 +784,9 @@ export class JSONSQLite extends EventEmitter {
         before: prev,
         after: null,
       });
-      this.cache!.invalidateCollection(collection);
+      this.touchCaches(collection);
       this.monitor.recordWrite();
+      await this.persistIndexState(collection);
     }
     if (ok) this.emit('dataChanged', { op: 'delete', collection, id });
     return ok;
@@ -799,6 +825,20 @@ export class JSONSQLite extends EventEmitter {
       });
       return cached.map((d) => ({ ...d }));
     }
+    if (this.l2) {
+      const l2hit = this.l2.get(cacheKey);
+      if (l2hit) {
+        this.cache!.set(cacheKey, l2hit);
+        this.monitor.recordQuery({
+          ts: Date.now(),
+          collection: query.collection,
+          durationMs: Date.now() - start,
+          resultCount: l2hit.length,
+          usedIndex: 'l2',
+        });
+        return l2hit.map((d) => ({ ...d }));
+      }
+    }
 
     await this.store!.ensureLoaded(query.collection);
     const all = this.store!.getAll(query.collection);
@@ -810,6 +850,12 @@ export class JSONSQLite extends EventEmitter {
     );
 
     this.cache!.set(cacheKey, planned.docs);
+    this.l2?.set(cacheKey, planned.docs);
+    if (this.options.tiering) {
+      for (const doc of planned.docs) {
+        this.store!.noteAccess(query.collection, doc._id);
+      }
+    }
     const durationMs = Date.now() - start;
     this.checkQueryTimeout(durationMs);
     this.monitor.recordQuery({
@@ -873,7 +919,8 @@ export class JSONSQLite extends EventEmitter {
       for (const idx of this.indexes!.findForCollection(name)) {
         idx.build(this.store!.getAll(name));
       }
-      this.cache!.invalidateCollection(name);
+      this.touchCaches(name);
+      await this.persistIndexState(name);
       this.emit('dataChanged', {
         op: 'import',
         collection: name,
@@ -971,12 +1018,13 @@ export class JSONSQLite extends EventEmitter {
     this.assertReady();
     const touched = this.tx!.active ? [...this.tx!.active.touched] : [];
     await this.tx!.commit(txId);
-    for (const c of touched) this.cache!.invalidateCollection(c);
+    for (const c of touched) this.touchCaches(c);
     // Rebuild indexes for touched collections (simple & correct for v1 tx)
     for (const c of touched) {
       for (const idx of this.indexes!.findForCollection(c)) {
         idx.build(this.store!.getAll(c));
       }
+      await this.persistIndexState(c);
     }
     this.monitor.recordWrite();
   }
@@ -1020,7 +1068,8 @@ export class JSONSQLite extends EventEmitter {
       for (const idx of this.indexes!.findForCollection(name)) {
         idx.build(docs);
       }
-      this.cache!.invalidateCollection(name);
+      this.touchCaches(name);
+      await this.persistIndexState(name);
     }
   }
 
@@ -1055,7 +1104,8 @@ export class JSONSQLite extends EventEmitter {
     for (const idx of this.indexes!.findForCollection(collection)) {
       idx.build(docs);
     }
-    this.cache!.invalidateCollection(collection);
+    this.touchCaches(collection);
+    await this.persistIndexState(collection);
     this.emit('dataChanged', { op: 'rollback', collection, timestamp });
   }
 
@@ -1108,10 +1158,74 @@ export class JSONSQLite extends EventEmitter {
 
   getMetrics() {
     this.assertReady();
-    return this.monitor.metrics(
+    const base = this.monitor.metrics(
       this.cache!.stats.hitRate,
       this.catalog!.list().length,
     );
+    const l2 = this.l2?.stats;
+    return {
+      ...base,
+      l2: l2
+        ? { enabled: true as const, ...l2 }
+        : {
+            enabled: false as const,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            size: 0,
+            hitRate: 0,
+          },
+      tiers: this.store!.tierSnapshot(),
+      compression: {
+        enabled: this.store!.compressionEnabled(),
+        threshold: this.options.compressionThreshold,
+      },
+      indexes: this.indexes!.diagnostics(),
+    };
+  }
+
+  /** Index segment load / rebuild counters (1.8). */
+  indexPersistence() {
+    this.assertReady();
+    return this.indexes!.diagnostics();
+  }
+
+  /**
+   * Rebuild index postings from live documents and rewrite segments.
+   * Omit `collection` to rebuild every table.
+   */
+  async rebuildIndexes(collection?: string): Promise<{ collections: string[] }> {
+    this.assertReady();
+    const names = collection
+      ? [collection]
+      : (await this.listTables()).map((t) => t.name);
+    for (const name of names) {
+      await this.store!.ensureLoaded(name);
+      const docs = this.store!.docsForIndex(name);
+      this.indexes!.rebuildCollection(name, docs);
+      await this.indexes!.flushCollection(name, docs);
+    }
+    return { collections: names };
+  }
+
+  /** Doctor / CLI summary for segments, compression, tiering, and L2. */
+  storageSummary() {
+    this.assertReady();
+    const metrics = this.getMetrics();
+    const idx = metrics.indexes;
+    return {
+      indexSegments: {
+        persist: idx.persist,
+        segmentCount: idx.segmentCount,
+        restored: idx.restored,
+        servedFromSegment: idx.servedFromSegment,
+        rebuilt: idx.rebuilt,
+        corrupt: idx.corrupt,
+      },
+      compression: metrics.compression,
+      tiering: metrics.tiers,
+      l2: metrics.l2,
+    };
   }
 
   /** Number of collections currently resident in memory. */
@@ -1308,6 +1422,76 @@ export class JSONSQLite extends EventEmitter {
       }
       await this.ddlJournal!.clear();
     }
+  }
+
+  private async executeGroupByCount(stmt: SelectStmt): Promise<SqlResult> {
+    if (stmt.join) {
+      throw new JSONSQLiteError(
+        ErrorCode.SQL_UNSUPPORTED,
+        '[SQL_UNSUPPORTED] GROUP BY does not support JOIN',
+      );
+    }
+    if (stmt.aggregate !== 'count' || !stmt.groupBy) {
+      throw new JSONSQLiteError(
+        ErrorCode.SQL_UNSUPPORTED,
+        '[SQL_UNSUPPORTED] GROUP BY requires COUNT(*) in this version',
+      );
+    }
+    await this.store!.ensureLoaded(stmt.table);
+    let docs = this.store!.getAll(stmt.table);
+    if (stmt.filter && Object.keys(stmt.filter).length > 0) {
+      docs = docs.filter((d) => matchFilter(d, stmt.filter!));
+    }
+    const field = stmt.groupBy;
+    const groups = new Map<string, { key: unknown; count: number }>();
+    for (const doc of docs) {
+      const key = getPath(doc, field);
+      const sk = JSON.stringify(key ?? null);
+      const existing = groups.get(sk);
+      if (existing) existing.count += 1;
+      else groups.set(sk, { key, count: 1 });
+    }
+    let rows: Document[] = [...groups.values()].map((g, i) => ({
+      _id: `g:${i}`,
+      _version: 0,
+      _createdAt: 0,
+      _updatedAt: 0,
+      [field]: g.key,
+      count: g.count,
+    }));
+    if (stmt.orderBy) {
+      const specs = normalizeOrderBy(stmt.orderBy);
+      rows = [...rows].sort((a, b) => compareByOrder(a, b, specs));
+    }
+    const total = rows.length;
+    const offset = stmt.offset ?? 0;
+    if (offset > 0 || stmt.limit !== undefined) {
+      rows = rows.slice(
+        offset,
+        stmt.limit === undefined ? undefined : offset + stmt.limit,
+      );
+    }
+    const columns = stmt.columns === '*' ? [field, 'count'] : stmt.columns;
+    return {
+      type: 'rows',
+      rows,
+      columns,
+      rowCount: rows.length,
+      total,
+    };
+  }
+
+  private touchCaches(collection: string): void {
+    this.cache?.invalidateCollection(collection);
+    this.l2?.invalidateCollection(collection);
+  }
+
+  private async persistIndexState(collection: string): Promise<void> {
+    if (!this.options.persistIndexes) return;
+    await this.indexes!.flushCollection(
+      collection,
+      this.store!.docsForIndex(collection),
+    );
   }
 
   private assertReady(): void {

@@ -49,7 +49,7 @@ export function getCompatibilityInfo(): CompatibilityInfo {
     version: getVersion(),
     formatVersion: FORMAT_VERSION,
     lts: false,
-    cliSurface: '1.7.0',
+    cliSurface: '1.8.0',
     features: [
       'encryption',
       'sql-like-join-count',
@@ -59,11 +59,17 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'doctor-deep',
       'cli-1.5.5',
       'cli-1.7',
+      'cli-1.8',
       'admin-sse',
       'composite-index',
       'aggregate-unwind-lookup',
       'stream-processor',
       'auto-tune',
+      'index-segments',
+      'l2-cache',
+      'compression',
+      'tiering',
+      'group-by-count',
     ],
   };
 }

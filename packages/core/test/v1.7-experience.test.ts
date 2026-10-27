@@ -387,11 +387,19 @@ describe('v1.7 CLI / docs / version', () => {
 
     const compat = await cli(['compat', '--json']);
     expect(compat.code).toBe(0);
-    expect(JSON.parse(compat.stdout).cliSurface).toBe('1.7.0');
+    const compatBody = JSON.parse(compat.stdout) as {
+      version: string;
+      cliSurface: string;
+      lts: boolean;
+    };
+    expect(compatBody.lts).toBe(false);
+    if (compatBody.version.startsWith('1.7.')) {
+      expect(compatBody.cliSurface).toBe('1.7.0');
+    }
 
     const ver = await cli(['version', '--json']);
     expect(ver.code).toBe(0);
-    expect(JSON.parse(ver.stdout).version).toBe('1.7.0');
+    expect(JSON.parse(ver.stdout).version).toBe(getVersion());
   });
 
   it('FT-V17-CLI-03 composite index create', async () => {
@@ -476,10 +484,13 @@ describe('v1.7 CLI / docs / version', () => {
   });
 
   it('FT-V17-VER-01 version + non-LTS compat', () => {
-    expect(getVersion()).toBe('1.7.0');
     const info = getCompatibilityInfo();
     expect(info.lts).toBe(false);
-    expect(info.cliSurface).toBe('1.7.0');
+    expect(info.version).toBe(getVersion());
+    if (info.version.startsWith('1.7.')) {
+      expect(info.cliSurface).toBe('1.7.0');
+    }
     expect(info.features).toContain('composite-index');
+    expect(info.features).toContain('admin-sse');
   });
 });

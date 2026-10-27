@@ -363,3 +363,44 @@ unsubscribe();
 ### `getCompatibilityInfo()`（1.7）
 
 - `lts: false`，`cliSurface: '1.7.0'`，`features` 含 `admin-sse` / `composite-index` 等
+
+---
+
+## 19. 1.8 增补（非 LTS）
+
+> 性能与存储预备。**1.6 符号保留**。L2 / 压缩 / 热冷默认关闭，不改变 1.7 的查询结果。`persistIndexes` 默认 true：没有段或校验失败时仍全量 rebuild。
+
+### `JSONSQLiteOptions`
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `persistIndexes` | `true` | 索引段落盘。`false` 时每次加载集合都 rebuild |
+| `l2Cache` | `false` | 进程内二级查询缓存 |
+| `l2CacheSize` | `5000` | L2 条数上限 |
+| `compression` | `false` | 大 JSON 行 gzip（`JSQC1:`），再交给加密 |
+| `compressionThreshold` | `1024` | 达到该字节数才尝试压缩，且仅在变小时保留 |
+| `tiering` | `false` | **实验**热冷分层。冷文档在 `cold.jsonl`，按 id 延迟加载 |
+| `tierColdAfter` | `0` | 访问次数 ≤ 该值的文档在 `close()` 时进入冷层 |
+
+### 实例方法
+
+| 方法 | 说明 |
+|------|------|
+| `indexPersistence()` | `{ buildCount, restored, servedFromSegment, rebuilt, corrupt }` |
+| `rebuildIndexes(collection?)` | 重建 postings 并重写段 |
+| `storageSummary()` | doctor / CLI 用的段、压缩、tier、L2 摘要 |
+| `getMetrics()` | 额外字段 `l2`、`tiers`、`compression`、`indexes` |
+| `vacuum({ compress: true })` | 打开压缩并重写 JSONL |
+
+### SQL
+
+- `SELECT city, COUNT(*) FROM t GROUP BY city`（可 `ORDER BY` / `LIMIT`；不支持 JOIN）
+- `SQL_PARSE` / `SQL_UNSUPPORTED` 的 `message` 以 `[SQL_PARSE]` 或 `[SQL_UNSUPPORTED]` 开头
+
+### 兼容信息（1.8）
+
+- `getVersion() === '1.8.0'`
+- `lts: false`，`cliSurface: '1.8.0'`
+- `features` 含 `index-segments`、`l2-cache`、`compression`、`tiering`、`group-by-count`
+
+热冷布局和段格式都带版本（段 `format: 1`），**不**作为 2.0 的冻结承诺。生产 pin 继续用 **1.6.x**。

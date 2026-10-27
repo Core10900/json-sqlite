@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.8.0 — 2026-10-27
+
+### Added
+- **索引落盘**：`meta/idx/*.seg.json`（format 1 + sha256）。reopen 在 WAL 为空且 docCount/revision 一致时直接装回 postings，跳过全量 rebuild；损坏段 `doctor` 报 `index-segments`，`rebuildIndexes()` / `index rebuild` 可重建
+- **L2 缓存**（默认关）：`l2Cache` / `l2CacheSize`。写路径同时失效 L1；`getMetrics().l2` 含命中
+- **压缩**（默认关）：`compression` + `compressionThreshold`，行前缀 `JSQC1:`，先压缩再加密；`vacuum({ compress: true })` / `vacuum --compress`
+- **热冷分层**（实验，默认关）：`tiering` / `tierColdAfter`。`close()` 将低访问文档写入 `cold.jsonl`，按 id 读取时延迟加载；`getMetrics().tiers`
+- **SQL**：`SELECT col, COUNT(*) … GROUP BY col`（无 JOIN）。`SQL_PARSE` / `SQL_UNSUPPORTED` 消息带 `[CODE]` 前缀
+- **Bench**：点查 / 范围 / 批量写 / 并发读 / reopen，报告含 `threshold`（`apps/bench/thresholds.json`，`BENCH_SKIP_THRESHOLD=1` 可跳过）
+- **CI**：`.github/workflows/ci.yml`，Ubuntu × Node 20 / 22（lint + build + test）
+- CLI：`index rebuild [table]`；`doctor --json` 含 `indexSegments` / `compression` / `tiering` / `l2`；`stats --json` 含 `l2` / `tiers` / `compression`
+
+### Changed
+- 版本 **1.8.0**（非 LTS）；`getCompatibilityInfo().cliSurface === '1.8.0'`，`lts` 仍为 false
+- `persistIndexes` 默认 **true**（缺段或校验失败时仍走 1.7 的 rebuild，查询结果不变）。可用 `persistIndexes: false` 关掉
+
+### Notes
+- 生产长期 pin 仍建议 **LTS-1 = 1.6.x**。热冷文件布局是实验旗标，不承诺冻结到 2.0
+- 段格式带 `format: 1`，2.0 若改布局会另做迁移
+
 ## 1.7.0 — 2026-10-26
 
 ### Added

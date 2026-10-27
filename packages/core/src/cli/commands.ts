@@ -821,6 +821,16 @@ async function cmdIndex(ctx: CliContext, rest: string[]): Promise<void> {
       });
       return;
     }
+    if (sub === 'rebuild') {
+      const [table] = positionals(args);
+      const result = await db.rebuildIndexes(table);
+      printSuccess(
+        ctx.out,
+        `✓ rebuilt indexes ${result.collections.join(', ') || '(none)'}`,
+        { action: 'index.rebuild', ...result },
+      );
+      return;
+    }
     if (sub === 'drop') {
       const [table, field] = positionals(args);
       if (!table || !field) {
@@ -857,6 +867,7 @@ async function cmdStats(ctx: CliContext, rest: string[]): Promise<void> {
     } catch {
       /* ignore */
     }
+    const metrics = db.getMetrics();
     const payload = {
       action: 'stats',
       tables: Object.keys(perTable).length,
@@ -864,6 +875,9 @@ async function cmdStats(ctx: CliContext, rest: string[]): Promise<void> {
       indexes: indexes.length,
       sizeBytes: sizeEstimate,
       perTable,
+      l2: metrics.l2,
+      tiers: metrics.tiers,
+      compression: metrics.compression,
     };
     const human = [
       `tables=${payload.tables}  documents=${documents}  indexes=${payload.indexes}`,
@@ -945,10 +959,14 @@ async function cmdVacuum(
   g: GlobalFlags,
 ): Promise<void> {
   const collection = flagAny(rest, ['--collection', '--table']);
+  const compress = hasFlag(rest, '--compress');
   // vacuum is safe rewrite; --yes optional for future destructive modes
   void g;
   await withDb(ctx, async (db) => {
-    const result = await db.vacuum(collection ? { collection } : undefined);
+    const result = await db.vacuum({
+      ...(collection ? { collection } : {}),
+      ...(compress ? { compress: true } : {}),
+    });
     printSuccess(ctx.out, `✓ vacuum ${result.collections.join(', ')}`, {
       action: 'vacuum',
       ...result,
@@ -1001,16 +1019,22 @@ async function cmdRekey(
 async function cmdDoctor(ctx: CliContext, rest: string[]): Promise<void> {
   const deep = hasFlag(rest, '--deep');
   await withDb(ctx, async (db) => {
+    const storage = db.storageSummary();
     if (deep) {
       const report = await db.doctor({ deep: true });
       printData(ctx.out, JSON.stringify(report, null, 2), {
         action: 'doctor',
         ...report,
+        ...storage,
       });
       if (report.status !== 'healthy') setExit(ExitCode.USAGE);
     } else {
       const h = await db.health();
-      printData(ctx.out, JSON.stringify(h, null, 2), { action: 'doctor', ...h });
+      const body = { ...h, ...storage };
+      printData(ctx.out, JSON.stringify(body, null, 2), {
+        action: 'doctor',
+        ...body,
+      });
       if (h.status !== 'healthy') setExit(ExitCode.USAGE);
     }
   });

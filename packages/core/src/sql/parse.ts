@@ -21,10 +21,24 @@ export function parseSql(sql: string): SqlStatement {
     p.expectEof();
     return stmt;
   } catch (err) {
-    if (err instanceof JSONSQLiteError) throw err;
+    if (err instanceof JSONSQLiteError) {
+      if (
+        (err.code === ErrorCode.SQL_PARSE ||
+          err.code === ErrorCode.SQL_UNSUPPORTED) &&
+        !err.message.startsWith('[')
+      ) {
+        throw new JSONSQLiteError(
+          err.code,
+          `[${err.code}] ${err.message}`,
+          err.details,
+        );
+      }
+      throw err;
+    }
+    const message = err instanceof Error ? err.message : String(err);
     throw new JSONSQLiteError(
       ErrorCode.SQL_PARSE,
-      err instanceof Error ? err.message : String(err),
+      `[${ErrorCode.SQL_PARSE}] ${message}`,
     );
   }
 }
@@ -68,22 +82,7 @@ class Parser {
 
   private parseSelect(): SqlStatement {
     this.expectKw('SELECT');
-    let aggregate: 'count' | undefined;
-    let columns: '*' | string[];
-    if (this.matchKw('COUNT')) {
-      this.expectPunct('(');
-      this.expectPunct('*');
-      this.expectPunct(')');
-      aggregate = 'count';
-      columns = ['count'];
-    } else if (this.matchPunct('*')) {
-      columns = '*';
-    } else {
-      columns = [this.expectColumnRef()];
-      while (this.matchPunct(',')) {
-        columns.push(this.expectColumnRef());
-      }
-    }
+    const { columns, aggregate } = this.parseSelectList();
     this.expectKw('FROM');
     const table = this.expectIdent();
     const alias = this.parseOptionalAlias();
@@ -98,9 +97,26 @@ class Parser {
     if (this.matchKw('WHERE')) {
       filter = this.parseOrExpr();
     }
+    let groupBy: string | undefined;
+    if (this.matchKw('GROUP')) {
+      this.expectKw('BY');
+      groupBy = this.expectColumnRef();
+      if (join) {
+        throw new JSONSQLiteError(
+          ErrorCode.SQL_UNSUPPORTED,
+          'GROUP BY does not support JOIN',
+        );
+      }
+      if (aggregate !== 'count') {
+        throw new JSONSQLiteError(
+          ErrorCode.SQL_UNSUPPORTED,
+          'GROUP BY requires COUNT(*) in this version',
+        );
+      }
+    }
     let orderBy: Record<string, 'asc' | 'desc'> | undefined;
     if (this.matchKw('ORDER')) {
-      if (aggregate === 'count') {
+      if (aggregate === 'count' && !groupBy) {
         throw new JSONSQLiteError(
           ErrorCode.SQL_UNSUPPORTED,
           'COUNT(*) does not support ORDER BY',
@@ -133,11 +149,41 @@ class Parser {
       join,
       columns,
       aggregate,
+      groupBy,
       filter,
       orderBy,
       limit,
       offset,
     };
+  }
+
+  private parseSelectList(): {
+    columns: '*' | string[];
+    aggregate?: 'count';
+  } {
+    if (this.matchKw('COUNT')) {
+      this.expectPunct('(');
+      this.expectPunct('*');
+      this.expectPunct(')');
+      return { columns: ['count'], aggregate: 'count' };
+    }
+    if (this.matchPunct('*')) return { columns: '*' };
+    const columns: string[] = [];
+    let aggregate: 'count' | undefined;
+    const take = (): void => {
+      if (this.matchKw('COUNT')) {
+        this.expectPunct('(');
+        this.expectPunct('*');
+        this.expectPunct(')');
+        aggregate = 'count';
+        columns.push('count');
+        return;
+      }
+      columns.push(this.expectColumnRef());
+    };
+    take();
+    while (this.matchPunct(',')) take();
+    return { columns, aggregate };
   }
 
   private parseJoinAfterFrom(): import('./ast.js').JoinClause | undefined {

@@ -13,7 +13,7 @@ devDocs/
     ├── FEATURE-MATRIX.md           ← 大纲能力 ↔ 版本勾选真源
     ├── CLI-EVOLUTION.md            ← 1.7→3.0 CLI / CLI-API 适配
     ├── v1.0/ … v1.6.0/             ← 已交付（LTS-1 = 1.6.x）
-    ├── v1.7.0/ v1.8.0/             ← 规划（非 LTS）
+    ├── v1.7.0/ v1.8.0/             ← 已交付（非 LTS）
     ├── v2.0/ v2.1.0/               ← 规划（非 LTS）
     ├── v2.2.0/                     ← 规划 ★ LTS-2
     ├── v2.3.0/                     ← 规划（非 LTS）

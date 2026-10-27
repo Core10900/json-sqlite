@@ -1,5 +1,5 @@
 import type { Document } from '../types/index.js';
-import type { Index, IndexMeta } from './types.js';
+import type { Index, IndexMeta, IndexSnapshot } from './types.js';
 
 const STOP = new Set(['的', '了', '是', '在', '和', '有', 'the', 'a', 'an', 'and', 'or', 'to']);
 
@@ -96,5 +96,21 @@ export class InvertedIndex implements Index {
       .sort((a, b) => b[1] - a[1])
       .slice(0, limit)
       .map(([id]) => id);
+  }
+
+  exportEntries(): IndexSnapshot {
+    return {
+      entries: [...this.map].map(([k, ids]) => [k, [...ids]]),
+      docFreq: [...this.docFreq],
+      totalDocs: this.totalDocs,
+    };
+  }
+
+  importEntries(snapshot: IndexSnapshot): void {
+    this.map.clear();
+    this.docFreq.clear();
+    for (const [k, ids] of snapshot.entries) this.map.set(k, new Set(ids));
+    for (const [k, n] of snapshot.docFreq ?? []) this.docFreq.set(k, n);
+    this.totalDocs = snapshot.totalDocs ?? 0;
   }
 }

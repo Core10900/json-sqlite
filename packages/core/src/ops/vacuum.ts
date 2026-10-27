@@ -13,6 +13,8 @@ export async function vacuumDatabase(
     ? [opts.collection]
     : (await db.listTables()).map((t) => t.name);
 
+  if (opts?.compress) db._store.setCompression(true);
+
   const documentCounts: Record<string, number> = {};
   for (const name of names) {
     await db._store.ensureLoaded(name);
@@ -20,5 +22,9 @@ export async function vacuumDatabase(
     documentCounts[name] = db._store.getAll(name).length;
   }
 
-  return { collections: names, documentCounts };
+  return {
+    collections: names,
+    documentCounts,
+    compressed: opts?.compress === true || db._store.compressionEnabled(),
+  };
 }

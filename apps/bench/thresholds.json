@@ -1,0 +1,7 @@
+{
+  "insertMs": 10,
+  "pointQueryAvgMs": 200,
+  "rangeQueryMs": 50,
+  "concurrentReadMs": 50,
+  "note": "Multiplier versus apps/bench/baseline.json when N matches. Skip with BENCH_SKIP_THRESHOLD=1 or when N differs. Numbers are regression ceilings, not a performance promise."
+}
