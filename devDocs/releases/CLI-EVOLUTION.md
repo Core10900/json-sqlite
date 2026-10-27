@@ -1,4 +1,4 @@
-# JSONSQLite CLI / CLI-API 演进计划（1.7 → 3.0）
+# JSONSQLite CLI / CLI-API 演进计划（1.7 → 3.4）
 
 > 基线：根目录 [`CLI-API.md`](../../CLI-API.md)（**1.5.5 命令面**，随 **1.6 LTS-1** 冻结）  
 > 原则：**不回改** `v1.6.0/` 计划；新增与适配一律进对应 MINOR/MAJOR，并回写根 `CLI-API.md` 增补/改版节  
@@ -11,12 +11,17 @@
 | 版本线 | CLI 策略 |
 |--------|----------|
 | **1.6.x LTS-1** | **冻结**：不删不改稳定子命令语义；不新增命令 |
-| **1.7 / 1.8** | **扩展**：新增命令/flags；旧命令兼容；`CLI-API.md` 增加「1.7+」章节 |
-| **2.0** | **可破坏**：允许迁移类命令取代旧路径；须迁移说明 + 废弃期（若删命令） |
-| **2.1** | 运维命令补齐（备份类型、调优、审计） |
-| **2.2 LTS-2** | **再次冻结** 2.2 命令面；PATCH 不扩命令 |
-| **2.3** | 多库 / 服务类命令；不破坏 2.2 稳定集 |
-| **3.0 LTS-3** | 集群命令收官；**冻结** 3.0 `CLI-API.md` |
+| **1.7 / 1.8** | **扩展**：新增命令/flags；旧命令兼容 |
+| **2.0** | **可破坏**：`migrate` 与恢复命令；须迁移说明。本版不加 plugin / replica / cluster |
+| **2.1** | 备份类型、prune、tune、audit |
+| **2.2 LTS-2** | **冻结**单机生产命令面；PATCH 不扩命令 |
+| **2.3** | `plugin`、`index compact`、可选 geo；不破坏 2.2 稳定集 |
+| **2.4** | `--writers`。默认 single |
+| **2.5 LTS-3** | **冻结**含多写者 flag 的命令面 |
+| **3.0 / 3.1** | `replica`。没有 `cluster`，没有自动 failover 命令 |
+| **3.2 LTS-4** | **冻结**复制命令面 |
+| **3.3** | `db`、GraphQL 入口；可在子包 bin |
+| **3.4** | `cluster` 仅实验。未通过混沌的子命令不写入稳定文档，本版不冻结为 LTS |
 
 全局 flags（`-p/-y/--json/-q/-h`）与 exit `0/1/2/3`：**尽量保持**；2.0+ 仅可 **新增** exit 含义或可选字段，删除须 MAJOR 并文档化。
 
@@ -50,56 +55,88 @@
 | `stats` 增加 cache/L2、tier 字段（`--json`） | L2 / 热冷 | P1 |
 | `bench`（可选，调 `apps/bench` 或内置冒烟） | 性能门槛 | P2 |
 
-### 2.0.0 — 破坏性一代（迁移优先）
+### 2.0.0 — 单机正确性（迁移与恢复）
 
 | 命令 / 改动 | 适配能力 | 优先级 |
 |-------------|----------|--------|
-| **`migrate --from … --to …`** | formatVersion / 1.x→2.0 | P0 |
-| `plugin list \| register \| info` | 插件 API | P0 |
-| `replica init \| status`（雏形） | 异步复制 | P1 |
-| `shard status`（原型，可标 experimental） | 分片路由 | P2 |
-| open 相关：`--multi-writer` / 文档化默认锁模型 | 多写者 | P0（文档+flag） |
-| 根 `CLI-API.md` **2.0 重写** + 破坏清单 | 权威文档 | P0 |
-| 废弃策略：旧命令若改名，保留别名 ≥1 个 minor | 兼容 | P0 |
+| **`migrate --from … --to …`** | 1.8 → 2.0 分页格式 | P0 |
+| `backup restore --type full\|incremental` | 备份链可恢复 | P0 |
+| `backup restore --collection` | 部分恢复 | P0 |
+| `doctor` 区分尾部撕裂与中间坏 WAL | 失败关闭 | P0 |
+| 根 `CLI-API.md` 2.0 破坏清单 | 权威文档 | P0 |
+| 本版**不**加 `plugin` / `replica` / `cluster` / `--writers multi` | 范围 | P0 |
 
-### 2.1.0 — 运维硬化
+### 2.1.0 — 单机运维
 
 | 命令 / 改动 | 适配能力 | 优先级 |
 |-------------|----------|--------|
 | `backup --type full\|incremental\|differential` | 三类备份 | P0 |
 | `backup prune` / `--keep-days` | 保留策略 | P0 |
-| `tune` / `autotune --dry-run` | AutoTune | P0 |
-| `audit list`（或 `logs audit`） | 审计日志 | P1 |
-| `replica status --quorum` | Quorum | P1 |
-| `doctor` 含告警/复制滞后摘要 | 可观测 | P1 |
+| `tune --dry-run` | AutoTune 不改库 | P0 |
+| `audit list` | 审计 | P0 |
+| `doctor` 区分可自愈索引与拒绝打开的数据损坏 | 自动恢复 | P0 |
 
-### 2.2.0 — LTS-2 冻结前补齐
+### 2.2.0 — LTS-2 冻结
 
 | 命令 / 改动 | 适配能力 | 优先级 |
 |-------------|----------|--------|
-| `index create --type geo …` | GeoIndex | P0 |
-| `replica route` / status 读写角色 | 读写分离 | P1 |
-| `compat` 输出含 `lts: '2.2'` | LTS-2 | P0 |
+| `compat` / `version --json` 含 LTS-2 | 可探测 | P0 |
+| `config validate --file` | example 对齐已冻结字段 | P0 |
 | **冻结** `CLI-API.md` 2.2 命令面 | LTS-2 | P0 |
-| `config validate --file` | config.example 对齐 | P2 |
 
-### 2.3.0 — 多库与服务入口
-
-| 命令 / 改动 | 适配能力 | 优先级 |
-|-------------|----------|--------|
-| `db list \| register \| use \| unregister` | 多数据库管理器 | P0 |
-| `serve graphql`（或子包二进制说明） | GraphQL | P1 |
-| `pool status`（若进程内池可观测） | 连接池 | P2 |
-| 全局 `-p` 与 `db use` 优先级文档化 | 多库 UX | P0 |
-
-### 3.0.0 — 集群收官（LTS-3）
+### 2.3.0 — 存储增强
 
 | 命令 / 改动 | 适配能力 | 优先级 |
 |-------------|----------|--------|
-| `cluster status \| join \| leave \| rebalance` | Raft/分片 | P0 |
-| `plugin` 全生命周期（含 vector 示例） | 插件完工 | P0 |
-| WASM：文档指向独立包；可选 `jsonsqlite-wasm` 说明，不强行塞进同一 bin | WASM | P1 |
-| **冻结** 3.0 `CLI-API.md`；`lts` dist-tag 叙事 | LTS-3 | P0 |
+| `plugin list\|info` | 插件面 | P0 |
+| `index compact` | 分段合并 | P0 |
+| `index create --type geo` | 可选 Geo | P1 |
+| 2.2 稳定命令保持 | LTS-2 回归 | P0 |
+
+### 2.4.0 — 多写者浸泡
+
+| 命令 / 改动 | 适配能力 | 优先级 |
+|-------------|----------|--------|
+| `--writers single\|multi` | 默认 single | P0 |
+| `doctor` 报告写者模式 | 可观测 | P0 |
+
+### 2.5.0 — LTS-3 冻结
+
+| 命令 / 改动 | 适配能力 | 优先级 |
+|-------------|----------|--------|
+| `version --json` 含 `ltsLine: 2.5` | LTS-3 | P0 |
+| **冻结**含 `--writers` 的命令面 | LTS-3 | P0 |
+
+### 3.0.0 / 3.1.0 — 异步复制（非 LTS）
+
+| 命令 / 改动 | 适配能力 | 优先级 |
+|-------------|----------|--------|
+| `replica init\|status` | 复制雏形；status 含滞后 | P0 |
+| 3.1：`replica status` 含 quorum 与角色 | 读写分离 | P0 |
+| **不**提供 `cluster`，**不**提供自动 failover | 禁止假装选主 | P0 |
+
+### 3.2.0 — LTS-4 冻结
+
+| 命令 / 改动 | 适配能力 | 优先级 |
+|-------------|----------|--------|
+| 冻结 `replica` 字段 | LTS-4 | P0 |
+| `version --json` 含 `ltsLine: 3.2` | 可探测 | P0 |
+
+### 3.3.0 — 适配器
+
+| 命令 / 改动 | 适配能力 | 优先级 |
+|-------------|----------|--------|
+| `db list\|register\|use\|unregister` | 多库 | P0 |
+| `serve graphql` 或子包 bin 文档 | GraphQL | P1 |
+| `plugin` 可指向 vector 示例 | 可选插件 | P1 |
+
+### 3.4.0 — 集群实验（禁止 LTS）
+
+| 命令 / 改动 | 适配能力 | 优先级 |
+|-------------|----------|--------|
+| `cluster status\|join\|leave\|rebalance` | 仅实验开关打开且混沌通过的子命令 | P0 |
+| 未通过的子命令不写入稳定 CLI-API | 不把失败写成支持 | P0 |
+| WASM 文档指向可选包 | 不塞进主 bin | P2 |
 
 ---
 
@@ -107,7 +144,7 @@
 
 1. 每版发版前：根 `CLI-API.md` 更新速查表；旧命令标「自 x.y」  
 2. 契约测：`help` ⊆ `CLI-API.md`；新增命令至少 1 条非 TTY spawn（`--json` / `--yes`）  
-3. LTS 发版（2.2 / 3.0）：单独 FT「CLI 面快照」防止漂移  
+3. LTS 发版（2.2 / 2.5 / 3.2）：单独 FT「CLI 面快照」防止漂移。3.4 不做这项冻结  
 4. **禁止**在未改 `CLI-API.md` 的情况下合并新子命令  
 
 ---
