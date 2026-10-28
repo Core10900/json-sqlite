@@ -403,4 +403,43 @@ unsubscribe();
 - `lts: false`，`cliSurface: '1.8.0'`
 - `features` 含 `index-segments`、`l2-cache`、`compression`、`tiering`、`group-by-count`
 
-热冷布局和段格式都带版本（段 `format: 1`），**不**作为 2.0 的冻结承诺。生产 pin 继续用 **1.6.x**。
+热冷布局和段格式都带版本（段 `format: 1`），**不**作为 2.0 的冻结承诺。2.0 的分页、备份链和隔离以下面一节为准。生产 pin 继续用 **1.6.x**，直到 2.2。
+
+---
+
+## 2.0 破坏与契约（非 LTS，单写者）
+
+本版是 **MAJOR**。默认仍是**单写者**（第二进程 `LOCK_FAILED`）。没有 plugin、replica、cluster API。
+
+相对 1.8 的破坏点：
+
+1. 磁盘 `formatVersion` 从 1 升到 2。旧库用 `migrateDatabase({ from, to, yes: true })` 或 CLI `migrate --from --to --yes`。直接 `open` 抛 `MIGRATION_REQUIRED`。损坏源不会留下目标目录。
+2. 文档按页存放（`pages.json` + `pages/pNNNNNN.jsonl`）。`pageSize` 默认 32，`maxResidentDocs` 默认 256，且必须 `>= pageSize`。点查读一页；扫描受页预算约束。
+3. 隔离：默认 `READ_COMMITTED`（读最新已提交）。`REPEATABLE_READ` 在 `begin` 建快照，重复读不看见之后的提交。只读快照可与一个写事务并存。`SERIALIZABLE` 与 `READ_UNCOMMITTED` 抛 `ISOLATION_UNSUPPORTED`（配置成默认值则 `INVALID_CONFIG`），不再降级。
+4. `restoreChain` / `backup restore`：checksum 不符抛 `BACKUP_CHECKSUM` 且目标字节不变；增量没有全量基线抛 `BACKUP_BASELINE` 且不部分套用。`collection` 只恢复该集合。
+5. WAL：尾部不完整的一行可丢弃；中间行校验失败抛 `WAL_CORRUPT`，不跳过其后的已提交记录。
+6. Admin：非 loopback 必须同时提供 `adminToken` 与 `tls: { cert, key }`，否则 `INVALID_CONFIG`。loopback 仍可省略 token，并打印警告。
+
+### 新增选项
+
+| 选项 | 默认 | 说明 |
+|------|------|------|
+| `pageSize` | `32` | 每页文档数 |
+| `maxResidentDocs` | `256` | 页缓存中的文档上限 |
+
+### 新增方法
+
+| 方法 | 说明 |
+|------|------|
+| `beginTransaction('REPEATABLE_READ')` | 返回快照 id |
+| `query(q, { txId })` / `findById(col, id, { txId })` | 在该快照上读 |
+| `restoreChain({ type, file?, collection? })` | 全量或全量+增量恢复 |
+| `pagingStats()` | `{ pageSize, maxResidentDocs, residentDocs, pageReads }` |
+| `migrateDatabase({ from, to, yes, encryptionKey? })` | 1.x → 2.0 |
+
+### 兼容信息（2.0）
+
+- `getVersion() === '2.0.0'`
+- `lts: false`，`writers: 'single'`，`cliSurface: '2.0.0'`
+- **非 LTS**。长期 pin 仍是 1.6.x，下一档推荐 pin 是 2.2
+

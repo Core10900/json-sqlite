@@ -10,7 +10,7 @@ import {
   getVersion,
   open,
 } from '../src/index.js';
-import { docsFile } from '../src/utils/path.js';
+import { pageFile } from '../src/utils/path.js';
 
 const execFileAsync = promisify(execFile);
 const dirs: string[] = [];
@@ -88,7 +88,7 @@ describe('v1.4.0 security / encryption', () => {
     await db.insert('users', { name: 'VISIBLE_PLAINTEXT_MARKER', pin: '9999' });
     await db.close();
 
-    const raw = await fs.readFile(docsFile(storagePath, 'users'), 'utf8');
+    const raw = await fs.readFile(pageFile(storagePath, 'users', 1), 'utf8');
     expect(raw).not.toContain('VISIBLE_PLAINTEXT_MARKER');
     expect(raw).not.toContain('9999');
     expect(raw).toContain('JSQE1:');

@@ -11,18 +11,15 @@ export interface PlanResult {
 /**
  * Prefer equality/range/text/composite indexes when filter matches.
  */
-export function planAndExecute(
-  allDocs: Document[],
+export function planIndexIds(
   query: JsonQuery,
   indexes: Index[],
-  resolveByIds: (ids: string[]) => Document[],
-): PlanResult {
+): {
+  ids: string[];
+  usedIndex: { collection: string; field: string; type: string };
+} | null {
   const candidate = pickIndex(query.filter, indexes);
-  if (!candidate) {
-    const docs = executeJsonQuery(allDocs, query);
-    return { docs, scanned: allDocs.length };
-  }
-
+  if (!candidate) return null;
   const { index, mode, value, min, max, text, prefixValues } = candidate;
   let ids: string[] = [];
   if (mode === 'eq') ids = index.lookupEq(value);
@@ -33,8 +30,29 @@ export function planAndExecute(
       ? index.lookupPrefix(prefixValues)
       : index.lookupEq(prefixValues);
   }
+  return {
+    ids,
+    usedIndex: {
+      collection: index.meta.collection,
+      field: index.meta.field,
+      type: index.meta.type,
+    },
+  };
+}
 
-  let docs = resolveByIds(ids);
+export function planAndExecute(
+  allDocs: Document[],
+  query: JsonQuery,
+  indexes: Index[],
+  resolveByIds: (ids: string[]) => Document[],
+): PlanResult {
+  const indexed = planIndexIds(query, indexes);
+  if (!indexed) {
+    const docs = executeJsonQuery(allDocs, query);
+    return { docs, scanned: allDocs.length };
+  }
+
+  let docs = resolveByIds(indexed.ids);
   // Apply remaining filter / sort / limit via shared executor
   docs = executeJsonQuery(docs, {
     filter: query.filter,
@@ -46,12 +64,8 @@ export function planAndExecute(
 
   return {
     docs,
-    usedIndex: {
-      collection: index.meta.collection,
-      field: index.meta.field,
-      type: index.meta.type,
-    },
-    scanned: ids.length,
+    usedIndex: indexed.usedIndex,
+    scanned: indexed.ids.length,
   };
 }
 

@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { JSONSQLite } from '../engine/JSONSQLite.js';
 import type { DoctorCheck, DoctorReport } from '../types/index.js';
-import { catalogFile, collectionDir, docsFile, walFile } from '../utils/path.js';
+import { catalogFile, collectionDir, docsFile, pagesManifest, walFile } from '../utils/path.js';
+import { diagnoseWalText } from '../storage/Wal.js';
 import { isEncryptedLine } from '../crypto/aes.js';
 
 export async function runDoctor(
@@ -74,7 +75,7 @@ export async function runDoctor(
 
       // Load and compare counts
       await db._store.ensureLoaded(t.name);
-      const live = db._store.getAll(t.name).length;
+      const live = db._store.indexStats(t.name).docCount;
       const meta = t.documentCount;
       checks.push({
         id: `count:${t.name}`,
@@ -86,7 +87,7 @@ export async function runDoctor(
         details: { catalog: meta, live },
       });
 
-      // WAL checksum sampling via readCommitted (skips corrupt; ensure no throw)
+      // WAL: torn tail is recoverable; a bad complete line is middle corruption.
       try {
         const walPath = walFile(root, t.name);
         let raw = '';
@@ -102,10 +103,21 @@ export async function runDoctor(
           lines += 1;
           if (isEncryptedLine(line)) encrypted += 1;
         }
+        const encryptedWal = encrypted > 0;
+        const diag = raw && !encryptedWal ? diagnoseWalText(raw, null) : null;
+        const middle = diag?.issues.length ?? 0;
         checks.push({
           id: `wal:${t.name}`,
-          ok: true,
-          message: `wal lines=${lines} encryptedLines=${encrypted}`,
+          ok: middle === 0,
+          message:
+            middle > 0
+              ? `middle ${diag!.issues[0]!.kind} at line ${diag!.issues[0]!.line}`
+              : diag?.tornTail
+                ? `torn-tail discarded; committed prefix kept; lines=${lines}`
+                : `wal intact lines=${lines} encryptedLines=${encrypted}`,
+          details: diag
+            ? { tornTail: diag.tornTail, issues: diag.issues, lines, encrypted }
+            : undefined,
         });
       } catch (err) {
         checks.push({
@@ -120,7 +132,7 @@ export async function runDoctor(
         (i) => i.collection === t.name,
       );
       if (indexes.length > 0) {
-        const docs = db._store.getAll(t.name);
+        const docs = await db._store.readAll(t.name);
         const idSet = new Set(docs.map((d) => d._id));
         let bad = 0;
         for (const idx of indexes) {
@@ -148,16 +160,22 @@ export async function runDoctor(
       }
 
       // Orphan docs file check
-      try {
-        await fs.access(docsFile(root, t.name));
-      } catch {
-        if (live > 0) {
-          checks.push({
-            id: `docs-file:${t.name}`,
-            ok: false,
-            message: 'data.jsonl missing but live docs > 0',
-          });
+      let dataPresent = false;
+      for (const file of [pagesManifest(root, t.name), docsFile(root, t.name)]) {
+        try {
+          await fs.access(file);
+          dataPresent = true;
+          break;
+        } catch {
+          /* try the other layout */
         }
+      }
+      if (!dataPresent && live > 0) {
+        checks.push({
+          id: `docs-file:${t.name}`,
+          ok: false,
+          message: 'pages.json and data.jsonl missing but live docs > 0',
+        });
       }
     }
 

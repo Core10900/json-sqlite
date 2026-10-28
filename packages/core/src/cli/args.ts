@@ -39,6 +39,11 @@ const VALUE_FLAGS = new Set([
   '--token',
   '--fields',
   '--timeout',
+  '--from',
+  '--to',
+  '--cert',
+  '--key',
+  '--file',
 ]);
 
 /**

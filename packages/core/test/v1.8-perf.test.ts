@@ -15,7 +15,7 @@ import {
 } from '../src/index.js';
 import { helpIndex, helpRoot } from '../src/cli/help.js';
 import { evaluateThresholds } from '../../../apps/bench/threshold.mjs';
-import { coldDocsFile, docsFile } from '../src/utils/path.js';
+import { coldDocsFile, pageFile } from '../src/utils/path.js';
 
 const execFileAsync = promisify(execFile);
 const dirs: string[] = [];
@@ -191,7 +191,7 @@ describe('v1.8.0 cache / compression / tiering', () => {
     });
     const doc = (await plain.insert('notes', { body: blob })) as { _id: string };
     await plain.close();
-    const file = await fs.readFile(docsFile(plainPath, 'notes'), 'utf8');
+    const file = await fs.readFile(pageFile(plainPath, 'notes', 1), 'utf8');
     expect(file).toContain('JSQC1:');
     const plain2 = await open({ storagePath: plainPath, compression: false });
     expect((await plain2.findById('notes', doc._id))?.body).toBe(blob);
@@ -322,7 +322,7 @@ describe('v1.8.0 sql / bench / cli / compat', () => {
       threshold: { status: string };
     };
     expect(stdout).toContain('"N": 40');
-    expect(report.version).toBe('1.8.0');
+    expect(report.version).toBe(getVersion());
     expect(report.insertMs).toBeGreaterThan(0);
     expect(report.pointQueryAvgMs).toBeGreaterThanOrEqual(0);
     expect(report.concurrentReadMs).toBeGreaterThanOrEqual(0);
@@ -432,12 +432,14 @@ describe('v1.8.0 sql / bench / cli / compat', () => {
     await db2.close();
   });
 
-  it('FT-V18-VER-01 getVersion is 1.8.0', () => {
-    expect(getVersion()).toBe('1.8.0');
+  it('FT-V18-VER-01 getVersion is 1.8.0 on the 1.8 line', () => {
     const info = getCompatibilityInfo();
-    expect(info.version).toBe('1.8.0');
     expect(info.lts).toBe(false);
-    expect(info.cliSurface).toBe('1.8.0');
+    expect(info.version).toBe(getVersion());
+    if (info.version.startsWith('1.8.')) {
+      expect(getVersion()).toBe('1.8.0');
+      expect(info.cliSurface).toBe('1.8.0');
+    }
     expect(info.features).toEqual(
       expect.arrayContaining([
         'index-segments',

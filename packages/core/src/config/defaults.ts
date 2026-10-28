@@ -37,16 +37,33 @@ const optionsSchema = z.object({
   tiering: z.boolean().default(false),
   /** Docs with access count <= this value are swept to cold on close. */
   tierColdAfter: z.number().int().nonnegative().default(0),
+  /** Documents stored in one page file (format 2). Default 32. */
+  pageSize: z.number().int().positive().default(32),
+  /**
+   * Max document bodies kept in the page cache for a collection.
+   * Must be >= pageSize. Default 256.
+   */
+  maxResidentDocs: z.number().int().positive().default(256),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;
 
-/** Levels beyond READ_COMMITTED are not implemented; coerce with notice. */
-export function coerceIsolation(level: IsolationLevel): IsolationLevel {
-  if (level === 'READ_COMMITTED' || level === 'READ_UNCOMMITTED') {
-    return level === 'READ_UNCOMMITTED' ? 'READ_COMMITTED' : level;
+const IMPLEMENTED_ISOLATION = new Set<IsolationLevel>([
+  'READ_COMMITTED',
+  'REPEATABLE_READ',
+]);
+
+/**
+ * READ_COMMITTED and REPEATABLE_READ are implemented.
+ * READ_UNCOMMITTED and SERIALIZABLE are rejected — never coerced.
+ */
+export function assertIsolationSupported(level: IsolationLevel): void {
+  if (!IMPLEMENTED_ISOLATION.has(level)) {
+    throw new JSONSQLiteError(
+      ErrorCode.ISOLATION_UNSUPPORTED,
+      `Isolation level ${level} is not implemented (supported: READ_COMMITTED, REPEATABLE_READ)`,
+    );
   }
-  return 'READ_COMMITTED';
 }
 
 export function resolveOptions(input: JSONSQLiteOptions): ResolvedOptions {
@@ -59,10 +76,25 @@ export function resolveOptions(input: JSONSQLiteOptions): ResolvedOptions {
     );
   }
   const data = parsed.data;
-  return {
-    ...data,
-    defaultIsolation: coerceIsolation(data.defaultIsolation),
-  };
+  try {
+    assertIsolationSupported(data.defaultIsolation);
+  } catch (err) {
+    if (err instanceof JSONSQLiteError && err.code === ErrorCode.ISOLATION_UNSUPPORTED) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        err.message,
+        { isolation: data.defaultIsolation },
+      );
+    }
+    throw err;
+  }
+  if (data.maxResidentDocs < data.pageSize) {
+    throw new JSONSQLiteError(
+      ErrorCode.INVALID_CONFIG,
+      `maxResidentDocs (${data.maxResidentDocs}) must be >= pageSize (${data.pageSize})`,
+    );
+  }
+  return data;
 }
 
 export function resolveEncryptionKey(

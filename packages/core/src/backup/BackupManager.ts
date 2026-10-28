@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import type { Document } from '../types/index.js';
 import type { ChangeEntry } from '../storage/ChangeLog.js';
 import { encryptBytes, decryptBytes } from '../crypto/aes.js';
+import { ErrorCode, JSONSQLiteError } from '../errors.js';
 
 export interface BackupInfo {
   type: 'full' | 'incremental';
@@ -15,13 +16,13 @@ export interface BackupInfo {
   baseTimestamp?: number;
 }
 
-interface FullPayload {
+export interface FullPayload {
   type: 'full';
   timestamp: number;
   collections: Record<string, Document[]>;
 }
 
-interface IncPayload {
+export interface IncPayload {
   type: 'incremental';
   timestamp: number;
   baseTimestamp: number;
@@ -117,21 +118,97 @@ export class BackupManager {
 
   async readBackup(file: string): Promise<FullPayload | IncPayload> {
     const raw = await fs.readFile(file);
+    return this.decode(Buffer.from(raw));
+  }
+
+  /**
+   * Hash the file and compare it to the manifest checksum.
+   * Throws before the payload is decoded so a mismatch cannot be applied.
+   */
+  async readVerified(info: BackupInfo): Promise<FullPayload | IncPayload> {
+    const raw = await fs.readFile(info.file);
+    const sum = sha(raw);
+    if (sum !== info.checksum) {
+      throw new JSONSQLiteError(
+        ErrorCode.BACKUP_CHECKSUM,
+        `Backup checksum mismatch for ${info.file}`,
+        { file: info.file, expected: info.checksum, actual: sum },
+      );
+    }
+    return this.decode(raw);
+  }
+
+  /**
+   * Full restore is the chosen full backup.
+   * Incremental restore is that full backup plus later incrementals, in order.
+   * An incremental chain with no full backup fails and must not be applied.
+   */
+  resolveChain(
+    list: BackupInfo[],
+    type: 'full' | 'incremental',
+    file?: string,
+  ): BackupInfo[] {
+    const sorted = [...list].sort((a, b) => a.timestamp - b.timestamp);
+    if (type === 'full') {
+      const fulls = sorted.filter((b) => b.type === 'full');
+      const chosen = file
+        ? fulls.find((b) => b.file === file) ?? sorted.find((b) => b.file === file)
+        : fulls[fulls.length - 1];
+      if (!chosen || chosen.type !== 'full') {
+        throw new JSONSQLiteError(
+          ErrorCode.BACKUP_BASELINE,
+          'No full backup to restore',
+        );
+      }
+      return [chosen];
+    }
+
+    const fulls = sorted.filter((b) => b.type === 'full');
+    if (fulls.length === 0) {
+      throw new JSONSQLiteError(
+        ErrorCode.BACKUP_BASELINE,
+        'Incremental restore requires a full backup baseline',
+      );
+    }
+    const tip = file ? sorted.find((b) => b.file === file) : sorted[sorted.length - 1];
+    if (!tip) {
+      throw new JSONSQLiteError(
+        ErrorCode.BACKUP_BASELINE,
+        `Backup file not in manifest: ${file}`,
+      );
+    }
+    const full = [...fulls].reverse().find((b) => b.timestamp <= tip.timestamp);
+    if (!full) {
+      throw new JSONSQLiteError(
+        ErrorCode.BACKUP_BASELINE,
+        'Incremental restore requires a full backup baseline',
+      );
+    }
+    const incs = sorted.filter(
+      (b) =>
+        b.type === 'incremental' &&
+        b.timestamp > full.timestamp &&
+        b.timestamp <= tip.timestamp,
+    );
+    let prev = full.timestamp;
+    for (const inc of incs) {
+      if (inc.baseTimestamp !== prev) {
+        throw new JSONSQLiteError(
+          ErrorCode.BACKUP_BASELINE,
+          `Incremental backup ${inc.file} is not linked to the previous baseline`,
+        );
+      }
+      prev = inc.timestamp;
+    }
+    return [full, ...incs];
+  }
+
+  private decode(raw: Buffer): FullPayload | IncPayload {
     const body = this.encryptionKey
       ? decryptBytes(Buffer.from(raw), this.encryptionKey)
       : Buffer.from(raw);
     const json = gunzipSync(body).toString('utf8');
     return JSON.parse(json) as FullPayload | IncPayload;
-  }
-
-  async restoreFull(
-    file: string,
-  ): Promise<Record<string, Document[]>> {
-    const payload = await this.readBackup(file);
-    if (payload.type !== 'full') {
-      throw new Error('Not a full backup');
-    }
-    return payload.collections;
   }
 }
 

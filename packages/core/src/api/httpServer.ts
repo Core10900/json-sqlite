@@ -1,4 +1,5 @@
 import http from 'node:http';
+import https from 'node:https';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { JSONSQLite } from '../engine/JSONSQLite.js';
 import { getAdminHtml } from '../admin/dashboard.js';
@@ -8,6 +9,8 @@ export interface HttpServerOptions {
   host?: string;
   port?: number;
   adminToken?: string | null;
+  /** PEM cert and key. Required together with adminToken when host is not loopback. */
+  tls?: { cert: string | Buffer; key: string | Buffer } | null;
 }
 
 export async function startHttpServer(
@@ -18,11 +21,14 @@ export async function startHttpServer(
   const port = opts.port ?? 3000;
   const token = opts.adminToken ?? null;
 
-  if (!isLoopbackHost(host) && !token) {
-    throw new JSONSQLiteError(
-      ErrorCode.INVALID_CONFIG,
-      `Admin server bound to non-loopback host '${host}' requires adminToken`,
-    );
+  if (!isLoopbackHost(host)) {
+    const hasTls = Boolean(opts.tls?.cert && opts.tls?.key);
+    if (!token || !hasTls) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        `Admin server bound to non-loopback host '${host}' requires adminToken and TLS cert/key`,
+      );
+    }
   }
   if (isLoopbackHost(host) && !token) {
     console.warn(
@@ -42,7 +48,7 @@ export async function startHttpServer(
     }
   }, 5000);
 
-  const server = http.createServer(async (req, res) => {
+  const handler: http.RequestListener = async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', `http://${host}:${port}`);
 
@@ -161,7 +167,14 @@ export async function startHttpServer(
     } catch (err) {
       json(res, 500, { error: (err as Error).message });
     }
-  });
+  };
+
+  const server = opts.tls?.cert && opts.tls?.key
+    ? https.createServer(
+        { cert: opts.tls.cert, key: opts.tls.key },
+        handler,
+      )
+    : http.createServer(handler);
 
   server.on('close', () => {
     clearInterval(metricsTimer);

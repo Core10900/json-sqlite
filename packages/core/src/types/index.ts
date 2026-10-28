@@ -1,7 +1,8 @@
 /**
  * Transaction isolation.
- * v1.3+ only **implements** READ_COMMITTED (snapshot-on-touch).
- * Other values are accepted for API compatibility but coerced to READ_COMMITTED.
+ * Implemented: READ_COMMITTED (default), REPEATABLE_READ (snapshot at begin).
+ * READ_UNCOMMITTED and SERIALIZABLE throw ISOLATION_UNSUPPORTED.
+ * Configuring them as defaultIsolation throws INVALID_CONFIG.
  */
 export type IsolationLevel =
   | 'READ_UNCOMMITTED'
@@ -96,7 +97,8 @@ export interface JSONSQLiteOptions {
   walMode?: boolean;
   /**
    * Default isolation for new transactions.
-   * Only READ_COMMITTED is implemented; others are coerced.
+   * READ_COMMITTED (default) or REPEATABLE_READ.
+   * READ_UNCOMMITTED and SERIALIZABLE are rejected.
    */
   defaultIsolation?: IsolationLevel;
   /**
@@ -148,6 +150,21 @@ export interface JSONSQLiteOptions {
   tiering?: boolean;
   /** Access count at or below this is swept to cold (default 0). */
   tierColdAfter?: number;
+  /**
+   * Documents per on-disk page (format 2). Default 32.
+   * Point reads load one page; the page cache evicts to `maxResidentDocs`.
+   */
+  pageSize?: number;
+  /**
+   * Max document bodies resident in the page cache. Default 256.
+   * Must be >= pageSize. The id→page directory is not counted.
+   */
+  maxResidentDocs?: number;
+}
+
+/** Optional read scope. `txId` selects a REPEATABLE_READ snapshot. */
+export interface QueryReadOptions {
+  txId?: number;
 }
 
 export interface RekeyOptions {

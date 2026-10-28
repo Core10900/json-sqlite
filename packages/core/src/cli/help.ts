@@ -30,6 +30,8 @@ Commands:
   watch                      subscribe to dataChanged
   compat / version [--json]  compatibility / version
   backup / vacuum [--compress] / rekey    ops
+  backup restore --type full|incremental [--collection name]
+  migrate --from <db> --to <new> --yes   1.x → 2.0
   doctor [--deep]            health / consistency
   version                    print version
 
@@ -107,7 +109,8 @@ export function helpAdmin(): string {
   return `jsonsqlite admin serve [--host 127.0.0.1] [--port 3000] [--token SECRET] [--once]
 
 Start Admin HTTP (dashboard + REST + SSE).
-Non-loopback host requires --token.
+Loopback may omit --token (a warning is printed).
+Non-loopback requires both --token and --cert/--key (TLS). Missing either refuses to listen.
 --once starts then exits (smoke / tests).
 `;
 }
@@ -127,6 +130,30 @@ Pipeline stages: match, group, sort, limit, project, unwind, lookup
 export function helpWatch(): string {
   return `jsonsqlite watch [--once] [--timeout ms] [--json]
 Subscribe to dataChanged. Non-TTY requires --once or --timeout.
+`;
+}
+
+export function helpMigrate(): string {
+  return `jsonsqlite migrate --from <db> --to <new> --yes [--from-key KEY]
+
+Copy a 1.x database into a 2.0 (formatVersion 2) directory.
+Non-TTY and scripts must pass --yes. Exit 0 on success, 1 if --yes is missing or the source is rejected.
+A failed migrate does not leave a partial target directory.
+Re-running without --yes refuses when --to already exists; --yes replaces it.
+Does not add plugin, replica, or cluster commands.
+`;
+}
+
+export function helpBackup(): string {
+  return `jsonsqlite backup
+jsonsqlite backup restore --type full|incremental [--collection <name>] [--file <path>]
+
+backup                  full backup
+backup restore          apply a full backup, or a full backup plus incrementals in order
+  --type full           default; does not apply incrementals
+  --type incremental    requires a full baseline; fails without writing if the baseline is missing
+  --collection <name>   restore one collection from the full backup; other collections stay unchanged
+Checksum mismatch refuses the restore and does not modify the target.
 `;
 }
 
@@ -169,6 +196,11 @@ export function helpFor(path: string[]): string | null {
     case 'compat':
     case 'version':
       return helpCompat();
+    case 'migrate':
+      return helpMigrate();
+    case 'backup':
+    case 'backup restore':
+      return helpBackup();
     default:
       return null;
   }

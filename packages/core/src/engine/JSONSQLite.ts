@@ -11,26 +11,27 @@ import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import { L1Cache } from '../cache/L1Cache.js';
 import { IndexManager } from '../index/IndexManager.js';
 import type { IndexType } from '../index/types.js';
-import { planAndExecute } from '../query/Planner.js';
+import { planAndExecute, planIndexIds } from '../query/Planner.js';
 import {
   executeAggregate,
   type AggregateStage,
 } from '../query/Aggregate.js';
 import { selectJsonPath } from '../query/JsonPath.js';
 import { Catalog } from '../storage/Catalog.js';
-import { ChangeLog } from '../storage/ChangeLog.js';
+import { ChangeLog, type ChangeEntry } from '../storage/ChangeLog.js';
 import { DdlJournal } from '../storage/DdlJournal.js';
 import { DocumentStore } from '../storage/DocumentStore.js';
 import { FileLock } from '../storage/FileLock.js';
-import { Wal } from '../storage/Wal.js';
+import { diagnoseWalDirectory, Wal } from '../storage/Wal.js';
 import {
   compareByOrder,
+  executeJsonQuery,
   getPath,
   matchFilter,
   normalizeOrderBy,
 } from '../query/JsonQuery.js';
 import { TransactionManager } from '../transaction/TransactionManager.js';
-import { BackupManager, type BackupInfo } from '../backup/BackupManager.js';
+import { BackupManager, type BackupInfo, type FullPayload, type IncPayload } from '../backup/BackupManager.js';
 import { Monitor } from '../monitor/Monitor.js';
 import {
   diffDocs,
@@ -65,6 +66,7 @@ import type {
   OrderBySpec,
   QueryCursorOptions,
   QueryCursorResult,
+  QueryReadOptions,
   RekeyOptions,
   RekeyResult,
   SqlResult,
@@ -165,6 +167,18 @@ export class JSONSQLite extends EventEmitter {
       this.wal = new Wal(root, this.options.walMode, sync, this.encKey);
       this.wal.setEncryption(this.catalog.encryption);
       await this.wal.initialize();
+      if (this.options.walMode) {
+        const reports = await diagnoseWalDirectory(root, this.encKey);
+        const bad = reports.find((report) => report.issues.length > 0);
+        if (bad) {
+          const issue = bad.issues[0]!;
+          throw new JSONSQLiteError(
+            ErrorCode.WAL_CORRUPT,
+            `WAL corrupt at line ${issue.line} (${issue.kind}) in ${bad.collection}; refusing to skip committed records`,
+            { collection: bad.collection, line: issue.line, kind: issue.kind },
+          );
+        }
+      }
 
       this.indexes = new IndexManager(root, sync, this.options.persistIndexes);
       this.store = new DocumentStore(
@@ -175,10 +189,13 @@ export class JSONSQLite extends EventEmitter {
         this.options.schemaMode,
         this.encKey,
         (name, loadMs) => {
-          const docs = this.store!.docsForIndex(name);
+          const stats = this.store!.indexStats(name);
           const wal = this.store!.hadWalReplay(name);
-          if (!this.indexes!.trustSegment(name, docs, wal)) {
-            this.indexes!.rebuildCollection(name, docs);
+          if (!this.indexes!.trustSegment(name, stats, wal)) {
+            return this.store!.readAll(name).then((docs) => {
+              this.indexes!.rebuildCollection(name, docs);
+              this.monitor.recordCollectionLoad(loadMs);
+            });
           }
           this.monitor.recordCollectionLoad(loadMs);
         },
@@ -188,6 +205,8 @@ export class JSONSQLite extends EventEmitter {
         compressionThreshold: this.options.compressionThreshold,
         tiering: this.options.tiering,
         tierColdAfter: this.options.tierColdAfter,
+        pageSize: this.options.pageSize,
+        maxResidentDocs: this.options.maxResidentDocs,
       });
       this.tx = new TransactionManager(this.store);
       this.changelog = new ChangeLog(root);
@@ -262,7 +281,7 @@ export class JSONSQLite extends EventEmitter {
       await this.catalog?.save();
       if (this.store && this.indexes && this.options.persistIndexes) {
         for (const name of this.store.loadedCollections()) {
-          await this.indexes.flushCollection(name, this.store.docsForIndex(name));
+          await this.indexes.flushCollection(name, this.store.indexStats(name));
         }
       }
       await this.indexes?.save();
@@ -322,7 +341,7 @@ export class JSONSQLite extends EventEmitter {
     await this.store!.ensureLoaded(name);
     return {
       ...info,
-      documentCount: this.store!.getAll(name).length,
+      documentCount: this.store!.indexStats(name).docCount,
     };
   }
 
@@ -461,7 +480,7 @@ export class JSONSQLite extends EventEmitter {
     this.touchCaches(to);
 
     await this.store!.ensureLoaded(to);
-    const docs = this.store!.getAll(to);
+    const docs = await this.store!.readAll(to);
     for (const meta of indexMetas) {
       await this.indexes!.createIndex(to, meta.field, meta.type, docs, {
         fields: meta.fields,
@@ -479,7 +498,10 @@ export class JSONSQLite extends EventEmitter {
   ): Promise<number> {
     this.assertReady();
     await this.store!.ensureLoaded(collection);
-    const all = this.store!.getAll(collection);
+    if (!filter || Object.keys(filter).length === 0) {
+      return this.store!.indexStats(collection).docCount;
+    }
+    const all = await this.store!.readAll(collection);
     if (!filter || Object.keys(filter).length === 0) return all.length;
     return all.filter((doc) => matchFilter(doc, filter)).length;
   }
@@ -655,7 +677,7 @@ export class JSONSQLite extends EventEmitter {
       collection,
       field,
       type,
-      this.store!.getAll(collection),
+      await this.store!.readAll(collection),
       opts,
     );
     this.touchCaches(collection);
@@ -745,7 +767,8 @@ export class JSONSQLite extends EventEmitter {
     this.assertReady();
     const inTx = !!this.tx!.active;
     if (inTx) await this.tx!.touch(collection);
-    const prev = this.store!.getById(collection, id);
+    await this.store!.ensureLoaded(collection);
+    const prev = await this.store!.getById(collection, id);
     const doc = await this.store!.update(collection, id, patch, {
       ...opts,
       durable: !inTx,
@@ -772,7 +795,8 @@ export class JSONSQLite extends EventEmitter {
     this.assertReady();
     const inTx = !!this.tx!.active;
     if (inTx) await this.tx!.touch(collection);
-    const prev = this.store!.getById(collection, id);
+    await this.store!.ensureLoaded(collection);
+    const prev = await this.store!.getById(collection, id);
     const ok = await this.store!.delete(collection, id, { durable: !inTx });
     if (ok && !inTx && prev) {
       this.indexes!.onDelete(collection, prev);
@@ -798,21 +822,36 @@ export class JSONSQLite extends EventEmitter {
   ): Promise<Document> {
     this.assertReady();
     const id = typeof data._id === 'string' ? data._id : undefined;
-    if (id && this.store!.getById(collection, id)) {
-      return this.update(collection, id, data);
+    if (id) {
+      await this.store!.ensureLoaded(collection);
+      if (await this.store!.getById(collection, id)) {
+        return this.update(collection, id, data);
+      }
     }
     return this.insert(collection, data) as Promise<Document>;
   }
 
-  async findById(collection: string, id: string): Promise<Document | null> {
+  async findById(
+    collection: string,
+    id: string,
+    opts?: QueryReadOptions,
+  ): Promise<Document | null> {
     this.assertReady();
+    if (opts?.txId !== undefined && this.tx!.isSnapshot(opts.txId)) {
+      return this.tx!.snapshotGet(opts.txId, collection, id) ?? null;
+    }
     await this.store!.ensureLoaded(collection);
-    return this.store!.getById(collection, id) ?? null;
+    return (await this.store!.getById(collection, id)) ?? null;
   }
 
-  async query(query: JsonQuery): Promise<Document[]> {
+  async query(query: JsonQuery, opts?: QueryReadOptions): Promise<Document[]> {
     this.assertReady();
     const start = Date.now();
+    if (opts?.txId !== undefined && this.tx!.isSnapshot(opts.txId)) {
+      const snapDocs = this.tx!.snapshotDocs(opts.txId, query.collection);
+      const planned = planAndExecute(snapDocs, query, [], () => []);
+      return planned.docs;
+    }
     const cacheKey = `${query.collection}::${JSON.stringify(query)}`;
     const cached = this.cache!.get(cacheKey);
     if (cached) {
@@ -841,18 +880,34 @@ export class JSONSQLite extends EventEmitter {
     }
 
     await this.store!.ensureLoaded(query.collection);
-    const all = this.store!.getAll(query.collection);
     const indexes = this.indexes!.findForCollection(query.collection);
-    const planned = planAndExecute(all, query, indexes, (ids) =>
-      ids
-        .map((id) => this.store!.getById(query.collection, id))
-        .filter((d): d is Document => !!d),
-    );
+    const indexed = planIndexIds(query, indexes);
+    let plannedDocs: Document[];
+    let usedIndex: { type: string; field: string } | undefined;
+    if (indexed) {
+      const resolved: Document[] = [];
+      for (const id of indexed.ids) {
+        const doc = await this.store!.getById(query.collection, id);
+        if (doc) resolved.push({ ...doc });
+      }
+      plannedDocs = executeJsonQuery(resolved, {
+        filter: query.filter,
+        projection: query.projection,
+        orderBy: query.orderBy,
+        limit: query.limit,
+        offset: query.offset,
+      });
+      usedIndex = indexed.usedIndex;
+    } else {
+      const all = await this.store!.readAll(query.collection);
+      const planned = planAndExecute(all, query, [], () => []);
+      plannedDocs = planned.docs;
+    }
 
-    this.cache!.set(cacheKey, planned.docs);
-    this.l2?.set(cacheKey, planned.docs);
+    this.cache!.set(cacheKey, plannedDocs);
+    this.l2?.set(cacheKey, plannedDocs);
     if (this.options.tiering) {
-      for (const doc of planned.docs) {
+      for (const doc of plannedDocs) {
         this.store!.noteAccess(query.collection, doc._id);
       }
     }
@@ -862,22 +917,20 @@ export class JSONSQLite extends EventEmitter {
       ts: Date.now(),
       collection: query.collection,
       durationMs,
-      resultCount: planned.docs.length,
-      usedIndex: planned.usedIndex
-        ? `${planned.usedIndex.type}:${planned.usedIndex.field}`
-        : undefined,
+      resultCount: plannedDocs.length,
+      usedIndex: usedIndex ? `${usedIndex.type}:${usedIndex.field}` : undefined,
     });
     if (this.autoTune?.enabled && durationMs > this.monitor.slowQueryThreshold) {
       void this.autoTune.tick(query).catch(() => undefined);
     }
-    return planned.docs;
+    return plannedDocs;
   }
 
   /** Export all documents in a collection (plain array). */
   async exportCollection(name: string): Promise<Document[]> {
     this.assertReady();
     await this.store!.ensureLoaded(name);
-    return this.store!.getAll(name).map((d) => ({ ...d }));
+    return (await this.store!.readAll(name)).map((d) => ({ ...d }));
   }
 
   /**
@@ -903,21 +956,19 @@ export class JSONSQLite extends EventEmitter {
           typeof raw._id === 'string' && raw._id ? raw._id : undefined;
         const { _id, _version, _createdAt, _updatedAt, ...rest } = raw;
         void _id;
-        void _version;
         void _createdAt;
         void _updatedAt;
         prepared.push({
           ...rest,
           _id: id ?? generateId(),
-          _version: 1,
+          _version: typeof raw._version === 'number' ? raw._version : 1,
           _createdAt: typeof raw._createdAt === 'number' ? raw._createdAt : now,
           _updatedAt: typeof raw._updatedAt === 'number' ? raw._updatedAt : now,
         } as Document);
       }
-      this.store!.replaceAll(name, prepared);
-      await this.store!.persistCollection(name);
+      await this.store!.replaceAllDurable(name, prepared);
       for (const idx of this.indexes!.findForCollection(name)) {
-        idx.build(this.store!.getAll(name));
+        idx.build(await this.store!.readAll(name));
       }
       this.touchCaches(name);
       await this.persistIndexState(name);
@@ -960,7 +1011,7 @@ export class JSONSQLite extends EventEmitter {
     const specs = normalizeOrderBy(orderBy);
 
     await this.store!.ensureLoaded(opts.collection);
-    let docs = this.store!.getAll(opts.collection);
+    let docs = await this.store!.readAll(opts.collection);
     if (opts.filter && Object.keys(opts.filter).length > 0) {
       docs = docs.filter((d) => matchFilter(d, opts.filter!));
     }
@@ -996,37 +1047,53 @@ export class JSONSQLite extends EventEmitter {
     for (const name of fromNames) {
       await this.store!.ensureLoaded(name);
     }
-    return executeAggregate(this.store!.getAll(collection), pipeline, {
-      getCollection: (name) => this.store!.getAll(name),
+    const tables = new Map<string, Document[]>();
+    tables.set(collection, await this.store!.readAll(collection));
+    for (const name of fromNames) {
+      tables.set(name, await this.store!.readAll(name));
+    }
+    return executeAggregate(tables.get(collection) ?? [], pipeline, {
+      getCollection: (name) => tables.get(name) ?? [],
     });
   }
 
   async jsonPath(collection: string, pathExpr: string): Promise<unknown[]> {
     this.assertReady();
     await this.store!.ensureLoaded(collection);
-    return selectJsonPath(this.store!.getAll(collection), pathExpr);
+    return selectJsonPath(await this.store!.readAll(collection), pathExpr);
   }
 
   async beginTransaction(
     isolationLevel: IsolationLevel = this.options.defaultIsolation,
   ): Promise<number> {
     this.assertReady();
-    return this.tx!.begin(isolationLevel);
+    const id = this.tx!.begin(isolationLevel);
+    if (isolationLevel === 'REPEATABLE_READ') {
+      const snap = new Map<string, Map<string, Document>>();
+      for (const info of this.catalog!.list()) {
+        await this.store!.ensureLoaded(info.name);
+        const docs = await this.store!.readAll(info.name);
+        const map = new Map<string, Document>();
+        for (const doc of docs) map.set(doc._id, { ...doc });
+        snap.set(info.name, map);
+      }
+      this.tx!.captureSnapshot(id, snap);
+    }
+    return id;
   }
 
   async commitTransaction(txId?: number): Promise<void> {
     this.assertReady();
-    const touched = this.tx!.active ? [...this.tx!.active.touched] : [];
-    await this.tx!.commit(txId);
-    for (const c of touched) this.touchCaches(c);
-    // Rebuild indexes for touched collections (simple & correct for v1 tx)
-    for (const c of touched) {
+    const result = await this.tx!.commit(txId);
+    if (result.kind === 'snapshot') return;
+    for (const c of result.touched) this.touchCaches(c);
+    for (const c of result.touched) {
       for (const idx of this.indexes!.findForCollection(c)) {
-        idx.build(this.store!.getAll(c));
+        idx.build(await this.store!.readAll(c));
       }
       await this.persistIndexState(c);
     }
-    this.monitor.recordWrite();
+    if (result.touched.length > 0) this.monitor.recordWrite();
   }
 
   async rollbackTransaction(txId?: number): Promise<void> {
@@ -1039,7 +1106,7 @@ export class JSONSQLite extends EventEmitter {
     const collections: Record<string, Document[]> = {};
     for (const info of this.catalog!.list()) {
       await this.store!.ensureLoaded(info.name);
-      collections[info.name] = this.store!.getAll(info.name);
+      collections[info.name] = await this.store!.readAll(info.name);
     }
     const info = await this.backup!.fullBackup(collections);
     this.lastBackupTs = info.timestamp;
@@ -1058,13 +1125,55 @@ export class JSONSQLite extends EventEmitter {
     return info;
   }
 
-  async restoreBackup(file: string): Promise<void> {
+  async restoreBackup(
+    file: string,
+    opts?: { collection?: string },
+  ): Promise<void> {
+    await this.restoreChain({ type: 'full', file, collection: opts?.collection });
+  }
+
+  /**
+   * Restore a full backup, or a full backup plus incrementals in order.
+   * Checksums are verified before any collection is written.
+   * `collection` restores only that collection from the full backup.
+   */
+  async restoreChain(opts: {
+    type: 'full' | 'incremental';
+    file?: string;
+    collection?: string;
+  }): Promise<void> {
     this.assertReady();
-    const collections = await this.backup!.restoreFull(file);
+    const list = await this.backup!.list();
+    const plan = this.backup!.resolveChain(list, opts.type, opts.file);
+    const decoded: (FullPayload | IncPayload)[] = [];
+    for (const info of plan) {
+      decoded.push(await this.backup!.readVerified(info));
+    }
+    const full = decoded[0];
+    if (!full || full.type !== 'full') {
+      throw new JSONSQLiteError(
+        ErrorCode.BACKUP_BASELINE,
+        'Restore plan did not start with a full backup',
+      );
+    }
+    const collections: Record<string, Document[]> = {};
+    const names = opts.collection ? [opts.collection] : Object.keys(full.collections);
+    for (const name of names) {
+      if (!(name in full.collections)) {
+        throw new JSONSQLiteError(
+          ErrorCode.COLLECTION_NOT_FOUND,
+          `Collection ${name} is not in the full backup`,
+        );
+      }
+      collections[name] = full.collections[name]!.map((d) => ({ ...d }));
+    }
+    for (const payload of decoded.slice(1)) {
+      if (payload.type !== 'incremental') continue;
+      applyIncrementalChanges(collections, payload.changes, opts.collection);
+    }
     for (const [name, docs] of Object.entries(collections)) {
       await this.catalog!.ensure(name);
-      this.store!.replaceAll(name, docs);
-      await this.store!.persistCollection(name);
+      await this.store!.replaceAllDurable(name, docs);
       for (const idx of this.indexes!.findForCollection(name)) {
         idx.build(docs);
       }
@@ -1082,7 +1191,7 @@ export class JSONSQLite extends EventEmitter {
     await this.store!.ensureLoaded(collection);
     const changes = await this.changelog!.readSince(collection, 0);
     const at = reconstructAtTime(
-      this.store!.getAll(collection),
+      await this.store!.readAll(collection),
       changes,
       timestamp,
     );
@@ -1099,8 +1208,7 @@ export class JSONSQLite extends EventEmitter {
   async rollbackToTime(collection: string, timestamp: number): Promise<void> {
     this.assertReady();
     const docs = await this.queryAtTime(collection, timestamp);
-    this.store!.replaceAll(collection, docs);
-    await this.store!.persistCollection(collection);
+    await this.store!.replaceAllDurable(collection, docs);
     for (const idx of this.indexes!.findForCollection(collection)) {
       idx.build(docs);
     }
@@ -1151,9 +1259,10 @@ export class JSONSQLite extends EventEmitter {
     return new StreamProcessor(this);
   }
 
-  analyzeQuality(collection: string, requiredFields: string[] = []) {
+  async analyzeQuality(collection: string, requiredFields: string[] = []) {
     this.assertReady();
-    return analyzeQuality(this.store!.getAll(collection), requiredFields);
+    await this.store!.ensureLoaded(collection);
+    return analyzeQuality(await this.store!.readAll(collection), requiredFields);
   }
 
   getMetrics() {
@@ -1184,6 +1293,12 @@ export class JSONSQLite extends EventEmitter {
     };
   }
 
+  /** Page cache budget and how many page files have been read. */
+  pagingStats() {
+    this.assertReady();
+    return this.store!.pagingSnapshot();
+  }
+
   /** Index segment load / rebuild counters (1.8). */
   indexPersistence() {
     this.assertReady();
@@ -1201,9 +1316,9 @@ export class JSONSQLite extends EventEmitter {
       : (await this.listTables()).map((t) => t.name);
     for (const name of names) {
       await this.store!.ensureLoaded(name);
-      const docs = this.store!.docsForIndex(name);
+      const docs = await this.store!.readAll(name);
       this.indexes!.rebuildCollection(name, docs);
-      await this.indexes!.flushCollection(name, docs);
+      await this.indexes!.flushCollection(name, this.store!.indexStats(name));
     }
     return { collections: names };
   }
@@ -1290,8 +1405,8 @@ export class JSONSQLite extends EventEmitter {
 
     await this.store!.ensureLoaded(stmt.table);
     await this.store!.ensureLoaded(join.table);
-    const leftDocs = this.store!.getAll(stmt.table);
-    const rightDocs = this.store!.getAll(join.table);
+    const leftDocs = await this.store!.readAll(stmt.table);
+    const rightDocs = await this.store!.readAll(join.table);
 
     const onLeft = qualifyJoinField(join.onLeft, leftAlias, rightAlias, 'left');
     const onRight = qualifyJoinField(
@@ -1438,7 +1553,7 @@ export class JSONSQLite extends EventEmitter {
       );
     }
     await this.store!.ensureLoaded(stmt.table);
-    let docs = this.store!.getAll(stmt.table);
+    let docs = await this.store!.readAll(stmt.table);
     if (stmt.filter && Object.keys(stmt.filter).length > 0) {
       docs = docs.filter((d) => matchFilter(d, stmt.filter!));
     }
@@ -1490,7 +1605,7 @@ export class JSONSQLite extends EventEmitter {
     if (!this.options.persistIndexes) return;
     await this.indexes!.flushCollection(
       collection,
-      this.store!.docsForIndex(collection),
+      this.store!.indexStats(collection),
     );
   }
 
@@ -1510,6 +1625,21 @@ async function pathExists(p: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+function applyIncrementalChanges(
+  collections: Record<string, Document[]>,
+  changes: ChangeEntry[],
+  only?: string,
+): void {
+  for (const change of changes) {
+    if (only && change.collection !== only) continue;
+    const list = collections[change.collection] ?? [];
+    const map = new Map(list.map((doc) => [doc._id, doc]));
+    if (change.op === 'delete') map.delete(change.id);
+    else if (change.after) map.set(change.id, { ...change.after });
+    collections[change.collection] = [...map.values()];
   }
 }
 

@@ -5,8 +5,12 @@ import type { CollectionInfo, FieldDef, SyncMode } from '../types/index.js';
 import { catalogFile, collectionDir } from '../utils/path.js';
 import { writeFileAtomic } from '../utils/fsDurable.js';
 
-/** Current on-disk catalog format. Bump only with a migration entry. */
-export const FORMAT_VERSION = 1;
+/**
+ * Current on-disk catalog format.
+ * 1 = 1.x monolithic data.jsonl (open refuses; use migrate).
+ * 2 = paged documents (pages.json + pages/pNNNNNN.jsonl).
+ */
+export const FORMAT_VERSION = 2;
 
 interface CatalogCollection {
   name: string;
@@ -63,6 +67,12 @@ export class Catalog {
         throw new JSONSQLiteError(
           ErrorCode.INTERNAL,
           'catalog.json missing formatVersion',
+        );
+      }
+      if (data.formatVersion < FORMAT_VERSION) {
+        throw new JSONSQLiteError(
+          ErrorCode.MIGRATION_REQUIRED,
+          `formatVersion ${data.formatVersion} cannot be opened by this release; run \`jsonsqlite migrate --from <db> --to <new> --yes\``,
         );
       }
       data = migrateCatalog(data);

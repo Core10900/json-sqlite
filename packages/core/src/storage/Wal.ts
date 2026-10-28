@@ -112,29 +112,17 @@ export class Wal {
       throw err;
     }
 
-    const entries: WalEntry[] = [];
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        if (isEncryptedLine(line) && !this.encKey) {
-          throw new JSONSQLiteError(
-            ErrorCode.ENCRYPTION,
-            'Encrypted WAL requires encryptionKey / JSONSQLITE_KEY',
-          );
-        }
-        const plain = decryptLine(line, this.encKey);
-        const entry = JSON.parse(plain) as WalEntry;
-        const { checksum, ...rest } = entry;
-        const expected = checksumOf({ ...rest, checksum: '' } as WalEntry);
-        if (checksum !== expected) continue;
-        if (entry.committed) entries.push(entry);
-        this.seq = Math.max(this.seq, entry.seq);
-      } catch (err) {
-        if (err instanceof JSONSQLiteError) throw err;
-        // skip corrupt line
-      }
+    const diag = diagnoseWalText(raw, this.encKey);
+    if (diag.issues.length > 0) {
+      const first = diag.issues[0]!;
+      throw new JSONSQLiteError(
+        ErrorCode.WAL_CORRUPT,
+        `WAL corrupt at line ${first.line} (${first.kind}) in ${collection}; refusing to skip committed records`,
+        { collection, line: first.line, kind: first.kind, issues: diag.issues },
+      );
     }
-    return entries;
+    this.seq = Math.max(this.seq, diag.maxSeq);
+    return diag.committed;
   }
 
   private encodeLine(json: string): string {
@@ -156,4 +144,123 @@ export class Wal {
 function checksumOf(entry: WalEntry): string {
   const copy = { ...entry, checksum: '' };
   return createHash('sha256').update(JSON.stringify(copy)).digest('hex').slice(0, 16);
+}
+
+export interface WalLineIssue {
+  line: number;
+  kind: 'parse' | 'checksum';
+  message: string;
+}
+
+export interface WalDiagnosis {
+  /** Incomplete final fragment (file does not end with a newline). Discarded. */
+  tornTail: boolean;
+  /** Complete lines that failed parse or checksum. Any issue is fail-closed. */
+  issues: WalLineIssue[];
+  committed: WalEntry[];
+  maxSeq: number;
+}
+
+class WalIntegrityError extends Error {
+  constructor(
+    readonly kind: 'parse' | 'checksum',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'WalIntegrityError';
+  }
+}
+
+/**
+ * A record is a complete line only when it is terminated by `\n`.
+ * A trailing fragment without a newline is a torn tail and is not parsed.
+ */
+export function splitWalRecords(raw: string): { complete: string[]; tornTail: boolean } {
+  if (raw.length === 0) return { complete: [], tornTail: false };
+  const tornTail = !raw.endsWith('\n');
+  const parts = raw.split('\n');
+  parts.pop();
+  return {
+    complete: parts.filter((line) => line.trim().length > 0),
+    tornTail,
+  };
+}
+
+export function diagnoseWalText(raw: string, encKey: Buffer | null): WalDiagnosis {
+  const { complete, tornTail } = splitWalRecords(raw);
+  const issues: WalLineIssue[] = [];
+  const committed: WalEntry[] = [];
+  let maxSeq = 0;
+  for (let i = 0; i < complete.length; i++) {
+    try {
+      const entry = parseWalLine(complete[i]!, encKey);
+      maxSeq = Math.max(maxSeq, entry.seq);
+      if (entry.committed) committed.push(entry);
+    } catch (err) {
+      if (err instanceof JSONSQLiteError) throw err;
+      const kind = err instanceof WalIntegrityError ? err.kind : 'parse';
+      issues.push({
+        line: i + 1,
+        kind,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return { tornTail, issues, committed, maxSeq };
+}
+
+export async function diagnoseWalDirectory(
+  storagePath: string,
+  encKey: Buffer | null,
+): Promise<{ collection: string; tornTail: boolean; issues: WalLineIssue[] }[]> {
+  const dir = path.join(storagePath, 'wal');
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  const out: { collection: string; tornTail: boolean; issues: WalLineIssue[] }[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.wal')) continue;
+    const raw = await fs.readFile(path.join(dir, name), 'utf8');
+    const diag = diagnoseWalText(raw, encKey);
+    out.push({
+      collection: name.slice(0, -'.wal'.length),
+      tornTail: diag.tornTail,
+      issues: diag.issues,
+    });
+  }
+  return out;
+}
+
+function parseWalLine(line: string, encKey: Buffer | null): WalEntry {
+  if (isEncryptedLine(line) && !encKey) {
+    throw new JSONSQLiteError(
+      ErrorCode.ENCRYPTION,
+      'Encrypted WAL requires encryptionKey / JSONSQLITE_KEY',
+    );
+  }
+  let plain: string;
+  try {
+    plain = decryptLine(line, encKey);
+  } catch (err) {
+    if (err instanceof JSONSQLiteError) throw err;
+    throw new WalIntegrityError('parse', 'unable to decode WAL line');
+  }
+  let entry: WalEntry;
+  try {
+    entry = JSON.parse(plain) as WalEntry;
+  } catch {
+    throw new WalIntegrityError('parse', 'WAL line is not JSON');
+  }
+  if (!entry || typeof entry !== 'object' || typeof entry.op !== 'string') {
+    throw new WalIntegrityError('parse', 'WAL line is missing op');
+  }
+  const expected = checksumOf({ ...entry, checksum: '' });
+  if (entry.checksum !== expected) {
+    throw new WalIntegrityError('checksum', 'WAL checksum mismatch');
+  }
+  return entry;
 }

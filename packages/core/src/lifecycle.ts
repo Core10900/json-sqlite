@@ -13,10 +13,12 @@ declare const __JSONSQLITE_VERSION__: string;
 export interface CompatibilityInfo {
   version: string;
   formatVersion: number;
-  /** True only on an LTS line (1.6.x / future 2.2 / 3.0). 1.7 is not LTS. */
+  /** True only on an LTS line (1.6.x / future 2.2). 2.0 is not LTS. */
   lts: boolean;
   /** CLI command surface generation. */
   cliSurface: string;
+  /** 2.0 keeps a single writer. */
+  writers: 'single';
   features: string[];
 }
 
@@ -49,7 +51,8 @@ export function getCompatibilityInfo(): CompatibilityInfo {
     version: getVersion(),
     formatVersion: FORMAT_VERSION,
     lts: false,
-    cliSurface: '1.8.0',
+    cliSurface: '2.0.0',
+    writers: 'single',
     features: [
       'encryption',
       'sql-like-join-count',
@@ -60,6 +63,7 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'cli-1.5.5',
       'cli-1.7',
       'cli-1.8',
+      'cli-2.0',
       'admin-sse',
       'composite-index',
       'aggregate-unwind-lookup',
@@ -70,6 +74,11 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'compression',
       'tiering',
       'group-by-count',
+      'single-writer',
+      'repeatable-read',
+      'paged-storage',
+      'backup-chain',
+      'wal-fail-closed',
     ],
   };
 }

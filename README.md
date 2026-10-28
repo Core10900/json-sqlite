@@ -1,6 +1,6 @@
 # JSONSQLite
 
-**版本：1.8.0** · **LTS pin：1.6.x** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：2.0.0**（非 LTS） · **LTS pin：1.6.x** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
 
@@ -542,7 +542,7 @@ const advice = db.advise({
 });
 
 // 数据质量（完整度等）
-const quality = db.analyzeQuality("users", ["name", "age"]);
+const quality = await db.analyzeQuality("users", ["name", "age"]);
 ```
 
 错误类型：

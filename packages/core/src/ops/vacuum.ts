@@ -19,7 +19,7 @@ export async function vacuumDatabase(
   for (const name of names) {
     await db._store.ensureLoaded(name);
     await db._store.persistCollection(name);
-    documentCounts[name] = db._store.getAll(name).length;
+    documentCounts[name] = db._store.indexStats(name).docCount;
   }
 
   return {

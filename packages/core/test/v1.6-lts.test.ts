@@ -317,7 +317,8 @@ describe('v1.6.0 LTS behavior freeze', () => {
     const storagePath = await tmpDir();
     await create({ storagePath });
     const db = await open({ storagePath });
-    expect(FORMAT_VERSION).toBe(1);
+    expect(FORMAT_VERSION).toBeGreaterThanOrEqual(1);
+    if (getVersion().startsWith('1.')) expect(FORMAT_VERSION).toBe(1);
     await db.close();
   });
 

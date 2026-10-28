@@ -14,6 +14,8 @@ export type {
 export { JSONSQLiteError, ErrorCode } from './errors.js';
 export { parseSql } from './sql/parse.js';
 export { rekeyDatabase } from './ops/rekey.js';
+export { migrateDatabase } from './ops/migrate.js';
+export type { MigrateDatabaseOptions, MigrateDatabaseResult } from './ops/migrate.js';
 export type { AggregateStage, AggregateField, AggregateOp } from './query/Aggregate.js';
 export type { BackupInfo } from './backup/BackupManager.js';
 export type { Advice } from './features/QueryAdvisor.js';
@@ -52,6 +54,7 @@ export type {
   SchemaMode,
   QueryCursorOptions,
   QueryCursorResult,
+  QueryReadOptions,
   ImportCollectionOptions,
   RekeyOptions,
   RekeyResult,

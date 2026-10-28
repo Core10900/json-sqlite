@@ -97,14 +97,14 @@ export class IndexManager {
    */
   trustSegment(
     collection: string,
-    docs: Document[],
+    stats: { docCount: number; revisionSum: number },
     walReplay: boolean,
   ): boolean {
     if (!this.persistSegments || walReplay) return false;
     const list = this.findForCollection(collection);
     if (list.length === 0) return true;
-    const docCount = docs.length;
-    const rev = revisionSum(docs);
+    const docCount = stats.docCount;
+    const rev = stats.revisionSum;
     for (const idx of list) {
       const k = this.key(idx.meta.collection, idx.meta.field);
       const stamp = this.segmentMeta.get(k);
@@ -125,12 +125,15 @@ export class IndexManager {
     for (const idx of list) idx.build(docs);
   }
 
-  async flushCollection(collection: string, docs: Document[]): Promise<void> {
+  async flushCollection(
+    collection: string,
+    stats: { docCount: number; revisionSum: number },
+  ): Promise<void> {
     if (!this.persistSegments) return;
     const list = this.findForCollection(collection);
     if (list.length === 0) return;
     for (const idx of list) {
-      await this.writeSegment(idx, docs);
+      await this.writeSegment(idx, stats);
     }
     await this.save();
   }
@@ -216,7 +219,10 @@ export class IndexManager {
     const idx = this.createInstance(meta);
     idx.build(docs);
     this.indexes.set(k, idx);
-    await this.writeSegment(idx, docs);
+    await this.writeSegment(idx, {
+      docCount: docs.length,
+      revisionSum: revisionSum(docs),
+    });
     await this.save();
     return { ...meta };
   }
@@ -295,14 +301,17 @@ export class IndexManager {
     }
   }
 
-  private async writeSegment(idx: Index, docs: Document[]): Promise<void> {
+  private async writeSegment(
+    idx: Index,
+    stats: { docCount: number; revisionSum: number },
+  ): Promise<void> {
     if (!this.persistSegments) return;
     const k = this.key(idx.meta.collection, idx.meta.field);
     const body: SegmentBody = {
       format: INDEX_SEGMENT_FORMAT,
       meta: idx.meta,
-      docCount: docs.length,
-      revisionSum: revisionSum(docs),
+      docCount: stats.docCount,
+      revisionSum: stats.revisionSum,
       snapshot: idx.exportEntries(),
     };
     const checksum = checksumBody(body);

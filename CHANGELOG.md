@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.0.0 — 2026-10-28
+
+**非 LTS。** 默认仍是单写者。本版不包含多写者、复制、列存、插件。
+
+### Breaking
+- `formatVersion` 升到 **2**（分页）。1.x 库必须 `migrate --from --to --yes`，`open` 对 format 1 抛 `MIGRATION_REQUIRED`
+- `SERIALIZABLE` / `READ_UNCOMMITTED` 不再静默降级：`begin` 抛 `ISOLATION_UNSUPPORTED`，作为 `defaultIsolation` 抛 `INVALID_CONFIG`
+- 文档正文在 `pages/pNNNNNN.jsonl`，不再把整表载入堆。`pageSize`（默认 32）与 `maxResidentDocs`（默认 256）
+- 备份恢复校验 manifest checksum；不符抛 `BACKUP_CHECKSUM` 且不写目标。增量缺全量基线抛 `BACKUP_BASELINE`
+- WAL 中间坏行抛 `WAL_CORRUPT` 并拒绝打开。只有缺少换行的尾部残行可以丢弃
+- 非 loopback 的 Admin 必须同时有 token 和 TLS 材料
+
+### Added
+- `REPEATABLE_READ`：`begin` 建立快照，可与一个写事务并存。`query(q, { txId })` / `findById(col, id, { txId })` 不看见之后的提交
+- `restoreChain({ type: 'full' | 'incremental', collection?, file? })`
+- `migrateDatabase({ from, to, yes, encryptionKey })`
+- CLI：`migrate --from --to --yes`；`backup restore --type full|incremental [--collection]`
+- `pagingStats()`、`getCompatibilityInfo().writers === 'single'`
+- §12.3 六场景写入 `apps/bench` 与 `devDocs/releases/v2.0/性能包络.md`
+
 ## 1.8.0 — 2026-10-27
 
 ### Added

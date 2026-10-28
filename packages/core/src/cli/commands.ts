@@ -2,6 +2,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { create, init } from '../lifecycle.js';
 import { rekeyDatabase, resolveRekeyKeys } from '../ops/rekey.js';
+import { migrateDatabase } from '../ops/migrate.js';
+import { diagnoseWalDirectory } from '../storage/Wal.js';
+import { resolveEncryptionKey } from '../config/defaults.js';
 import { ErrorCode } from '../errors.js';
 import type { FieldDef, FieldType, FilterCondition, JsonQuery } from '../types/index.js';
 import {
@@ -117,7 +120,9 @@ export async function dispatch(argv: string[]): Promise<void> {
     case 'query':
       return cmdQuery(ctx, rest);
     case 'backup':
-      return cmdBackup(ctx);
+      return cmdBackup(ctx, rest);
+    case 'migrate':
+      return cmdMigrate(ctx, rest, globals);
     case 'vacuum':
       return cmdVacuum(ctx, rest, globals);
     case 'rekey':
@@ -946,10 +951,71 @@ async function cmdQuery(ctx: CliContext, rest: string[]): Promise<void> {
   });
 }
 
-async function cmdBackup(ctx: CliContext): Promise<void> {
+async function cmdBackup(ctx: CliContext, rest: string[]): Promise<void> {
+  const sub = positional(rest);
+  if (sub === 'restore') {
+    const typeRaw = flag(rest, '--type') ?? 'full';
+    if (typeRaw !== 'full' && typeRaw !== 'incremental') {
+      fail(ctx.out, '--type 必须是 full 或 incremental', 'USAGE');
+    }
+    const collection = flagAny(rest, ['--collection', '--table']);
+    const file = flag(rest, '--file');
+    await withDb(ctx, async (db) => {
+      await db.restoreChain({
+        type: typeRaw,
+        ...(collection ? { collection } : {}),
+        ...(file ? { file } : {}),
+      });
+      printSuccess(ctx.out, `✓ restore ${typeRaw}${collection ? ` ${collection}` : ''}`, {
+        action: 'backup.restore',
+        type: typeRaw,
+        collection: collection ?? null,
+        file: file ?? null,
+      });
+    });
+    return;
+  }
   await withDb(ctx, async (db) => {
     const info = await db.backupFull();
     printSuccess(ctx.out, `✓ backup ${info.file}`, { action: 'backup', ...info });
+  });
+}
+
+async function cmdMigrate(
+  ctx: CliContext,
+  rest: string[],
+  g: GlobalFlags,
+): Promise<void> {
+  const from = flag(rest, '--from');
+  const to = flag(rest, '--to');
+  const yes = g.yes || hasFlag(rest, '--yes', '-y');
+  if (!from || !to) {
+    fail(
+      ctx.out,
+      '用法: jsonsqlite migrate --from <db> --to <new> --yes',
+      'USAGE',
+      ExitCode.USAGE,
+      'jsonsqlite migrate --from ./data --to ./data-v2 --yes',
+    );
+  }
+  if (!yes) {
+    fail(
+      ctx.out,
+      'migrate 需要 --yes（非 TTY 同样必须显式确认）',
+      'USAGE',
+      ExitCode.USAGE,
+      'jsonsqlite migrate --from <db> --to <new> --yes',
+    );
+  }
+  const result = await migrateDatabase({
+    from,
+    to,
+    encryptionKey: flag(rest, '--from-key') ?? flag(rest, '--to-key') ?? null,
+    yes: true,
+  });
+  printSuccess(ctx.out, `✓ migrate → ${result.storagePath}`, {
+    action: 'migrate',
+    ...result,
   });
 }
 
@@ -1018,6 +1084,29 @@ async function cmdRekey(
 
 async function cmdDoctor(ctx: CliContext, rest: string[]): Promise<void> {
   const deep = hasFlag(rest, '--deep');
+  let walFiles: Awaited<ReturnType<typeof diagnoseWalDirectory>> = [];
+  try {
+    walFiles = await diagnoseWalDirectory(ctx.storagePath, resolveEncryptionKey(null));
+  } catch (err) {
+    if (err instanceof Error && 'code' in err) {
+      /* open path will report it */
+    }
+  }
+  const middle = walFiles.filter((f) => f.issues.length > 0);
+  if (middle.length > 0) {
+    printData(ctx.out, JSON.stringify({ wal: walFiles }, null, 2), {
+      action: 'doctor',
+      status: 'unhealthy',
+      wal: walFiles.map((f) => ({
+        collection: f.collection,
+        kind: 'middle',
+        tornTail: f.tornTail,
+        issues: f.issues,
+      })),
+    });
+    setExit(ExitCode.USAGE);
+    return;
+  }
   await withDb(ctx, async (db) => {
     const storage = db.storageSummary();
     if (deep) {
@@ -1054,8 +1143,25 @@ async function cmdAdmin(ctx: CliContext, rest: string[]): Promise<void> {
   const host = flag(args, '--host') ?? '127.0.0.1';
   const port = Number(flag(args, '--port') ?? '3000');
   const token = flag(args, '--token') ?? null;
+  const certPath = flag(args, '--cert');
+  const keyPath = flag(args, '--key');
+  if ((certPath && !keyPath) || (!certPath && keyPath)) {
+    fail(ctx.out, 'admin serve 需要同时提供 --cert 与 --key', 'USAGE');
+  }
+  const tls =
+    certPath && keyPath
+      ? {
+          cert: await fs.readFile(certPath),
+          key: await fs.readFile(keyPath),
+        }
+      : null;
   await withDb(ctx, async (db) => {
-    const server = await db.startServer({ host, port, adminToken: token });
+    const server = await db.startServer({
+      host,
+      port,
+      adminToken: token,
+      tls,
+    });
     const addr = `http://${host}:${port}/admin`;
     printSuccess(ctx.out, `✓ admin listening ${addr}`, {
       action: 'admin.serve',

@@ -34,7 +34,8 @@ describe('v1.3.0 harden', () => {
       await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { version: string };
     expect(getVersion()).toBe(pkg.version);
-    expect(FORMAT_VERSION).toBe(1);
+    if (pkg.version.startsWith('1.')) expect(FORMAT_VERSION).toBe(1);
+    else expect(FORMAT_VERSION).toBe(2);
   });
 
   it('FT-V13-CAT atomic catalog write', async () => {
@@ -44,7 +45,7 @@ describe('v1.3.0 harden', () => {
     await db.createTable('a');
     await db.close();
     const raw = await fs.readFile(catalogFile(storagePath), 'utf8');
-    expect(JSON.parse(raw).formatVersion).toBe(1);
+    expect(JSON.parse(raw).formatVersion).toBe(FORMAT_VERSION);
     expect(JSON.parse(raw).collections.a).toBeTruthy();
   });
 
@@ -149,13 +150,13 @@ describe('v1.3.0 harden', () => {
     await db.close();
   });
 
-  it('FT-V13-ISO coerce unsupported isolation', async () => {
+  it('FT-V13-ISO unsupported isolation is rejected', async () => {
     const storagePath = path.join(await tmpDir(), 'db');
     await create({ storagePath });
     const db = await open({ storagePath });
-    const id = await db.beginTransaction('SERIALIZABLE');
-    expect(typeof id).toBe('number');
-    await db.rollbackTransaction(id);
+    await expect(db.beginTransaction('SERIALIZABLE')).rejects.toMatchObject({
+      code: ErrorCode.ISOLATION_UNSUPPORTED,
+    });
     await db.close();
   });
 

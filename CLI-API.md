@@ -12,7 +12,7 @@
 
 ```bash
 npm install -g @webofcat/jsonsqlite
-jsonsqlite --version    # => 1.8.0（1.6.x LTS 契约仍适用；见 §13 / §14 增补）
+jsonsqlite --version    # => 2.0.0（非 LTS；1.6.x 仍是当前 LTS pin。见 §15）
 jsql --version          # 同入口别名
 ```
 
@@ -257,4 +257,21 @@ jsonsqlite insert|update|delete|index|sql --help
 | `doctor --json` | ✅ | 增加 `indexSegments`、`compression`、`tiering`、`l2` |
 | `stats --json` | ✅ | 增加 `l2`、`tiers`、`compression` |
 
-`index --help` 含 `index rebuild [table]`。损坏段时 `doctor` 的 `index-segments` 检查为失败，数据仍可按 rebuild 恢复。  
+`index --help` 含 `index rebuild [table]`。损坏段时 `doctor` 的 `index-segments` 检查为失败，数据仍可按 rebuild 恢复。
+
+---
+
+## 15. 2.0 破坏清单（迁移与恢复）
+
+> **2.0.0 非 LTS，仍是单写者。** 本版**不**加入 `plugin`、`replica`、`cluster` 命令。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `migrate --from <db> --to <new> --yes` | 必须 `--yes`，否则 exit 1 | 1.x → formatVersion 2。成功 exit 0。失败不留半成品目标。再次执行时，无 `--yes` 拒绝覆盖 |
+| `backup restore --type full\|incremental` | ✅ | 与库 `restoreChain` 同一条路径。checksum 不符 exit 1，目标不变 |
+| `backup restore --collection <name>` | ✅ | 只恢复该集合 |
+| `doctor` | ✅ | 尾部撕裂（`torn-tail`）与中间损坏（`middle`）分开报告。中间损坏时不打开库，exit 非 0 |
+| `admin serve --host <non-loopback> --token --cert --key` | 缺 token 或 TLS 则 exit 1 | loopback 仍可省略 token，并打印警告 |
+
+相对 1.8：`SERIALIZABLE` / `READ_UNCOMMITTED` 不再降级；分页布局见 API.md「2.0」。
+  

@@ -84,7 +84,12 @@ export function mapErrorToExit(err: unknown): ExitCode {
       err.code === ErrorCode.DB_EXISTS ||
       err.code === ErrorCode.DB_NOT_FOUND ||
       err.code === ErrorCode.ENCRYPTION ||
-      err.code === ErrorCode.SCHEMA_VIOLATION
+      err.code === ErrorCode.SCHEMA_VIOLATION ||
+      err.code === ErrorCode.MIGRATION_REQUIRED ||
+      err.code === ErrorCode.BACKUP_CHECKSUM ||
+      err.code === ErrorCode.BACKUP_BASELINE ||
+      err.code === ErrorCode.ISOLATION_UNSUPPORTED ||
+      err.code === ErrorCode.WAL_CORRUPT
     ) {
       return ExitCode.USAGE;
     }

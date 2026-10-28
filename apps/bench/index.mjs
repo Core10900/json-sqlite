@@ -10,6 +10,9 @@ const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'jsonsqlite-bench-'));
 const here = path.dirname(fileURLToPath(import.meta.url));
 const baselinePath = path.join(here, 'baseline.json');
 const factorsPath = path.join(here, 'thresholds.json');
+const pkg = JSON.parse(
+  await fs.readFile(path.join(here, '../../packages/core/package.json'), 'utf8'),
+);
 
 function hr() {
   return process.hrtime.bigint();
@@ -22,6 +25,7 @@ const db = await open({
   storagePath: dir,
   lazyCollections: true,
   persistIndexes: true,
+  syncMode: 'none',
 });
 
 const tInsert = hr();
@@ -37,6 +41,7 @@ const insertMs = ms(tInsert);
 
 await db.createIndex('users', 'age', 'tree');
 await db.createIndex('users', 'name', 'object');
+await db.createIndex('users', 'bio', 'inverted');
 
 const tPoint = hr();
 const pointN = Math.min(1000, N);
@@ -52,6 +57,14 @@ await db.query({
 });
 const rangeMs = ms(tRange);
 
+const tText = hr();
+await db.query({
+  collection: 'users',
+  filter: { bio: { $contains: 'hello' } },
+  limit: 20,
+});
+const fulltextMs = ms(tText);
+
 const tConc = hr();
 await Promise.all(
   Array.from({ length: Math.min(20, N) }, (_, i) =>
@@ -59,6 +72,14 @@ await Promise.all(
   ),
 );
 const concurrentReadMs = ms(tConc);
+
+const tWrite = hr();
+await Promise.all(
+  Array.from({ length: Math.min(20, N) }, (_, i) =>
+    db.insert('writes', { n: i, name: `w${i}` }),
+  ),
+);
+const concurrentWriteMs = ms(tWrite);
 
 const u0 = (await db.query({ collection: 'users', filter: { name: 'u0' } }))[0];
 await db.insert('orders', [
@@ -100,13 +121,15 @@ try {
 const factors = JSON.parse(await fs.readFile(factorsPath, 'utf8'));
 
 const result = {
-  version: '1.8.0',
+  version: pkg.version,
   N,
   insertMs: Number(insertMs.toFixed(2)),
   insertPerSec: Math.round(N / (insertMs / 1000)),
   pointQueryAvgMs: Number(pointMs.toFixed(4)),
   rangeQueryMs: Number(rangeMs.toFixed(2)),
+  fulltextMs: Number(fulltextMs.toFixed(2)),
   concurrentReadMs: Number(concurrentReadMs.toFixed(2)),
+  concurrentWriteMs: Number(concurrentWriteMs.toFixed(2)),
   joinMs: Number(joinMs.toFixed(2)),
   reopenMs: Number(reopenMs.toFixed(2)),
   rebuildMs: Number(rebuildMs.toFixed(2)),

@@ -4,6 +4,8 @@ import { open as fsOpen } from 'node:fs/promises';
 
 export type SyncMode = 'none' | 'normal' | 'full';
 
+let atomicSeq = 0;
+
 /** Write file via tmp + rename; optionally fsync file and parent directory. */
 export async function writeFileAtomic(
   file: string,
@@ -11,7 +13,7 @@ export async function writeFileAtomic(
   syncMode: SyncMode = 'normal',
 ): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
+  const tmp = `${file}.tmp.${process.pid}.${atomicSeq++}.${Date.now()}`;
   try {
     const handle = await fsOpen(tmp, 'w');
     try {

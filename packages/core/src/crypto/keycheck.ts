@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
-import { docsFile } from '../utils/path.js';
+import { docsFile, pageFile } from '../utils/path.js';
 import { decryptLine, encryptLine, isEncryptedLine } from './aes.js';
 
 const MAGIC = 'jsonsqlite-key-ok';
@@ -36,9 +36,13 @@ export async function verifyEncryptionKey(
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
 
-  for (const name of collectionNames) {
+  const probes = [
+    ...collectionNames.map((name) => docsFile(storagePath, name)),
+    ...collectionNames.map((name) => pageFile(storagePath, name, 1)),
+  ];
+  for (const file of probes) {
     try {
-      const raw = await fs.readFile(docsFile(storagePath, name), 'utf8');
+      const raw = await fs.readFile(file, 'utf8');
       for (const line of raw.split('\n')) {
         if (!line.trim()) continue;
         if (isEncryptedLine(line)) {
