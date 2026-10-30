@@ -31,8 +31,16 @@ import {
   normalizeOrderBy,
 } from '../query/JsonQuery.js';
 import { TransactionManager } from '../transaction/TransactionManager.js';
-import { BackupManager, type BackupInfo, type FullPayload, type IncPayload } from '../backup/BackupManager.js';
+import {
+  BackupManager,
+  type BackupInfo,
+  type BackupPayload,
+  type BackupType,
+  type PruneOptions,
+  type PruneResult,
+} from '../backup/BackupManager.js';
 import { Monitor } from '../monitor/Monitor.js';
+import { AlertManager, type AlertEvent } from '../monitor/Alerts.js';
 import {
   diffDocs,
   queryAtTime,
@@ -50,6 +58,8 @@ import { verifyEncryptionKey, writeKeycheck } from '../crypto/keycheck.js';
 import { recoverRekeyIfNeeded } from '../ops/rekeyJournal.js';
 import { runDoctor } from '../ops/doctor.js';
 import { vacuumDatabase } from '../ops/vacuum.js';
+import { AuditLog, type AuditEntry } from '../ops/audit.js';
+import { repairDatabase, type RepairOptions, type RepairResult } from '../ops/repair.js';
 import { generateId } from '../utils/id.js';
 import { collectionDir, walFile } from '../utils/path.js';
 import type {
@@ -90,8 +100,11 @@ export class JSONSQLite extends EventEmitter {
   private backup: BackupManager | null = null;
   private ddlJournal: DdlJournal | null = null;
   private monitor = new Monitor();
+  private alerts: AlertManager | null = null;
+  private audit: AuditLog | null = null;
   private autoTune: AutoTune | null = null;
   private httpServer: http.Server | null = null;
+  private backupTimer: ReturnType<typeof setInterval> | null = null;
   private ready = false;
   private lastBackupTs = 0;
 
@@ -216,6 +229,8 @@ export class JSONSQLite extends EventEmitter {
         : null;
       this.backup = new BackupManager(root, this.encKey);
       this.ddlJournal = new DdlJournal(root, sync);
+      this.audit = new AuditLog(root, sync);
+      this.alerts = new AlertManager(this, this.options.alerts);
 
       await this.recoverDdlJournal();
 
@@ -223,6 +238,12 @@ export class JSONSQLite extends EventEmitter {
       const prefetch = new Set(this.options.prefetchCollections ?? []);
 
       await this.indexes.load();
+
+      // Refuse open when any on-disk page fails to decode (no silent rewrite).
+      for (const info of this.catalog.list()) {
+        await this.store.verifyPages(info.name);
+      }
+
       if (!lazy) {
         for (const info of this.catalog.list()) {
           await this.store.loadCollection(info.name);
@@ -235,11 +256,27 @@ export class JSONSQLite extends EventEmitter {
         }
       }
 
+      // Corrupt index segments are rebuilt on first load; heal remaining corrupt stamps.
+      const corrupt = this.indexes.diagnostics().corrupt;
+      if (corrupt.length > 0) {
+        for (const info of this.catalog.list()) {
+          await this.store.ensureLoaded(info.name);
+          const docs = await this.store.readAll(info.name);
+          this.indexes.rebuildCollection(info.name, docs);
+          await this.indexes.flushCollection(info.name, this.store.indexStats(info.name));
+        }
+        await this.alerts.notifyCorrupt(
+          `rebuilt corrupt index segments: ${corrupt.map((c) => c.key).join(', ')}`,
+          { corrupt },
+        );
+      }
+
       this.monitor.setOpenLoadMs(Date.now() - openStarted);
       this.autoTune = new AutoTune(
         {
           listIndexes: () => this.indexes!.list(),
           createIndex: (c, f, t) => this.createIndex(c, f, t),
+          dropIndex: (c, f) => this.dropIndex(c, f),
           getSlowQueries: (th) => this.monitor.getSlowQueries(th),
         },
         {
@@ -248,9 +285,11 @@ export class JSONSQLite extends EventEmitter {
         },
       );
       this.ready = true;
+      this.startBackupScheduler();
       this.emit('ready');
       return this;
     } catch (err) {
+      this.stopBackupScheduler();
       await this.lock.release().catch(() => undefined);
       this.lock = null;
       this.catalog = null;
@@ -263,6 +302,8 @@ export class JSONSQLite extends EventEmitter {
       this.ddlJournal = null;
       this.changelog = null;
       this.backup = null;
+      this.audit = null;
+      this.alerts = null;
       this.ready = false;
       throw err;
     }
@@ -270,6 +311,7 @@ export class JSONSQLite extends EventEmitter {
 
   async close(opts?: { flush?: boolean }): Promise<void> {
     if (!this.ready) return;
+    this.stopBackupScheduler();
     if (this.tx?.active) await this.tx.rollback();
     if (this.httpServer) {
       await new Promise<void>((resolve) => this.httpServer!.close(() => resolve()));
@@ -298,9 +340,57 @@ export class JSONSQLite extends EventEmitter {
     this.ddlJournal = null;
     this.changelog = null;
     this.backup = null;
+    this.audit = null;
+    this.alerts = null;
     this.lock = null;
     this.autoTune = null;
     this.emit('close');
+  }
+
+  private startBackupScheduler(): void {
+    this.stopBackupScheduler();
+    const ms = this.options.backupIntervalMs ?? 0;
+    if (ms <= 0) return;
+    this.backupTimer = setInterval(() => {
+      void this.runScheduledBackup().catch(async (err) => {
+        await this.alerts?.notifyBackupFailed(
+          err instanceof Error ? err.message : String(err),
+        );
+      });
+    }, ms);
+    // Do not keep the process alive solely for the timer.
+    this.backupTimer.unref?.();
+  }
+
+  private stopBackupScheduler(): void {
+    if (this.backupTimer) {
+      clearInterval(this.backupTimer);
+      this.backupTimer = null;
+    }
+  }
+
+  /** True when a backup interval timer is armed (tests). */
+  hasBackupScheduler(): boolean {
+    return this.backupTimer !== null;
+  }
+
+  private async runScheduledBackup(): Promise<void> {
+    const list = await this.backup!.list();
+    const full = this.backup!.latestFull(list);
+    if (!full) {
+      await this.backupFull();
+    } else {
+      await this.backupDifferential();
+    }
+    if (
+      this.options.backupKeepDays !== undefined ||
+      this.options.backupMaxCount !== undefined
+    ) {
+      await this.pruneBackups({
+        keepDays: this.options.backupKeepDays,
+        maxCount: this.options.backupMaxCount,
+      });
+    }
   }
 
   async createCollection(
@@ -373,6 +463,7 @@ export class JSONSQLite extends EventEmitter {
 
     await this.catalog!.drop(name);
     await this.ddlJournal!.clear();
+    await this.audit?.append('drop', `drop table ${name}`, { collection: name });
     this.emit('dataChanged', { op: 'dropTable', collection: name });
   }
 
@@ -1103,14 +1194,21 @@ export class JSONSQLite extends EventEmitter {
 
   async backupFull(): Promise<BackupInfo> {
     this.assertReady();
-    const collections: Record<string, Document[]> = {};
-    for (const info of this.catalog!.list()) {
-      await this.store!.ensureLoaded(info.name);
-      collections[info.name] = await this.store!.readAll(info.name);
+    try {
+      const collections: Record<string, Document[]> = {};
+      for (const info of this.catalog!.list()) {
+        await this.store!.ensureLoaded(info.name);
+        collections[info.name] = await this.store!.readAll(info.name);
+      }
+      const info = await this.backup!.fullBackup(collections);
+      this.lastBackupTs = info.timestamp;
+      return info;
+    } catch (err) {
+      await this.alerts?.notifyBackupFailed(
+        err instanceof Error ? err.message : String(err),
+      );
+      throw err;
     }
-    const info = await this.backup!.fullBackup(collections);
-    this.lastBackupTs = info.timestamp;
-    return info;
   }
 
   async backupIncremental(): Promise<BackupInfo | null> {
@@ -1125,6 +1223,36 @@ export class JSONSQLite extends EventEmitter {
     return info;
   }
 
+  /** Differential: all changes since the latest full backup. */
+  async backupDifferential(): Promise<BackupInfo | null> {
+    this.assertReady();
+    const list = await this.backup!.list();
+    const full = this.backup!.latestFull(list);
+    if (!full) {
+      throw new JSONSQLiteError(
+        ErrorCode.BACKUP_BASELINE,
+        'Differential backup requires a full backup baseline',
+      );
+    }
+    const changes = [];
+    for (const info of this.catalog!.list()) {
+      changes.push(...(await this.changelog!.readSince(info.name, full.timestamp)));
+    }
+    const info = await this.backup!.differentialBackup(changes, full.timestamp);
+    if (info) this.lastBackupTs = info.timestamp;
+    return info;
+  }
+
+  async pruneBackups(opts: PruneOptions): Promise<PruneResult> {
+    this.assertReady();
+    return this.backup!.prune(opts);
+  }
+
+  async listBackups(): Promise<BackupInfo[]> {
+    this.assertReady();
+    return this.backup!.list();
+  }
+
   async restoreBackup(
     file: string,
     opts?: { collection?: string },
@@ -1133,19 +1261,19 @@ export class JSONSQLite extends EventEmitter {
   }
 
   /**
-   * Restore a full backup, or a full backup plus incrementals in order.
+   * Restore a full backup, or a full + incremental/differential chain.
    * Checksums are verified before any collection is written.
    * `collection` restores only that collection from the full backup.
    */
   async restoreChain(opts: {
-    type: 'full' | 'incremental';
+    type: BackupType;
     file?: string;
     collection?: string;
   }): Promise<void> {
     this.assertReady();
     const list = await this.backup!.list();
     const plan = this.backup!.resolveChain(list, opts.type, opts.file);
-    const decoded: (FullPayload | IncPayload)[] = [];
+    const decoded: BackupPayload[] = [];
     for (const info of plan) {
       decoded.push(await this.backup!.readVerified(info));
     }
@@ -1168,8 +1296,9 @@ export class JSONSQLite extends EventEmitter {
       collections[name] = full.collections[name]!.map((d) => ({ ...d }));
     }
     for (const payload of decoded.slice(1)) {
-      if (payload.type !== 'incremental') continue;
-      applyIncrementalChanges(collections, payload.changes, opts.collection);
+      if (payload.type === 'incremental' || payload.type === 'differential') {
+        applyIncrementalChanges(collections, payload.changes, opts.collection);
+      }
     }
     for (const [name, docs] of Object.entries(collections)) {
       await this.catalog!.ensure(name);
@@ -1214,7 +1343,74 @@ export class JSONSQLite extends EventEmitter {
     }
     this.touchCaches(collection);
     await this.persistIndexState(collection);
+    await this.audit?.append('rollbackToTime', `rollback ${collection} to ${timestamp}`, {
+      collection,
+      timestamp,
+    });
     this.emit('dataChanged', { op: 'rollback', collection, timestamp });
+  }
+
+  async listAudit(opts?: {
+    action?: import('../ops/audit.js').AuditAction;
+    limit?: number;
+  }): Promise<AuditEntry[]> {
+    this.assertReady();
+    return this.audit!.list(opts);
+  }
+
+  async repair(opts?: RepairOptions): Promise<RepairResult> {
+    this.assertReady();
+    const result = await repairDatabase(this, opts);
+    await this.audit?.append('repair', result.message, {
+      rebuiltIndexes: result.rebuiltIndexes,
+    });
+    return result;
+  }
+
+  getAlertHistory(): AlertEvent[] {
+    return this.alerts?.getHistory() ?? [];
+  }
+
+  async evaluateAlerts(): Promise<AlertEvent[]> {
+    this.assertReady();
+    const metrics = this.monitor.metrics(
+      this.cache!.stats.hitRate,
+      this.store!.loadedCollections().length,
+    );
+    return (
+      (await this.alerts?.evaluateMetrics({
+        cacheHitRate: metrics.cacheHitRate,
+        queriesTotal: metrics.queriesTotal,
+        writesTotal: metrics.writesTotal,
+        errorsTotal: metrics.errorsTotal,
+      })) ?? []
+    );
+  }
+
+  /** Test hook: record an error and optionally evaluate alert rules. */
+  async recordErrorForAlerts(): Promise<void> {
+    this.monitor.recordError();
+    await this.evaluateAlerts();
+  }
+
+  getTuneHistory() {
+    return this.autoTune?.getHistory() ?? [];
+  }
+
+  /** Wire a post-apply validator for AutoTune gray rollout / tests. */
+  setAutoTuneValidate(
+    fn: ((created: import('../index/types.js').IndexMeta[]) => Promise<void> | void) | undefined,
+  ): void {
+    this.autoTune?.setValidateApply(fn);
+  }
+
+  configureAutoTune(patch: {
+    enabled?: boolean;
+    dryRun?: boolean;
+    minHits?: number;
+  }): void {
+    this.assertReady();
+    this.autoTune?.setConfig(patch);
   }
 
   advise(query: JsonQuery) {
@@ -1297,6 +1493,11 @@ export class JSONSQLite extends EventEmitter {
   pagingStats() {
     this.assertReady();
     return this.store!.pagingSnapshot();
+  }
+
+  resetPageReads(): void {
+    this.assertReady();
+    this.store!.resetPageReads();
   }
 
   /** Index segment load / rebuild counters (1.8). */

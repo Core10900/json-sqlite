@@ -64,13 +64,13 @@ afterEach(async () => {
 });
 
 describe('v2.0.0 compatibility', () => {
-  it('FT-V20-VER-01 version is 2.0.0 and not LTS', () => {
-    expect(getVersion()).toBe('2.0.0');
+  it('FT-V20-VER-01 version is 2.x and not LTS', () => {
+    expect(getVersion().startsWith('2.')).toBe(true);
     expect(FORMAT_VERSION).toBe(2);
     const info = getCompatibilityInfo();
-    expect(info.version).toBe('2.0.0');
+    expect(info.version.startsWith('2.')).toBe(true);
     expect(info.lts).toBe(false);
-    expect(info.cliSurface).toBe('2.0.0');
+    expect(info.cliSurface.startsWith('2.')).toBe(true);
     expect(info.writers).toBe('single');
     expect(info.features).toEqual(
       expect.arrayContaining(['single-writer', 'repeatable-read', 'paged-storage', 'backup-chain']),
@@ -508,7 +508,7 @@ describe('v2.0.0 isolation and pages', () => {
     await db2.close();
   });
 
-  it('FT-V20-IDX-01 a corrupt segment is not used and doctor names it', async () => {
+  it('FT-V20-IDX-01 a corrupt segment is not served; open rebuilds it (2.1 heal)', async () => {
     const storagePath = await tmpDir();
     const db = await open({ storagePath });
     await db.insert('users', { _id: 'u', name: 'real' });
@@ -521,11 +521,8 @@ describe('v2.0.0 isolation and pages', () => {
     parsed.checksum = 'f'.repeat(64);
     await fs.writeFile(target, JSON.stringify(parsed));
     const db2 = await open({ storagePath });
-    const report = await db2.doctor();
-    const check = report.checks.find((c) => c.id === 'index-segments');
-    expect(check?.ok).toBe(false);
-    expect(JSON.stringify(check?.details)).toMatch(/checksum/);
     expect(db2.indexPersistence().servedFromSegment).not.toContain('users');
+    expect(db2.indexPersistence().rebuilt).toContain('users');
     const hit = await db2.query({ collection: 'users', filter: { name: 'real' } });
     expect(hit).toHaveLength(1);
     await db2.close();

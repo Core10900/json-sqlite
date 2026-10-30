@@ -15,10 +15,18 @@ export interface AutoTuneConfig {
 
 export interface AutoTuneAuditEntry {
   ts: number;
-  action: 'recommend' | 'create' | 'skip';
+  action: 'recommend' | 'create' | 'skip' | 'rollback' | 'apply_failed';
   message: string;
   suggestion?: { collection: string; field: string; type: IndexType };
   dryRun: boolean;
+}
+
+export interface AutoTuneHistoryEntry {
+  ts: number;
+  kind: 'apply' | 'rollback' | 'dry-run';
+  before: IndexMeta[];
+  after: IndexMeta[];
+  message: string;
 }
 
 export interface AutoTuneDeps {
@@ -28,21 +36,32 @@ export interface AutoTuneDeps {
     field: string,
     type: IndexType,
   ) => Promise<IndexMeta>;
+  dropIndex: (collection: string, field: string) => Promise<void>;
   getSlowQueries: (threshold?: number) => QueryMetric[];
+  /**
+   * Optional post-apply check. Throw to trigger rollback of indexes
+   * created in this tick.
+   */
+  validateApply?: (created: IndexMeta[]) => Promise<void> | void;
 }
 
 /**
  * Optional auto-index tuner. Default off; when on, uses Advisor + slow queries.
  * Always appends audit entries; dry-run never mutates indexes.
+ * Gray apply: on validation failure, drop created indexes and record history.
  */
 export class AutoTune {
   private readonly audit: AutoTuneAuditEntry[] = [];
+  private readonly history: AutoTuneHistoryEntry[] = [];
   private config: AutoTuneConfig;
 
+  private deps: AutoTuneDeps;
+
   constructor(
-    private readonly deps: AutoTuneDeps,
+    deps: AutoTuneDeps,
     config?: Partial<AutoTuneConfig>,
   ) {
+    this.deps = deps;
     this.config = {
       enabled: false,
       dryRun: true,
@@ -59,8 +78,19 @@ export class AutoTune {
     this.config = { ...this.config, ...patch };
   }
 
+  /** Test / ops hook: fail gray apply to exercise rollback. */
+  setValidateApply(
+    fn: ((created: IndexMeta[]) => Promise<void> | void) | undefined,
+  ): void {
+    this.deps.validateApply = fn;
+  }
+
   getAuditLog(): AutoTuneAuditEntry[] {
     return [...this.audit];
+  }
+
+  getHistory(): AutoTuneHistoryEntry[] {
+    return [...this.history];
   }
 
   clearAudit(): void {
@@ -73,6 +103,7 @@ export class AutoTune {
 
     const created: AutoTuneAuditEntry[] = [];
     const indexes = this.deps.listIndexes();
+    const before = indexes.map((i) => ({ ...i }));
     const advice: Advice[] = [];
 
     if (seed) {
@@ -87,7 +118,6 @@ export class AutoTune {
 
     for (const [collection, hits] of byCollection) {
       if (hits < (this.config.minHits ?? 2)) continue;
-      // Suggest object index on _id-less filters is weak; prefer seed advice.
       if (!seed) {
         const entry: AutoTuneAuditEntry = {
           ts: Date.now(),
@@ -99,6 +129,8 @@ export class AutoTune {
         created.push(entry);
       }
     }
+
+    const applied: IndexMeta[] = [];
 
     for (const a of advice) {
       if (a.type !== 'index' || !a.suggestion) continue;
@@ -134,11 +166,16 @@ export class AutoTune {
         this.audit.push(rec);
         created.push(rec);
       } else {
-        await this.deps.createIndex(sug.collection, sug.field, sug.type);
+        const meta = await this.deps.createIndex(
+          sug.collection,
+          sug.field,
+          sug.type,
+        );
+        applied.push(meta);
         const done: AutoTuneAuditEntry = {
           ts: Date.now(),
           action: 'create',
-          message: `已创建索引 ${sug.collection}.${sug.field} (${sug.type})；回滚: dropIndex('${sug.collection}','${sug.field}')`,
+          message: `已创建索引 ${sug.collection}.${sug.field} (${sug.type})`,
           suggestion: sug,
           dryRun: false,
         };
@@ -149,6 +186,58 @@ export class AutoTune {
           field: sug.field,
           type: sug.type,
           createdAt: Date.now(),
+        });
+      }
+    }
+
+    if (this.config.dryRun) {
+      this.history.push({
+        ts: Date.now(),
+        kind: 'dry-run',
+        before,
+        after: before,
+        message: 'dry-run: no indexes changed',
+      });
+      return created;
+    }
+
+    if (applied.length > 0) {
+      try {
+        await this.deps.validateApply?.(applied);
+        this.history.push({
+          ts: Date.now(),
+          kind: 'apply',
+          before,
+          after: this.deps.listIndexes().map((i) => ({ ...i })),
+          message: `applied ${applied.length} index(es)`,
+        });
+      } catch (err) {
+        for (const meta of applied) {
+          await this.deps.dropIndex(meta.collection, meta.field).catch(() => undefined);
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        const fail: AutoTuneAuditEntry = {
+          ts: Date.now(),
+          action: 'apply_failed',
+          message: `AutoTune apply failed: ${msg}`,
+          dryRun: false,
+        };
+        this.audit.push(fail);
+        created.push(fail);
+        const rb: AutoTuneAuditEntry = {
+          ts: Date.now(),
+          action: 'rollback',
+          message: `rolled back to pre-apply index set (${before.length} indexes)`,
+          dryRun: false,
+        };
+        this.audit.push(rb);
+        created.push(rb);
+        this.history.push({
+          ts: Date.now(),
+          kind: 'rollback',
+          before,
+          after: this.deps.listIndexes().map((i) => ({ ...i })),
+          message: msg,
         });
       }
     }

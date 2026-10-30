@@ -6,6 +6,7 @@ import { open, type JSONSQLite } from '../engine/JSONSQLite.js';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import { create } from '../lifecycle.js';
 import type { RekeyOptions, RekeyResult } from '../types/index.js';
+import { appendAuditFile } from './audit.js';
 import { RekeyJournal } from './rekeyJournal.js';
 
 /**
@@ -86,6 +87,11 @@ export async function rekeyDatabase(opts: RekeyOptions): Promise<RekeyResult> {
     src = null;
 
     if (!inPlace) {
+      await appendAuditFile(target, 'rekey', `rekey out from ${source}`, {
+        from: source,
+        to: target,
+        mode: 'out',
+      });
       return { storagePath: target, mode: 'out' };
     }
 
@@ -122,6 +128,11 @@ export async function rekeyDatabase(opts: RekeyOptions): Promise<RekeyResult> {
     await journal.clear();
     await fs.rm(backup, { recursive: true, force: true });
 
+    await appendAuditFile(source, 'rekey', `rekey inplace at ${source}`, {
+      from: source,
+      to: source,
+      mode: 'inplace',
+    });
     return { storagePath: source, mode: 'inplace' };
   } catch (err) {
     await src?.close().catch(() => undefined);

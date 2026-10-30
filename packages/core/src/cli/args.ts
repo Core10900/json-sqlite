@@ -44,6 +44,9 @@ const VALUE_FLAGS = new Set([
   '--cert',
   '--key',
   '--file',
+  '--keep-days',
+  '--max-count',
+  '--action',
 ]);
 
 /**

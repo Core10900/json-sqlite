@@ -17,12 +17,22 @@ export { rekeyDatabase } from './ops/rekey.js';
 export { migrateDatabase } from './ops/migrate.js';
 export type { MigrateDatabaseOptions, MigrateDatabaseResult } from './ops/migrate.js';
 export type { AggregateStage, AggregateField, AggregateOp } from './query/Aggregate.js';
-export type { BackupInfo } from './backup/BackupManager.js';
+export type {
+  BackupInfo,
+  BackupType,
+  PruneOptions,
+  PruneResult,
+} from './backup/BackupManager.js';
 export type { Advice } from './features/QueryAdvisor.js';
 export type {
   AutoTuneAuditEntry,
   AutoTuneConfig,
+  AutoTuneHistoryEntry,
 } from './features/AutoTune.js';
+export type { AuditEntry, AuditAction } from './ops/audit.js';
+export type { AlertEvent, AlertKind, AlertRule } from './monitor/Alerts.js';
+export type { RepairOptions, RepairResult } from './ops/repair.js';
+export { repairDatabase } from './ops/repair.js';
 export { StreamProcessor } from './features/StreamProcessor.js';
 export type {
   SlidingWindowOptions,

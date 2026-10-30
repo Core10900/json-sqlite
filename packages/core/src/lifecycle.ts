@@ -51,7 +51,7 @@ export function getCompatibilityInfo(): CompatibilityInfo {
     version: getVersion(),
     formatVersion: FORMAT_VERSION,
     lts: false,
-    cliSurface: '2.0.0',
+    cliSurface: '2.1.0',
     writers: 'single',
     features: [
       'encryption',
@@ -64,6 +64,7 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'cli-1.7',
       'cli-1.8',
       'cli-2.0',
+      'cli-2.1',
       'admin-sse',
       'composite-index',
       'aggregate-unwind-lookup',
@@ -78,7 +79,14 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'repeatable-read',
       'paged-storage',
       'backup-chain',
+      'backup-differential',
+      'backup-retention',
       'wal-fail-closed',
+      'alerts',
+      'audit',
+      'auto-repair',
+      'regex',
+      'predicate-pushdown',
     ],
   };
 }

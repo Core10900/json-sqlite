@@ -6,6 +6,7 @@ import type {
   JsonQuery,
   OrderBySpec,
 } from '../types/index.js';
+import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import { matchLike } from './like.js';
 
 export function executeJsonQuery(
@@ -79,6 +80,9 @@ function matchCondition(value: unknown, condition: FilterValue): boolean {
   if ('$nlike' in op && typeof op.$nlike === 'string') {
     return !matchLike(value, op.$nlike);
   }
+  if ('$regex' in op && op.$regex !== undefined) {
+    return matchRegex(value, op.$regex);
+  }
   if ('$exists' in op) {
     return op.$exists ? value !== undefined : value === undefined;
   }
@@ -98,6 +102,34 @@ export function getPath(doc: Document, path: string): unknown {
     cur = (cur as Record<string, unknown>)[p];
   }
   return cur;
+}
+
+function matchRegex(
+  value: unknown,
+  spec: string | { pattern: string; flags?: string },
+): boolean {
+  if (typeof value !== 'string') return false;
+  let pattern: string;
+  let flags = '';
+  if (typeof spec === 'string') {
+    pattern = spec;
+  } else if (spec && typeof spec === 'object' && typeof spec.pattern === 'string') {
+    pattern = spec.pattern;
+    flags = typeof spec.flags === 'string' ? spec.flags : '';
+  } else {
+    throw new JSONSQLiteError(
+      ErrorCode.INVALID_CONFIG,
+      '$regex requires a string pattern or { pattern, flags? }',
+    );
+  }
+  try {
+    return new RegExp(pattern, flags).test(value);
+  } catch (err) {
+    throw new JSONSQLiteError(
+      ErrorCode.INVALID_CONFIG,
+      `Invalid $regex: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 function compare(a: unknown, b: unknown): number {

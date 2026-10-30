@@ -2,7 +2,7 @@ import type { IndexMeta } from '../index/types.js';
 import type { FilterCondition, JsonQuery } from '../types/index.js';
 
 export interface Advice {
-  type: 'index' | 'structure' | 'info';
+  type: 'index' | 'structure' | 'rewrite' | 'info';
   message: string;
   suggestion?: unknown;
 }
@@ -19,34 +19,52 @@ export function adviseQuery(
       type: 'info',
       message: 'No filter — full collection scan',
     });
-    return advice;
+  } else {
+    for (const field of Object.keys(filter)) {
+      if (field === '$and' || field === '$or') continue;
+      const has = existingIndexes.some(
+        (i) => i.collection === query.collection && i.field === field,
+      );
+      if (!has) {
+        const cond = filter[field];
+        const type =
+          cond &&
+          typeof cond === 'object' &&
+          !Array.isArray(cond) &&
+          ('$gt' in cond || '$gte' in cond || '$lt' in cond || '$lte' in cond)
+            ? 'tree'
+            : cond &&
+                typeof cond === 'object' &&
+                !Array.isArray(cond) &&
+                ('$contains' in cond || '$regex' in cond)
+              ? 'inverted'
+              : 'object';
+        advice.push({
+          type: 'index',
+          message: `建议为 ${query.collection}.${field} 创建 ${type} 索引以加速查询`,
+          suggestion: { collection: query.collection, field, type },
+        });
+      }
+    }
   }
 
-  for (const field of Object.keys(filter)) {
-    if (field === '$and' || field === '$or') continue;
-    const has = existingIndexes.some(
-      (i) => i.collection === query.collection && i.field === field,
-    );
-    if (!has) {
-      const cond = filter[field];
-      const type =
-        cond &&
-        typeof cond === 'object' &&
-        !Array.isArray(cond) &&
-        ('$gt' in cond || '$gte' in cond || '$lt' in cond || '$lte' in cond)
-          ? 'tree'
-          : cond &&
-              typeof cond === 'object' &&
-              !Array.isArray(cond) &&
-              '$contains' in cond
-            ? 'inverted'
-            : 'object';
-      advice.push({
-        type: 'index',
-        message: `建议为 ${query.collection}.${field} 创建 ${type} 索引以加速查询`,
-        suggestion: { collection: query.collection, field, type },
-      });
-    }
+  if (query.limit === undefined) {
+    advice.push({
+      type: 'rewrite',
+      message: '建议加 limit，避免一次拉回过大结果集',
+      suggestion: { ...query, limit: 100 },
+    });
+  }
+
+  if (!query.projection || query.projection.length === 0) {
+    advice.push({
+      type: 'rewrite',
+      message: '建议加 projection，只取需要的字段',
+      suggestion: {
+        ...query,
+        projection: query.projection ?? ['_id'],
+      },
+    });
   }
 
   if (lastDurationMs !== undefined && lastDurationMs > 50) {

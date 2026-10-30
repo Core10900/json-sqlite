@@ -44,6 +44,29 @@ const optionsSchema = z.object({
    * Must be >= pageSize. Default 256.
    */
   maxResidentDocs: z.number().int().positive().default(256),
+  /** Scheduled backup interval ms; 0 = off (default). */
+  backupIntervalMs: z.number().int().nonnegative().default(0),
+  backupKeepDays: z.number().int().nonnegative().optional(),
+  backupMaxCount: z.number().int().nonnegative().optional(),
+  alerts: z
+    .object({
+      rules: z
+        .array(
+          z.object({
+            kind: z.enum([
+              'cache_hit',
+              'error_rate',
+              'corrupt',
+              'backup_failed',
+            ]),
+            cacheHitBelow: z.number().min(0).max(1).optional(),
+            errorRateAbove: z.number().min(0).max(1).optional(),
+          }),
+        )
+        .optional(),
+      webhookUrl: z.string().min(1).nullable().optional(),
+    })
+    .optional(),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;

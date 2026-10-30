@@ -443,3 +443,31 @@ unsubscribe();
 - `lts: false`，`writers: 'single'`，`cliSurface: '2.0.0'`
 - **非 LTS**。长期 pin 仍是 1.6.x，下一档推荐 pin 是 2.2
 
+---
+
+## 2.1 运维与查询补齐（非 LTS，仍单写者）
+
+相对 2.0 为 **MINOR**。不删除 2.0 稳定符号。下一版 **2.2** 将冻结本契约为 LTS-2。
+
+### 行为
+
+1. 差异备份：自最近一次全量起的变更；恢复 = 全量 + 该 differential。
+2. `backupIntervalMs` 默认 `0`（关）。开启后失败经 `alert` / webhook 投递。
+3. 损坏索引分段：open 时自动重建。数据页损坏：`DATA_CORRUPT`，拒绝打开；**不会**静默改写数据。显式 `repair({ rebuildIndexes: true })` 只重建索引。
+4. `$regex`：字符串或 `{ pattern, flags? }`；非法表达式 `INVALID_CONFIG`。
+5. 审计覆盖 `rekey` / `rollbackToTime` / `drop` / `migrate` / `repair`，`listAudit()` / CLI `audit list`。
+
+### 新增选项
+
+| 选项 | 默认 | 说明 |
+|------|------|------|
+| `backupIntervalMs` | `0` | 定时备份间隔；0 = 关 |
+| `backupKeepDays` / `backupMaxCount` | — | 可选保留策略（定时备份后也可手动 prune） |
+| `alerts` | — | `{ rules, webhookUrl? }` |
+
+### 兼容信息（2.1）
+
+- `getVersion() === '2.1.0'`
+- `lts: false`，`writers: 'single'`，`cliSurface: '2.1.0'`
+- **非 LTS，仍单写者**
+

@@ -274,4 +274,20 @@ jsonsqlite insert|update|delete|index|sql --help
 | `admin serve --host <non-loopback> --token --cert --key` | 缺 token 或 TLS 则 exit 1 | loopback 仍可省略 token，并打印警告 |
 
 相对 1.8：`SERIALIZABLE` / `READ_UNCOMMITTED` 不再降级；分页布局见 API.md「2.0」。
-  
+
+---
+
+## 16. 2.1 运维增补（非 LTS，仍单写者）
+
+> **2.1.0 非 LTS。** 仍不加入 `plugin` / `replica` / `cluster`。下一版 2.2 将冻结本契约。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `backup --type full\|incremental\|differential` | ✅ | 三类备份 |
+| `backup prune --keep-days <n> [--max-count <n>]` | ✅ | 保留策略 |
+| `backup restore --type differential` | ✅ | 全量 + 差异恢复 |
+| `tune [--dry-run] [json-query]` | ✅ | 默认 dry-run，不改索引 |
+| `audit list [--action …] [--limit N]` | ✅ | 只读审计 |
+| `doctor` | ✅ | 区分可自愈的索引损坏与拒绝打开的数据损坏 |
+
+

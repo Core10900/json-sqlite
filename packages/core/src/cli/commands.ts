@@ -121,6 +121,10 @@ export async function dispatch(argv: string[]): Promise<void> {
       return cmdQuery(ctx, rest);
     case 'backup':
       return cmdBackup(ctx, rest);
+    case 'tune':
+      return cmdTune(ctx, rest);
+    case 'audit':
+      return cmdAudit(ctx, rest);
     case 'migrate':
       return cmdMigrate(ctx, rest, globals);
     case 'vacuum':
@@ -955,8 +959,12 @@ async function cmdBackup(ctx: CliContext, rest: string[]): Promise<void> {
   const sub = positional(rest);
   if (sub === 'restore') {
     const typeRaw = flag(rest, '--type') ?? 'full';
-    if (typeRaw !== 'full' && typeRaw !== 'incremental') {
-      fail(ctx.out, '--type 必须是 full 或 incremental', 'USAGE');
+    if (
+      typeRaw !== 'full' &&
+      typeRaw !== 'incremental' &&
+      typeRaw !== 'differential'
+    ) {
+      fail(ctx.out, '--type 必须是 full、incremental 或 differential', 'USAGE');
     }
     const collection = flagAny(rest, ['--collection', '--table']);
     const file = flag(rest, '--file');
@@ -975,9 +983,114 @@ async function cmdBackup(ctx: CliContext, rest: string[]): Promise<void> {
     });
     return;
   }
+  if (sub === 'prune') {
+    const keepDaysRaw = flag(rest, '--keep-days');
+    const maxCountRaw = flag(rest, '--max-count');
+    if (keepDaysRaw === undefined && maxCountRaw === undefined) {
+      fail(
+        ctx.out,
+        '用法: jsonsqlite backup prune --keep-days <n> [--max-count <n>]',
+        'USAGE',
+      );
+    }
+    await withDb(ctx, async (db) => {
+      const result = await db.pruneBackups({
+        ...(keepDaysRaw !== undefined
+          ? { keepDays: Number(keepDaysRaw) }
+          : {}),
+        ...(maxCountRaw !== undefined
+          ? { maxCount: Number(maxCountRaw) }
+          : {}),
+      });
+      printSuccess(
+        ctx.out,
+        `✓ prune removed ${result.removed.length}, kept ${result.kept.length}`,
+        { action: 'backup.prune', ...result },
+      );
+    });
+    return;
+  }
+  const typeRaw = flag(rest, '--type') ?? 'full';
+  if (
+    typeRaw !== 'full' &&
+    typeRaw !== 'incremental' &&
+    typeRaw !== 'differential'
+  ) {
+    fail(ctx.out, '--type 必须是 full、incremental 或 differential', 'USAGE');
+  }
   await withDb(ctx, async (db) => {
-    const info = await db.backupFull();
-    printSuccess(ctx.out, `✓ backup ${info.file}`, { action: 'backup', ...info });
+    let info;
+    if (typeRaw === 'incremental') info = await db.backupIncremental();
+    else if (typeRaw === 'differential') info = await db.backupDifferential();
+    else info = await db.backupFull();
+    if (!info) {
+      printSuccess(ctx.out, '✓ backup skipped (no changes)', {
+        action: 'backup',
+        type: typeRaw,
+        skipped: true,
+      });
+      return;
+    }
+    printSuccess(ctx.out, `✓ backup ${info.file}`, {
+      action: 'backup',
+      ...info,
+    });
+  });
+}
+
+async function cmdTune(ctx: CliContext, rest: string[]): Promise<void> {
+  const dryRun = hasFlag(rest, '--dry-run') || !hasFlag(rest, '--apply');
+  const queryRaw = rest.find((a) => a.trim().startsWith('{'));
+  const seed = queryRaw
+    ? (JSON.parse(queryRaw) as JsonQuery)
+    : ({ collection: 'users' } as JsonQuery);
+  await withDb(ctx, async (db) => {
+    const before = await db.listIndexes();
+    db.configureAutoTune({ enabled: true, dryRun });
+    const entries = await db.runAutoTune(seed);
+    const advice = db.advise(seed);
+    const after = await db.listIndexes();
+    if (dryRun && JSON.stringify(before) !== JSON.stringify(after)) {
+      fail(ctx.out, 'tune --dry-run must not change indexes', 'INTERNAL');
+    }
+    printData(
+      ctx.out,
+      JSON.stringify({ dryRun, advice, entries, indexes: after }, null, 2),
+      {
+        action: 'tune',
+        dryRun,
+        advice,
+        entries,
+        indexes: after,
+      },
+    );
+  });
+}
+
+async function cmdAudit(ctx: CliContext, rest: string[]): Promise<void> {
+  const sub = positional(rest) ?? 'list';
+  if (sub !== 'list') {
+    fail(ctx.out, '用法: jsonsqlite audit list [--action <name>] [--limit N]', 'USAGE');
+  }
+  const action = flag(rest, '--action') as
+    | 'rekey'
+    | 'rollbackToTime'
+    | 'drop'
+    | 'migrate'
+    | 'repair'
+    | 'backup'
+    | 'tune'
+    | undefined;
+  const limitRaw = flag(rest, '--limit');
+  await withDb(ctx, async (db) => {
+    const entries = await db.listAudit({
+      ...(action ? { action } : {}),
+      ...(limitRaw !== undefined ? { limit: Number(limitRaw) } : {}),
+    });
+    printData(ctx.out, JSON.stringify(entries, null, 2), {
+      action: 'audit.list',
+      entries,
+    });
   });
 }
 

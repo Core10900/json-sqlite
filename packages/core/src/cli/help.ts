@@ -30,9 +30,13 @@ Commands:
   watch                      subscribe to dataChanged
   compat / version [--json]  compatibility / version
   backup / vacuum [--compress] / rekey    ops
-  backup restore --type full|incremental [--collection name]
-  migrate --from <db> --to <new> --yes   1.x → 2.0
-  doctor [--deep]            health / consistency
+  backup --type full|incremental|differential
+  backup prune --keep-days <n> [--max-count <n>]
+  backup restore --type full|incremental|differential [--collection name]
+  tune [--dry-run] [json-query]          AutoTune / Advisor (default dry-run)
+  audit list [--action name]             read-only audit log
+  migrate --from <db> --to <new> --yes   1.x → 2.x
+  doctor [--deep]            health / consistency (healable index vs refuse-open data)
   version                    print version
 
 Exit codes: 0 ok · 1 usage/business · 2 system/IO · 3 lock failed
@@ -145,15 +149,32 @@ Does not add plugin, replica, or cluster commands.
 }
 
 export function helpBackup(): string {
-  return `jsonsqlite backup
-jsonsqlite backup restore --type full|incremental [--collection <name>] [--file <path>]
+  return `jsonsqlite backup [--type full|incremental|differential]
+jsonsqlite backup prune --keep-days <n> [--max-count <n>]
+jsonsqlite backup restore --type full|incremental|differential [--collection <name>] [--file <path>]
 
-backup                  full backup
-backup restore          apply a full backup, or a full backup plus incrementals in order
-  --type full           default; does not apply incrementals
-  --type incremental    requires a full baseline; fails without writing if the baseline is missing
-  --collection <name>   restore one collection from the full backup; other collections stay unchanged
+backup                  default --type full
+  --type incremental    changes since last backup
+  --type differential   changes since last full backup
+backup prune            retention: delete expired / excess backups
+backup restore          apply a full backup, or full + incremental/differential chain
+  --collection <name>   restore one collection; other collections stay unchanged
 Checksum mismatch refuses the restore and does not modify the target.
+`;
+}
+
+export function helpTune(): string {
+  return `jsonsqlite tune [--dry-run] [--apply] ['{"collection":"users","filter":{...}}']
+
+Default is --dry-run: Advisor / AutoTune recommendations only; indexes are not changed.
+Pass --apply to create recommended indexes (still subject to AutoTune rollback on validation failure).
+`;
+}
+
+export function helpAudit(): string {
+  return `jsonsqlite audit list [--action rekey|rollbackToTime|drop|migrate|repair] [--limit N]
+
+Read-only audit log (meta/audit.jsonl). Covers rekey, rollbackToTime, drop, migrate, repair.
 `;
 }
 
@@ -200,7 +221,13 @@ export function helpFor(path: string[]): string | null {
       return helpMigrate();
     case 'backup':
     case 'backup restore':
+    case 'backup prune':
       return helpBackup();
+    case 'tune':
+      return helpTune();
+    case 'audit':
+    case 'audit list':
+      return helpAudit();
     default:
       return null;
   }

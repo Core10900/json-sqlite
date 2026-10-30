@@ -11,6 +11,7 @@ import { FORMAT_VERSION } from '../storage/Catalog.js';
 import { decompressLine } from '../storage/compress.js';
 import { diagnoseWalText } from '../storage/Wal.js';
 import type { Document, FieldDef, SyncMode } from '../types/index.js';
+import { appendAuditFile } from './audit.js';
 import { catalogFile, docsFile, walFile } from '../utils/path.js';
 
 export interface MigrateDatabaseOptions {
@@ -124,6 +125,12 @@ export async function migrateDatabase(
         documentCounts[name] = docs.length;
       }
       await db.close();
+      await appendAuditFile(to, 'migrate', `migrated from ${from}`, {
+        from,
+        to,
+        documentCounts,
+        sourceChecksum: checksum,
+      });
       return {
         storagePath: to,
         formatVersion: FORMAT_VERSION,

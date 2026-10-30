@@ -873,6 +873,48 @@ export class DocumentStore {
     return payload;
   }
 
+  /**
+   * Scan every page file for the collection without loading bodies into the cache.
+   * Throws DATA_CORRUPT on the first bad complete line.
+   */
+  async verifyPages(name: string): Promise<void> {
+    const dir = await this.readDirectory(name);
+    for (const page of dir.pages) {
+      const file = pageFile(this.storagePath, name, page.id);
+      let raw = '';
+      try {
+        raw = await fs.readFile(file, 'utf8');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
+      }
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          this.decodeStoredLine(line);
+        } catch (err) {
+          if (err instanceof JSONSQLiteError && err.code === ErrorCode.ENCRYPTION) {
+            throw err;
+          }
+          throw new JSONSQLiteError(
+            ErrorCode.DATA_CORRUPT,
+            `Data page corrupt in ${name} page ${page.id}`,
+            {
+              collection: name,
+              pageId: page.id,
+              cause: err instanceof Error ? err.message : String(err),
+            },
+          );
+        }
+      }
+    }
+  }
+
+  /** Reset page-read counter (tests / query plans). */
+  resetPageReads(): void {
+    this.pageReads = 0;
+  }
+
   private decodeStoredLine(line: string): Document {
     if (isEncryptedLine(line) && !this.encKey) {
       throw new JSONSQLiteError(
@@ -880,8 +922,26 @@ export class DocumentStore {
         'Encrypted collection data requires encryptionKey / JSONSQLITE_KEY',
       );
     }
-    const plain = decompressLine(decryptLine(line, this.encKey));
-    return JSON.parse(plain) as Document;
+    let plain: string;
+    try {
+      plain = decompressLine(decryptLine(line, this.encKey));
+    } catch (err) {
+      if (err instanceof JSONSQLiteError) throw err;
+      throw new JSONSQLiteError(
+        ErrorCode.DATA_CORRUPT,
+        'Unable to decode stored document line',
+        { cause: err instanceof Error ? err.message : String(err) },
+      );
+    }
+    try {
+      return JSON.parse(plain) as Document;
+    } catch (err) {
+      throw new JSONSQLiteError(
+        ErrorCode.DATA_CORRUPT,
+        'Stored document line is not valid JSON',
+        { cause: err instanceof Error ? err.message : String(err) },
+      );
+    }
   }
 }
 

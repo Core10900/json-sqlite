@@ -1,7 +1,7 @@
 {
   "name": "@webofcat/jsonsqlite",
-  "version": "2.0.0",
-  "description": "JSON-native embedded database for Node.js — paged storage, backup chains, fail-closed WAL",
+  "version": "2.1.0",
+  "description": "JSON-native embedded database for Node.js — ops loop, differential backup, alerts, audit, $regex",
   "license": "MIT",
   "author": "hanlin <lincent909@163.com>",
   "repository": {

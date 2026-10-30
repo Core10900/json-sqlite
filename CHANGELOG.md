@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.1.0 — 2026-10-30
+
+**非 LTS**（为 2.2 = LTS-2 浸泡）。默认仍是**单写者**。相对 2.0 为 MINOR。
+
+### Added
+- **差异备份** `backupDifferential()` / CLI `backup --type differential`；恢复走 `restoreChain({ type: 'differential' })`
+- **保留策略** `pruneBackups({ keepDays, maxCount })` / `backup prune --keep-days`
+- **定时备份** `backupIntervalMs`（默认 0 关闭）；失败发 `alert`
+- **告警** `alerts.rules` + EventEmitter `alert` / 可选 webhook（cache_hit、error_rate、corrupt、backup_failed）
+- **审计** `meta/audit.jsonl`：rekey、rollbackToTime、drop、migrate、repair；`audit list`
+- **自动恢复**：损坏索引分段在 open 时重建；数据页损坏抛 `DATA_CORRUPT` 拒绝打开；显式 `repair()` 只重建索引、不静默改数据页
+- **AutoTune** 灰度失败回滚 + `getTuneHistory()`；CLI `tune --dry-run`
+- **`$regex`** 过滤；高选择性索引查询页读取次数低于全表扫描
+- Advisor `rewrite` 建议（limit / projection），dry-run 不改库
+
 ## 2.0.0 — 2026-10-28
 
 **非 LTS。** 默认仍是单写者。本版不包含多写者、复制、列存、插件。

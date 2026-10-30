@@ -49,6 +49,11 @@ export interface FilterOp {
   $like?: string;
   /** SQL NOT LIKE. */
   $nlike?: string;
+  /**
+   * JavaScript RegExp. String form uses no flags.
+   * Object form: `{ pattern, flags? }`. Invalid patterns throw INVALID_CONFIG.
+   */
+  $regex?: string | { pattern: string; flags?: string };
   $exists?: boolean;
   $and?: FilterCondition[];
   $or?: FilterCondition[];
@@ -160,6 +165,28 @@ export interface JSONSQLiteOptions {
    * Must be >= pageSize. The id→page directory is not counted.
    */
   maxResidentDocs?: number;
+  /**
+   * Scheduled backup interval in ms. Default 0 (off).
+   * When > 0, a background timer runs backup (full if none, else differential).
+   * Failures emit an `alert` event / webhook.
+   */
+  backupIntervalMs?: number;
+  /** Retention: delete backups older than this many days (optional). */
+  backupKeepDays?: number;
+  /** Retention: keep at most this many backups (optional). */
+  backupMaxCount?: number;
+  /**
+   * Alert rules evaluated against metrics / backup failures.
+   * Delivered via EventEmitter `alert` and optional webhookUrl.
+   */
+  alerts?: {
+    rules?: Array<{
+      kind: 'cache_hit' | 'error_rate' | 'corrupt' | 'backup_failed';
+      cacheHitBelow?: number;
+      errorRateAbove?: number;
+    }>;
+    webhookUrl?: string | null;
+  };
 }
 
 /** Optional read scope. `txId` selects a REPEATABLE_READ snapshot. */

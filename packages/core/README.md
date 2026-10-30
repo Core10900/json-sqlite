@@ -2,7 +2,7 @@
 
 JSON-native embedded database for Node.js.
 
-**Version: 2.0.0**（非 LTS，单写者） · Node.js ≥ 20 · Author: hanlin  
+**Version: 2.1.0**（非 LTS，单写者） · Node.js ≥ 20 · Author: hanlin  
 **LTS pin:** production long-term → **1.6.x** ([ROADMAP](https://github.com/Core10900/json-sqlite/blob/main/devDocs/releases/ROADMAP.md))
 
 ## Authority docs

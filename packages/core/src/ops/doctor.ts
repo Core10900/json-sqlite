@@ -16,16 +16,27 @@ export async function runDoctor(
 
   const health = await db.health();
   const storage = db.storageSummary();
+  const corruptIdx = storage.indexSegments.corrupt;
   checks.push({
     id: 'index-segments',
-    ok: storage.indexSegments.corrupt.length === 0,
+    ok: corruptIdx.length === 0,
     message:
-      storage.indexSegments.corrupt.length === 0
+      corruptIdx.length === 0
         ? `index segments=${storage.indexSegments.segmentCount} restored=${storage.indexSegments.restored.length}`
-        : `corrupt index segments: ${storage.indexSegments.corrupt
+        : `healable index corruption (auto-rebuild on open / repair): ${corruptIdx
             .map((c) => c.key)
             .join(', ')}`,
-    details: storage.indexSegments,
+    details: {
+      ...storage.indexSegments,
+      classification: 'healable-index',
+    },
+  });
+  checks.push({
+    id: 'data-pages',
+    ok: true,
+    message:
+      'data pages: open refuses DATA_CORRUPT; use explicit repair for indexes only (no silent data rewrite)',
+    details: { classification: 'refuse-open-on-data-corrupt' },
   });
   checks.push({
     id: 'compression',

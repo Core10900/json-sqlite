@@ -97,15 +97,10 @@ describe('v1.8.0 index segments', () => {
     await fs.writeFile(path.join(idxDir, files[0]!), 'not-json', 'utf8');
 
     const db2 = await open({ storagePath });
-    const report = await db2.doctor();
-    const check = report.checks.find((c) => c.id === 'index-segments');
-    expect(check?.ok).toBe(false);
-    expect(db2.indexPersistence().corrupt.length).toBeGreaterThan(0);
-
+    // 2.1+: corrupt segments are rebuilt on open (healable); data stays readable.
+    expect(db2.indexPersistence().rebuilt).toContain('users');
     const still = await db2.findById('users', doc._id);
     expect(still?.name).toBe('keep');
-
-    await db2.rebuildIndexes('users');
     const again = await db2.doctor();
     expect(again.checks.find((c) => c.id === 'index-segments')?.ok).toBe(true);
     const hit = await db2.query({

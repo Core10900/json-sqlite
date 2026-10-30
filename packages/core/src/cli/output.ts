@@ -88,6 +88,7 @@ export function mapErrorToExit(err: unknown): ExitCode {
       err.code === ErrorCode.MIGRATION_REQUIRED ||
       err.code === ErrorCode.BACKUP_CHECKSUM ||
       err.code === ErrorCode.BACKUP_BASELINE ||
+      err.code === ErrorCode.DATA_CORRUPT ||
       err.code === ErrorCode.ISOLATION_UNSUPPORTED ||
       err.code === ErrorCode.WAL_CORRUPT
     ) {
