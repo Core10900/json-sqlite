@@ -5,7 +5,8 @@ import { rekeyDatabase, resolveRekeyKeys } from '../ops/rekey.js';
 import { migrateDatabase } from '../ops/migrate.js';
 import { diagnoseWalDirectory } from '../storage/Wal.js';
 import { resolveEncryptionKey } from '../config/defaults.js';
-import { ErrorCode } from '../errors.js';
+import { validateConfigFile } from '../config/validate.js';
+import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { FieldDef, FieldType, FilterCondition, JsonQuery } from '../types/index.js';
 import {
   flag,
@@ -141,6 +142,8 @@ export async function dispatch(argv: string[]): Promise<void> {
       return cmdAggregate(ctx, rest);
     case 'watch':
       return cmdWatch(ctx, rest);
+    case 'config':
+      return cmdConfig(ctx, rest);
     default:
       fail(
         ctx.out,
@@ -149,6 +152,37 @@ export async function dispatch(argv: string[]): Promise<void> {
         ExitCode.USAGE,
         '运行 jsonsqlite help 查看可用命令',
       );
+  }
+}
+
+async function cmdConfig(ctx: CliContext, rest: string[]): Promise<void> {
+  const sub = rest.find((a) => !a.startsWith('-'));
+  if (sub !== 'validate') {
+    fail(
+      ctx.out,
+      'Usage: jsonsqlite config validate --file <path>',
+      'USAGE',
+      ExitCode.USAGE,
+    );
+  }
+  const file = flag(rest, '--file');
+  if (!file) {
+    fail(ctx.out, 'config validate requires --file <path>', 'USAGE', ExitCode.USAGE);
+  }
+  const resolvedPath = path.resolve(file);
+  try {
+    const resolved = await validateConfigFile(resolvedPath);
+    printSuccess(ctx.out, `✓ config ok ${resolvedPath}`, {
+      action: 'config.validate',
+      file: resolvedPath,
+      storagePath: resolved.storagePath,
+      ltsLine: '2.2',
+    });
+  } catch (err) {
+    if (err instanceof JSONSQLiteError) {
+      fail(ctx.out, err.message, err.code, ExitCode.USAGE);
+    }
+    throw err;
   }
 }
 

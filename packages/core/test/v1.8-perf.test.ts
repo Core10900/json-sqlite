@@ -429,7 +429,9 @@ describe('v1.8.0 sql / bench / cli / compat', () => {
 
   it('FT-V18-VER-01 getVersion is 1.8.0 on the 1.8 line', () => {
     const info = getCompatibilityInfo();
-    expect(info.lts).toBe(false);
+    if (info.version.startsWith('1.')) {
+      expect(info.lts).toBe(false);
+    }
     expect(info.version).toBe(getVersion());
     if (info.version.startsWith('1.8.')) {
       expect(getVersion()).toBe('1.8.0');

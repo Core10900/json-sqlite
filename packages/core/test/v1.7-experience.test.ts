@@ -392,7 +392,9 @@ describe('v1.7 CLI / docs / version', () => {
       cliSurface: string;
       lts: boolean;
     };
-    expect(compatBody.lts).toBe(false);
+    if (compatBody.version.startsWith('1.')) {
+      expect(compatBody.lts).toBe(false);
+    }
     if (compatBody.version.startsWith('1.7.')) {
       expect(compatBody.cliSurface).toBe('1.7.0');
     }
@@ -485,7 +487,9 @@ describe('v1.7 CLI / docs / version', () => {
 
   it('FT-V17-VER-01 version + non-LTS compat', () => {
     const info = getCompatibilityInfo();
-    expect(info.lts).toBe(false);
+    if (info.version.startsWith('1.')) {
+      expect(info.lts).toBe(false);
+    }
     expect(info.version).toBe(getVersion());
     if (info.version.startsWith('1.7.')) {
       expect(info.cliSurface).toBe('1.7.0');

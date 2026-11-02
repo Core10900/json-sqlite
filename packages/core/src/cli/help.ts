@@ -28,7 +28,8 @@ Commands:
   aggregate                  aggregation pipeline (unwind/lookup)
   admin serve                start Admin HTTP + SSE
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version
+  compat / version [--json]  compatibility / version (lts: true, ltsLine 2.2)
+  config validate --file <f> check a file against the frozen 2.2 config keys
   backup / vacuum [--compress] / rekey    ops
   backup --type full|incremental|differential
   backup prune --keep-days <n> [--max-count <n>]
@@ -182,6 +183,19 @@ export function helpCompat(): string {
   return `jsonsqlite compat [--json]
 jsonsqlite version [--json]
 Print getCompatibilityInfo() / version.
+On 2.2.x: lts is true, ltsLine is "2.2", writers is "single".
+`;
+}
+
+export function helpConfig(): string {
+  return `jsonsqlite config validate --file <path>
+
+Check a JSON file against the frozen 2.2 keys in config.example.json.
+Does not open a database.
+Unknown keys are refused (exit 1, code INVALID_CONFIG) and are not applied.
+Dangerous keys (cluster, replica, replication, raft, quorum, shard, writers,
+plugin, columnStore, graphql, vector, s3, savepoint, geo, wasm, l3, redis, cache)
+are named in the error. The frozen cache field is cacheSize, not cache / cache.l3.
 `;
 }
 
@@ -217,6 +231,9 @@ export function helpFor(path: string[]): string | null {
     case 'compat':
     case 'version':
       return helpCompat();
+    case 'config':
+    case 'config validate':
+      return helpConfig();
     case 'migrate':
       return helpMigrate();
     case 'backup':

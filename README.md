@@ -1,23 +1,22 @@
 # JSONSQLite
 
-**版本：2.1.0**（非 LTS） · **LTS pin：1.6.x** · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**版本：2.2.0**（**LTS-2**，单写者） · **LTS pin：2.2.x**（`lts` / 在 2.3 之前的 `latest`） · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
 
-### 权威文档（1.6 LTS）
+### 权威文档
 
 | 文档 | 受众 |
 |------|------|
-| **[`API.md`](./API.md)** | Node 后端：全部稳定 `import` API |
-| **[`CLI-API.md`](./CLI-API.md)** | CLI / 运维：命令面冻结自 **1.5.5** |
+| **[`API.md`](./API.md)** | Node 后端：稳定 `import` API（2.2 冻结，含 1.6 起的增补） |
+| **[`CLI-API.md`](./CLI-API.md)** | CLI / 运维：2.2 冻结（1.5.5 命令未改名） |
 
 **LTS 政策（摘要）**
 
 | 线 | 版本 | 说明 |
 |----|------|------|
-| **LTS-1** | `1.6.x`（当前） | 单写者契约冻结；仅安全/正确性补丁；不扩张 CLI |
-| **LTS-2** | `2.2.x`（规划） | 2.x 首个推荐长期 pin |
-| **LTS-3** | `3.0.x`（规划） | 设计采纳能力完工（Vision Complete） |
+| **LTS-1** | `1.6.x` | 旧单写者契约。继续只收安全/正确性补丁，并行不少于 12 个月，或至 LTS-3 发布后 6 个月 |
+| **LTS-2** | `2.2.x`（当前主推荐） | 单写者、分页、诚实的 RC/RR、可恢复备份。不是集群版 |
 
 完整路线与能力勾选见 [ROADMAP](./devDocs/releases/ROADMAP.md) / [FEATURE-MATRIX](./devDocs/releases/FEATURE-MATRIX.md)。
 
@@ -720,10 +719,10 @@ data/
 1. **单写者**：同一 `storagePath` 同时只能有一个进程持有写锁；第二进程 `open` 会得到 `LOCK_FAILED`。
 2. **不是共享网络库**：多实例水平扩展不要多进程直连同一目录写；需要共享请自建单写者服务或等待后续复制能力。
 3. **进程退出要 `close()`**：确保刷盘与释放锁。默认 `syncMode: 'normal'` 会对 WAL/快照做 fsync；极端性能场景可改 `none`（掉电风险自负）。
-4. **事务不嵌套**：一次只开一个事务；隔离级别仅 **READ_COMMITTED** 真正实现。
+4. **事务不嵌套**：一次只开一个写事务。默认隔离是 **READ_COMMITTED**（读最新已提交）。显式 `REPEATABLE_READ` 在 `begin` 建立快照，重复读看不见之后的提交。`SERIALIZABLE` 与 `READ_UNCOMMITTED` 会拒绝，不会降级。
 5. **软 Schema**：默认不强制校验；需要约束时设 `schemaMode: 'strict'`。
 6. **Admin 默认绑定 127.0.0.1**：公网暴露必须加 Token / 反代鉴权。
-7. **磁盘格式**：当前 `formatVersion = 1`（已具备迁移钩子）；破坏性变更将走 major 或迁移升级。
+7. **磁盘格式**：当前 `formatVersion = 2`。1.6 / 1.8 的 format 1 目录要 `migrate --from --to --yes`，不能直接 `open`。`2.2.x` 补丁不升 `formatVersion`。
 8. **内存模型**：默认把已加载集合放在进程内存。`tiering: true` 是实验旗标（默认关），冷文档按需加载；不要在生产依赖这份冷文件布局。
 
 ---
@@ -801,7 +800,7 @@ pnpm --filter @jsonsqlite/bench start
 | [devDocs/releases/v1.8.0/开发计划.md](./devDocs/releases/v1.8.0/开发计划.md) | v1.8 性能预备（非 LTS） |
 | [devDocs/releases/v2.0/开发计划.md](./devDocs/releases/v2.0/开发计划.md) | v2.0 破坏性一代（非 LTS） |
 | [devDocs/releases/v2.1.0/开发计划.md](./devDocs/releases/v2.1.0/开发计划.md) | v2.1 硬化（非 LTS） |
-| [devDocs/releases/v2.2.0/开发计划.md](./devDocs/releases/v2.2.0/开发计划.md) | **LTS-2** `2.2.x`（规划） |
+| [devDocs/releases/v2.2.0/开发计划.md](./devDocs/releases/v2.2.0/开发计划.md) | **LTS-2** `2.2.x`（已发布） |
 | [devDocs/releases/v2.3.0/开发计划.md](./devDocs/releases/v2.3.0/开发计划.md) | v2.3 适配器（非 LTS） |
 | [devDocs/releases/v3.0.0/开发计划.md](./devDocs/releases/v3.0.0/开发计划.md) | **LTS-3 / Vision Complete**（规划） |
 | [devDocs/releases/v1.5.5/开发计划.md](./devDocs/releases/v1.5.5/开发计划.md) | v1.5.5 **CLI LTS 化**（命令扩展 / 交互与脚本契约） |

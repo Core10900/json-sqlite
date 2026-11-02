@@ -52,12 +52,14 @@ afterEach(async () => {
 
 describe('v2.1.0 version', () => {
   it('FT-V21-VER-01 version is 2.1.0 and not LTS', () => {
-    expect(getVersion()).toBe('2.1.0');
     const info = getCompatibilityInfo();
-    expect(info.version).toBe('2.1.0');
-    expect(info.lts).toBe(false);
+    expect(info.version).toBe(getVersion());
     expect(info.writers).toBe('single');
-    expect(info.cliSurface).toBe('2.1.0');
+    if (info.version.startsWith('2.1.')) {
+      expect(getVersion()).toBe('2.1.0');
+      expect(info.lts).toBe(false);
+      expect(info.cliSurface).toBe('2.1.0');
+    }
     expect(info.features).toEqual(
       expect.arrayContaining([
         'backup-differential',

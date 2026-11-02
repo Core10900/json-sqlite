@@ -1,10 +1,12 @@
 # JSONSQLite CLI API
 
-> **适用于 `@webofcat/jsonsqlite` 1.6.x LTS**  
-> **CLI 命令面冻结自 1.5.5**（本文件为权威契约；1.6.x 不扩张子命令）  
-> 二进制：`jsonsqlite` / `jsql` · 包：`@webofcat/jsonsqlite`
+> **支持政策（2.2 冻结）**  
+> **LTS-2 = 2.2.x** 是新项目的默认生产 pin。**2.2.x PATCH 不增加子命令**，不改全局 flag 与退出码。  
+> **LTS-1 = 1.6.x LTS** 的 1.5.5 命令面仍然有效且不改名；该线继续只收安全与正确性补丁，并行窗口不少于 12 个月，或至 LTS-3 发布后 6 个月。  
+> 二进制：`jsonsqlite` / `jsql` · 包：`@webofcat/jsonsqlite`  
+> 1.7 之后追加的命令见 §13–§17，都已进入 2.2 冻结面。没有 `plugin` / `replica` / `cluster`。
 
-库 API 见根目录 [`API.md`](./API.md)。命令底稿来源：[`devDocs/releases/v1.5.5/cli-command-inventory.md`](./devDocs/releases/v1.5.5/cli-command-inventory.md)。
+库 API 见根目录 [`API.md`](./API.md)。1.5.5 命令底稿：[`devDocs/releases/v1.5.5/cli-command-inventory.md`](./devDocs/releases/v1.5.5/cli-command-inventory.md)。
 
 ---
 
@@ -12,7 +14,7 @@
 
 ```bash
 npm install -g @webofcat/jsonsqlite
-jsonsqlite --version    # => 2.0.0（非 LTS；1.6.x 仍是当前 LTS pin。见 §15）
+jsonsqlite --version    # => 2.2.0（LTS-2，ltsLine 2.2。1.6.x 仍收安全补丁，见文首）
 jsql --version          # 同入口别名
 ```
 
@@ -289,5 +291,23 @@ jsonsqlite insert|update|delete|index|sql --help
 | `tune [--dry-run] [json-query]` | ✅ | 默认 dry-run，不改索引 |
 | `audit list [--action …] [--limit N]` | ✅ | 只读审计 |
 | `doctor` | ✅ | 区分可自愈的索引损坏与拒绝打开的数据损坏 |
+
+---
+
+## 17. 2.2 LTS-2 冻结
+
+> **2.2.0 是 LTS-2，仍是单写者。** 2.2.x PATCH 不增加子命令。本版不是集群版。
+
+相对 2.1 只增加配置校验。下表与根帮助一起构成冻结面；PATCH 不得再加行。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `compat` / `version --json` | ✅ | `lts: true`，`ltsLine: "2.2"`，`writers: "single"`，`cliSurface: "2.2.0"` |
+| `config validate --file <path>` | ✅ | 对照 `config.example.json` 的已冻结字段。未知键与危险键（`cluster`、`replica`、`l3`、`redis`、`cache`、`writers`、`raft` 等）退出码 1，`INVALID_CONFIG`，键不生效。不打开数据库 |
+
+全局 flag 与 2.1 相同：`-p/--path`、`-y/--yes`、`--json`、`-q/--quiet`、`-h/--help`。  
+退出码与 2.1 相同：`0` 成功，`1` 用法/业务，`2` 系统/IO，`3` 锁失败。
+
+`config.example.json` 不含方案 §9 的集群与 L3 字段。冻结的缓存字段是 `cacheSize`，不是嵌套 `cache`。
 
 

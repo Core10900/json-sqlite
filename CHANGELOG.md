@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.2.0 — 2026-11-02 · **LTS-2**
+
+**LTS-2。** 相对 2.1 为 MINOR，**不增加功能**。默认仍是单写者。本版不是集群版。
+
+生产 pin 从 LTS-1（1.6.x）改为本线。1.6.x 继续收安全与正确性补丁，并行窗口不少于 12 个月，或至 LTS-3（2.5）发布后 6 个月，以本 Release 为准。`lts` 与 `latest` 都指向 2.2，直到 2.3 发布；2.3 起 `latest` 可以离开本线，`lts` 仍留在 2.2。
+
+### Changed
+- `getCompatibilityInfo()`：`lts: true`，`ltsLine: '2.2'`，`cliSurface: '2.2.0'`，`writers: 'single'`
+- CLI 面冻结。`2.2.x` 补丁不新增子命令、不改默认值、不升 `formatVersion`（安全修复若必须动格式，须可迁移并单独说明）
+- 新增并冻结 `config validate --file`：只接受已实现字段；`cluster` / `replica` / `l3` / `redis` / `cache`（方案 §9 的 Redis 嵌套，不是 `cacheSize`）等危险键拒绝且不生效，退出码 1，`INVALID_CONFIG`
+- 发布 `config.example.json`（已冻结字段，不含集群 / L3）
+- 迁移指南：[1.6 / 1.8 → 2.2](./devDocs/releases/v2.2.0/迁移指南.md)
+- 备份演练脚本 `packages/core/scripts/backup-drill.mjs`（全量、增量、差异、坏 checksum、中间坏 WAL、坏数据页）
+
+### Not in this release
+多写者、复制、列存、插件、Geo、savepoint、GraphQL、Raft、集群。
+
 ## 2.1.0 — 2026-10-30
 
 **非 LTS**（为 2.2 = LTS-2 浸泡）。默认仍是**单写者**。相对 2.0 为 MINOR。

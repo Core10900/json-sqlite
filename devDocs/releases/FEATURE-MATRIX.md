@@ -171,7 +171,7 @@
 | 能力 | 状态 | 目标版本 |
 |------|------|----------|
 | JSONSQLiteOptions 核心字段 | ✅ | 1.x |
-| `config.example.json` 对齐 **已冻结** 字段 | 📅 | **2.2**（不预写集群字段） |
+| `config.example.json` 对齐 **已冻结** 字段 | ✅ | **2.2**（不含集群 / L3 字段；危险键由 `config validate` 拒绝） |
 | GitHub Actions | ✅ | 1.8 |
 | 相对回归 bench | ✅ | 1.8 |
 | 包拆分 | 📅 | **3.3** 按需，先改 npm 接入说明 |

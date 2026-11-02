@@ -1,0 +1,26 @@
+{
+  "storagePath": "./data",
+  "walMode": true,
+  "defaultIsolation": "READ_COMMITTED",
+  "queryTimeout": 30000,
+  "cacheSize": 1000,
+  "syncMode": "normal",
+  "schemaMode": "off",
+  "lazyCollections": true,
+  "prefetchCollections": [],
+  "autoTune": false,
+  "autoTuneDryRun": true,
+  "persistIndexes": true,
+  "l2Cache": false,
+  "l2CacheSize": 5000,
+  "compression": false,
+  "compressionThreshold": 1024,
+  "tiering": false,
+  "tierColdAfter": 0,
+  "pageSize": 32,
+  "maxResidentDocs": 256,
+  "backupIntervalMs": 0,
+  "alerts": {
+    "rules": []
+  }
+}

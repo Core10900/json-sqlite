@@ -1,8 +1,10 @@
 # JSONSQLite Library API
 
-> **适用于 `@webofcat/jsonsqlite` 1.6.x LTS**  
-> CLI 细节以 [`CLI-API.md`](./CLI-API.md) 为准（命令面冻结自 **1.5.5**）  
-> 本文档覆盖全部稳定 `import` 符号与 `JSONSQLite` 实例方法
+> **支持政策**  
+> **LTS-2 = 2.2.x** 是新项目的默认生产 pin（单写者）。`2.2.x` 补丁不新增命令、不改默认值、不升 `formatVersion`；安全修复若必须动格式，须可迁移并单独说明。新功能进 2.3+。  
+> **LTS-1 = 1.6.x LTS** 继续只收安全与正确性补丁，与 LTS-2 并行不少于 12 个月，或至 LTS-3（2.5）发布后 6 个月。  
+> CLI 以 [`CLI-API.md`](./CLI-API.md) 为准（2.2 冻结；1.5.5 命令仍在，且未改名）。  
+> 下文各节是历史增补。2.2 冻结契约见文末「2.2 LTS-2」。本文档覆盖稳定 `import` 符号与 `JSONSQLite` 实例方法。不删除已承诺符号。
 
 ---
 
@@ -470,4 +472,42 @@ unsubscribe();
 - `getVersion() === '2.1.0'`
 - `lts: false`，`writers: 'single'`，`cliSurface: '2.1.0'`
 - **非 LTS，仍单写者**
+
+---
+
+## 2.2 LTS-2 冻结（单写者，不增加功能）
+
+相对 2.1 为 **MINOR**。不删除 2.0 / 2.1 稳定符号。不加入多写者、复制、列存、插件、集群。
+
+`2.2.x` 补丁：不新增命令，不改默认值，不升 `formatVersion`。安全修复若必须动格式，须可迁移并在 README 与迁移指南里单独写步骤。2.2.0 没有这种格式变更。
+
+### 兼容信息
+
+```ts
+getCompatibilityInfo();
+// version: '2.2.0'
+// formatVersion: 2
+// lts: true
+// ltsLine: '2.2'
+// writers: 'single'
+// cliSurface: '2.2.0'
+```
+
+- `lts: true` 表示这是长期稳定线，不是 2.0/2.1 那种浸泡版。
+- `ltsLine: '2.2'` 用来区分以后的 LTS。不要从 `version` 字符串推断线名。
+- `writers: 'single'`：第二进程 `open` 同一目录抛 `LOCK_FAILED`。
+
+### 隔离（语义不缩小）
+
+- 默认 `READ_COMMITTED`：`query` 看见最新已提交。
+- 显式 `beginTransaction('REPEATABLE_READ')` 建立快照；`query(q, { txId })` 看不见该快照之后的提交。
+- `SERIALIZABLE` / `READ_UNCOMMITTED` 仍拒绝：配置为默认值是 `INVALID_CONFIG`，`begin` 是 `ISOLATION_UNSUPPORTED`。
+
+### 配置
+
+`config.example.json` 只含本节之前已经实现的字段。方案 §9 的 `cluster`、`replica`、`l3` / `redis`、嵌套 `cache`（冻结字段是 `cacheSize`）不在 example 里。`config validate --file` 遇到这些键抛 `INVALID_CONFIG`，键不会被悄悄丢掉之后继续。
+
+### 迁移
+
+1.6 与 1.8（`formatVersion` 1）使用 `migrateDatabase({ from, to, yes: true })` 或 CLI `migrate --from --to --yes`。直接 `open` 抛 `MIGRATION_REQUIRED`。步骤见 [`devDocs/releases/v2.2.0/迁移指南.md`](./devDocs/releases/v2.2.0/迁移指南.md)。
 
