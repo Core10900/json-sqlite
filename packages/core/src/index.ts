@@ -76,4 +76,23 @@ export type {
 export { FORMAT_VERSION } from './storage/Catalog.js';
 export type { HttpServerOptions } from './api/httpServer.js';
 export { isLoopbackHost } from './api/httpServer.js';
+export {
+  builtinPluginCatalog,
+  builtinPluginInfo,
+  createS3Stub,
+  createVectorStub,
+} from './plugins/registry.js';
+export type {
+  BuiltinPluginInfo,
+  EnginePlugin,
+  PluginKind,
+  PluginManifest,
+} from './plugins/registry.js';
+export { compressSmart, decompressSmart, selectAlgorithm } from './storage/smartCompress.js';
+export type { SmartAlgorithm } from './storage/smartCompress.js';
+export { createBigramTokenizer, bigramTokenize } from './tokenize/chinese.js';
+export type { ChineseTokenizer } from './tokenize/chinese.js';
+export type { QueryPlanInfo } from './engine/JSONSQLite.js';
+export type { ColumnStoreStatus } from './storage/columnStore.js';
+export type { TierSummary } from './storage/tiers.js';
 

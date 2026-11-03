@@ -7,6 +7,7 @@ import { writeFileAtomic } from '../utils/fsDurable.js';
 import { coldDocsFile, docsFile, pageFile, pagesManifest } from '../utils/path.js';
 import type { Catalog } from './Catalog.js';
 import { compressLine, decompressLine } from './compress.js';
+import { compressSmart, decompressSmart, isSmartBlock } from './smartCompress.js';
 import type { Wal, WalEntry } from './Wal.js';
 
 export interface TierSnapshot {
@@ -60,6 +61,11 @@ export class DocumentStore {
   private readonly walReplay = new Map<string, boolean>();
   private delayedLoads = 0;
   private pageReads = 0;
+  private smartCompression = false;
+  private prefetchPages = false;
+  private prefetchHits = 0;
+  private prefetchFallbacks = 0;
+  private readonly prefetched = new Set<string>();
   private compression = false;
   private compressionThreshold = 1024;
   private tiering = false;
@@ -102,6 +108,8 @@ export class DocumentStore {
     tierColdAfter: number;
     pageSize: number;
     maxResidentDocs: number;
+    smartCompression?: boolean;
+    prefetchPages?: boolean;
   }): void {
     this.compression = opts.compression;
     this.compressionThreshold = opts.compressionThreshold;
@@ -109,6 +117,8 @@ export class DocumentStore {
     this.tierColdAfter = opts.tierColdAfter;
     this.pageSize = opts.pageSize;
     this.maxResidentDocs = opts.maxResidentDocs;
+    this.smartCompression = opts.smartCompression ?? false;
+    this.prefetchPages = opts.prefetchPages ?? false;
   }
 
   setCompression(enabled: boolean): void {
@@ -738,9 +748,14 @@ export class DocumentStore {
     list.push(pageId);
   }
 
-  private async loadPage(name: string, pageId: number): Promise<Map<string, Document>> {
+  private async loadPage(
+    name: string,
+    pageId: number,
+    opts?: { fromPrefetch?: boolean },
+  ): Promise<Map<string, Document>> {
     const existing = this.pages.get(name)?.get(pageId);
     if (existing) {
+      if (this.prefetched.delete(`${name}:${pageId}`)) this.prefetchHits += 1;
       this.touchLru(name, pageId);
       return existing;
     }
@@ -761,7 +776,30 @@ export class DocumentStore {
     this.pages.get(name)!.set(pageId, map);
     this.touchLru(name, pageId);
     await this.evictToBudget(name, pageId);
+    if (this.prefetchPages && !opts?.fromPrefetch) {
+      await this.prefetchNext(name, pageId);
+    }
     return map;
+  }
+
+  /**
+   * Read the next page into the cache. A missing page or a read error
+   * increments the fallback counter and does not fail the original read.
+   */
+  private async prefetchNext(name: string, pageId: number): Promise<void> {
+    const nextId = pageId + 1;
+    const dir = this.dirs.get(name);
+    const known = dir?.pages.some((page) => page.id === nextId) ?? false;
+    if (!known || this.pages.get(name)?.has(nextId)) {
+      if (!known) this.prefetchFallbacks += 1;
+      return;
+    }
+    try {
+      await this.loadPage(name, nextId, { fromPrefetch: true });
+      this.prefetched.add(`${name}:${nextId}`);
+    } catch {
+      this.prefetchFallbacks += 1;
+    }
   }
 
   private async evictToBudget(name: string, pin?: number): Promise<void> {
@@ -864,7 +902,10 @@ export class DocumentStore {
 
   private encodeStored(json: string): string {
     let payload = json;
-    if (this.compression) {
+    if (this.smartCompression) {
+      const smart = compressSmart(json);
+      payload = smart.text.length < json.length ? smart.text : json;
+    } else if (this.compression) {
       payload = compressLine(payload, this.compressionThreshold);
     }
     if (this.catalog.encryption && this.encKey) {
@@ -915,6 +956,23 @@ export class DocumentStore {
     this.pageReads = 0;
   }
 
+  prefetchSnapshot(): {
+    enabled: boolean;
+    hits: number;
+    fallbacks: number;
+  } {
+    return {
+      enabled: this.prefetchPages,
+      hits: this.prefetchHits,
+      fallbacks: this.prefetchFallbacks,
+    };
+  }
+
+  resetPrefetchStats(): void {
+    this.prefetchHits = 0;
+    this.prefetchFallbacks = 0;
+  }
+
   private decodeStoredLine(line: string): Document {
     if (isEncryptedLine(line) && !this.encKey) {
       throw new JSONSQLiteError(
@@ -924,7 +982,8 @@ export class DocumentStore {
     }
     let plain: string;
     try {
-      plain = decompressLine(decryptLine(line, this.encKey));
+      const decrypted = decryptLine(line, this.encKey);
+      plain = isSmartBlock(decrypted) ? decompressSmart(decrypted) : decompressLine(decrypted);
     } catch (err) {
       if (err instanceof JSONSQLiteError) throw err;
       throw new JSONSQLiteError(

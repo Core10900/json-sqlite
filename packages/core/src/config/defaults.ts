@@ -67,6 +67,24 @@ const optionsSchema = z.object({
       webhookUrl: z.string().min(1).nullable().optional(),
     })
     .optional(),
+  /** 2.3 column store master switch. Default off. */
+  columnStore: z.boolean().default(false),
+  columnCollections: z.array(z.string()).default([]),
+  /** 2.3 hot/warm/cold layout. Default off. Distinct from 1.8 `tiering`. */
+  storageTiers: z.boolean().default(false),
+  coldAfter: z.number().int().nonnegative().default(0),
+  warmAfter: z.number().int().nonnegative().default(1),
+  /** Delta / dict / RLE / gzip block compression. Default off. */
+  smartCompression: z.boolean().default(false),
+  /** Extra index segment parts. Default off (2.2 single segment file). */
+  indexDeltaSegments: z.boolean().default(false),
+  cacheCompression: z.boolean().default(false),
+  cacheCompressionThreshold: z.number().int().nonnegative().default(4096),
+  prefetchPages: z.boolean().default(false),
+  /** 0 = one-shot scan, same as 2.2. */
+  queryChunkSize: z.number().int().nonnegative().default(0),
+  chineseTokenizer: z.enum(['none', 'bigram']).default('none'),
+  tokenizerModule: z.string().min(1).optional(),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;
@@ -115,6 +133,12 @@ export function resolveOptions(input: JSONSQLiteOptions): ResolvedOptions {
     throw new JSONSQLiteError(
       ErrorCode.INVALID_CONFIG,
       `maxResidentDocs (${data.maxResidentDocs}) must be >= pageSize (${data.pageSize})`,
+    );
+  }
+  if (data.warmAfter < data.coldAfter) {
+    throw new JSONSQLiteError(
+      ErrorCode.INVALID_CONFIG,
+      `warmAfter (${data.warmAfter}) must be >= coldAfter (${data.coldAfter})`,
     );
   }
   return data;

@@ -1,6 +1,12 @@
 # JSONSQLite
 
-**版本：2.2.0**（**LTS-2**，单写者） · **LTS pin：2.2.x**（`lts` / 在 2.3 之前的 `latest`） · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**当前包：2.3.0**（**非 LTS**，单写者） · **生产 pin：2.2.x**（`lts`） · **`latest`：2.3.0** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+
+2.3 默认不改变 2.2 库的行为。列存、分层和插件要显式打开。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要这些存储格式时：
+
+```bash
+npm install @webofcat/jsonsqlite@lts
+```
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
 
@@ -801,7 +807,7 @@ pnpm --filter @jsonsqlite/bench start
 | [devDocs/releases/v2.0/开发计划.md](./devDocs/releases/v2.0/开发计划.md) | v2.0 破坏性一代（非 LTS） |
 | [devDocs/releases/v2.1.0/开发计划.md](./devDocs/releases/v2.1.0/开发计划.md) | v2.1 硬化（非 LTS） |
 | [devDocs/releases/v2.2.0/开发计划.md](./devDocs/releases/v2.2.0/开发计划.md) | **LTS-2** `2.2.x`（已发布） |
-| [devDocs/releases/v2.3.0/开发计划.md](./devDocs/releases/v2.3.0/开发计划.md) | v2.3 适配器（非 LTS） |
+| [devDocs/releases/v2.3.0/开发计划.md](./devDocs/releases/v2.3.0/开发计划.md) | v2.3 存储与查询增强（非 LTS，已发布） |
 | [devDocs/releases/v3.0.0/开发计划.md](./devDocs/releases/v3.0.0/开发计划.md) | **LTS-3 / Vision Complete**（规划） |
 | [devDocs/releases/v1.5.5/开发计划.md](./devDocs/releases/v1.5.5/开发计划.md) | v1.5.5 **CLI LTS 化**（命令扩展 / 交互与脚本契约） |
 | [devDocs/releases/v1.5.0/开发计划.md](./devDocs/releases/v1.5.0/开发计划.md) | v1.5.0 生产就绪（rekey / vacuum / 压测） |

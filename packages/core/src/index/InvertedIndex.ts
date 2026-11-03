@@ -24,7 +24,18 @@ export class InvertedIndex implements Index {
   private docFreq = new Map<string, number>();
   private totalDocs = 0;
 
-  constructor(readonly meta: IndexMeta) {}
+  constructor(
+    readonly meta: IndexMeta,
+    private readonly tokenizeFn: (text: string) => string[] = tokenize,
+  ) {}
+
+  private tokens(text: string): string[] {
+    try {
+      return this.tokenizeFn(text);
+    } catch {
+      return tokenize(text);
+    }
+  }
 
   build(docs: Document[]): void {
     this.map.clear();
@@ -37,7 +48,7 @@ export class InvertedIndex implements Index {
     this.totalDocs += 1;
     const text = String(fieldValue(doc, this.meta.field) ?? '');
     const seen = new Set<string>();
-    for (const token of tokenize(text)) {
+    for (const token of this.tokens(text)) {
       let set = this.map.get(token);
       if (!set) {
         set = new Set();
@@ -59,7 +70,7 @@ export class InvertedIndex implements Index {
 
   remove(doc: Document): void {
     const text = String(fieldValue(doc, this.meta.field) ?? '');
-    for (const token of new Set(tokenize(text))) {
+    for (const token of new Set(this.tokens(text))) {
       const set = this.map.get(token);
       if (!set) continue;
       if (set.delete(doc._id)) {
@@ -83,7 +94,7 @@ export class InvertedIndex implements Index {
 
   lookupText(query: string, limit = 100): string[] {
     const scores = new Map<string, number>();
-    for (const term of tokenize(query)) {
+    for (const term of this.tokens(query)) {
       const docs = this.map.get(term);
       if (!docs) continue;
       const df = this.docFreq.get(term) ?? 1;

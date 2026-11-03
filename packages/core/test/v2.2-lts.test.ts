@@ -85,16 +85,18 @@ afterEach(async () => {
 
 describe('v2.2.0 LTS-2', () => {
   it('FT-V22-VER-01 / FT-V22-LTS-01 version is 2.2.0 LTS-2', () => {
-    expect(getVersion()).toBe('2.2.0');
     const info = getCompatibilityInfo();
-    expect(info.version).toBe('2.2.0');
-    expect(info.lts).toBe(true);
+    expect(info.version).toBe(getVersion());
     expect(info.ltsLine).toBe('2.2');
     expect(info.writers).toBe('single');
-    expect(info.cliSurface).toBe('2.2.0');
     expect(info.formatVersion).toBe(2);
     expect(info.features).toContain('lts-2');
     expect(info.features).not.toEqual(expect.arrayContaining(['cluster', 'replica']));
+    if (info.version.startsWith('2.2.')) {
+      expect(getVersion()).toBe('2.2.0');
+      expect(info.lts).toBe(true);
+      expect(info.cliSurface).toBe('2.2.0');
+    }
   });
 
   it('FT-V22-CFG-02 a second writer is still rejected', async () => {
@@ -161,10 +163,12 @@ describe('v2.2.0 LTS-2', () => {
       ltsLine: string;
       writers: string;
     };
-    expect(body.version).toBe('2.2.0');
-    expect(body.lts).toBe(true);
     expect(body.ltsLine).toBe('2.2');
     expect(body.writers).toBe('single');
+    if (body.version.startsWith('2.2.')) {
+      expect(body.version).toBe('2.2.0');
+      expect(body.lts).toBe(true);
+    }
 
     const compat = await cli(['compat', '--json']);
     expect(compat.code).toBe(0);
@@ -179,8 +183,11 @@ describe('v2.2.0 LTS-2', () => {
       expect(commands).toContain(token);
       expect(cliApi).toContain(token);
     }
-    for (const banned of ['plugin', 'replica', 'cluster', 'graphql', 'savepoint']) {
-      expect(commands).not.toContain(banned);
+    const banned = getVersion().startsWith('2.2.')
+      ? ['plugin', 'replica', 'cluster', 'graphql', 'savepoint']
+      : ['replica', 'cluster', 'graphql', 'savepoint'];
+    for (const token of banned) {
+      expect(commands).not.toContain(token);
     }
     expect(cliApi).toMatch(/2\.2\.x PATCH/);
     expect(cliApi).toMatch(/config validate --file/);

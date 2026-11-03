@@ -38,4 +38,11 @@ export interface Index {
   lookupText(query: string, limit?: number): string[];
   /** Composite prefix equality (optional). */
   lookupPrefix?(values: unknown[]): string[];
+  /** Bounding box (geo). Others omit this. */
+  lookupGeo?(box: {
+    minLat: number;
+    minLon: number;
+    maxLat: number;
+    maxLon: number;
+  }): string[];
 }

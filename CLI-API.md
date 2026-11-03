@@ -310,4 +310,20 @@ jsonsqlite insert|update|delete|index|sql --help
 
 `config.example.json` 不含方案 §9 的集群与 L3 字段。冻结的缓存字段是 `cacheSize`，不是嵌套 `cache`。
 
+---
+
+## 18. 2.3 存储与查询增补（非 LTS，仍单写者）
+
+> **2.3.0 非 LTS。** 生产仍应 pin 2.2，除非需要本版的列存或插件。2.2 的稳定命令没有改名。没有 savepoint、replica、cluster。vector 与 S3 只是 stub：可用向量检索在 3.3，可用 S3 在 3.1。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `version --json` / `compat` | ✅ | `version` 为 `2.3.0`，`lts` 为 false，`ltsLine` 仍是 `"2.2"`（建议 pin 的线），`writers` 为 `"single"` |
+| `plugin list` | ✅ | 内置目录。不远程安装，不要求先 register |
+| `plugin info <name>` | ✅ | `vector` 的 `availableIn` 是 `3.3`；`s3` 是 `3.1`。两者 `stub` 为 true |
+| `index create <表> <字段> --type geo` | ✅ | 可选 Geo 索引。未建索引时 `$geoWithin` 仍是全表扫描，结果相同 |
+| `index compact [表]` | ✅ | 合并分段，不删除索引。合并后查询不变，再次打开命中合并段 |
+
+全局 flag 与退出码和 2.2 相同。
+
 

@@ -6,6 +6,7 @@ import { migrateDatabase } from '../ops/migrate.js';
 import { diagnoseWalDirectory } from '../storage/Wal.js';
 import { resolveEncryptionKey } from '../config/defaults.js';
 import { validateConfigFile } from '../config/validate.js';
+import { builtinPluginCatalog, builtinPluginInfo } from '../plugins/registry.js';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { FieldDef, FieldType, FilterCondition, JsonQuery } from '../types/index.js';
 import {
@@ -30,6 +31,7 @@ import { ExitCode, setExit } from './exit.js';
 import {
   helpFor,
   helpIndex,
+  helpPlugin,
   helpInsert,
   helpRoot,
   helpTableCreate,
@@ -114,6 +116,8 @@ export async function dispatch(argv: string[]): Promise<void> {
       return cmdCount(ctx, rest);
     case 'index':
       return cmdIndex(ctx, rest);
+    case 'plugin':
+      return cmdPlugin(ctx, rest);
     case 'stats':
       return cmdStats(ctx, rest);
     case 'explain':
@@ -820,7 +824,8 @@ async function cmdIndex(ctx: CliContext, rest: string[]): Promise<void> {
         | 'object'
         | 'tree'
         | 'inverted'
-        | 'composite';
+        | 'composite'
+        | 'geo';
       const fieldsRaw = flag(args, '--fields');
       const fields = fieldsRaw
         ? fieldsRaw.split(',').map((s) => s.trim()).filter(Boolean)
@@ -828,7 +833,7 @@ async function cmdIndex(ctx: CliContext, rest: string[]): Promise<void> {
       if (!table) {
         fail(
           ctx.out,
-          '用法: jsonsqlite index create <table> <field> [--type object|tree|inverted|composite] [--fields a,b]',
+          '用法: jsonsqlite index create <table> <field> [--type object|tree|inverted|geo|composite] [--fields a,b]',
           'USAGE',
         );
       }
@@ -853,7 +858,7 @@ async function cmdIndex(ctx: CliContext, rest: string[]): Promise<void> {
       if (!fieldPos) {
         fail(
           ctx.out,
-          '用法: jsonsqlite index create <table> <field> [--type object|tree|inverted]',
+          '用法: jsonsqlite index create <table> <field> [--type object|tree|inverted|geo]',
           'USAGE',
         );
       }
@@ -862,6 +867,16 @@ async function cmdIndex(ctx: CliContext, rest: string[]): Promise<void> {
         action: 'index.create',
         index: meta,
       });
+      return;
+    }
+    if (sub === 'compact') {
+      const [table] = positionals(args);
+      const result = await db.compactIndexes(table);
+      printSuccess(
+        ctx.out,
+        `✓ compacted ${result.indexes.length} index segment(s), parts merged ${result.partsMerged}`,
+        { action: 'index.compact', ...result },
+      );
       return;
     }
     if (sub === 'rebuild') {
@@ -889,6 +904,40 @@ async function cmdIndex(ctx: CliContext, rest: string[]): Promise<void> {
     }
     fail(ctx.out, `Unknown index subcommand: ${sub}`, 'USAGE', ExitCode.USAGE, helpIndex());
   });
+}
+
+async function cmdPlugin(ctx: CliContext, rest: string[]): Promise<void> {
+  if (hasFlag(rest, '--help', '-h') || !rest[0]) {
+    console.log(helpPlugin());
+    if (!rest[0]) setExit(ExitCode.USAGE);
+    return;
+  }
+  const sub = rest[0]!;
+  if (sub === 'list') {
+    const plugins = builtinPluginCatalog();
+    const human = plugins
+      .map(
+        (plugin) =>
+          `${plugin.kind}:${plugin.name}@${plugin.version} stub=${plugin.stub === true} availableIn=${plugin.availableIn ?? '-'}`,
+      )
+      .join('\n');
+    printData(ctx.out, human, { action: 'plugin.list', plugins });
+    return;
+  }
+  if (sub === 'info') {
+    const [name] = positionals(rest.slice(1));
+    if (!name) fail(ctx.out, '用法: jsonsqlite plugin info <name>', 'USAGE');
+    const info = builtinPluginInfo(name);
+    if (!info) {
+      fail(ctx.out, `Unknown plugin: ${name}`, 'USAGE');
+    }
+    printData(ctx.out, `${info.kind}:${info.name} ${info.summary}`, {
+      action: 'plugin.info',
+      plugin: info,
+    });
+    return;
+  }
+  fail(ctx.out, `Unknown plugin subcommand: ${sub}`, 'USAGE', ExitCode.USAGE, helpPlugin());
 }
 
 async function cmdStats(ctx: CliContext, rest: string[]): Promise<void> {

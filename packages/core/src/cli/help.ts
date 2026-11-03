@@ -21,14 +21,15 @@ Commands:
   get / count                row read helpers
   run / sql                  SQL execute / interactive REPL
   query                      JSON query
-  index list|create|drop|rebuild   index management
+  index list|create|drop|rebuild|compact   index management
+  plugin list|info           built-in plugin catalog (no remote install)
   stats                      database / table statistics
   explain                    query advice / plan hints
   advise                     Advisor (aligns with explain fields)
   aggregate                  aggregation pipeline (unwind/lookup)
   admin serve                start Admin HTTP + SSE
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version (lts: true, ltsLine 2.2)
+  compat / version [--json]  compatibility / version (2.3.0, lts: false, ltsLine 2.2)
   config validate --file <f> check a file against the frozen 2.2 config keys
   backup / vacuum [--compress] / rekey    ops
   backup --type full|incremental|differential
@@ -96,10 +97,21 @@ export function helpDelete(): string {
 
 export function helpIndex(): string {
   return `jsonsqlite index list
-jsonsqlite index create <table> <field> [--type object|tree|inverted]
+jsonsqlite index create <table> <field> [--type object|tree|inverted|geo]
 jsonsqlite index create <table> --type composite --fields a,b
 jsonsqlite index drop <table> <field>
 jsonsqlite index rebuild [table]
+jsonsqlite index compact [table]
+`;
+}
+
+export function helpPlugin(): string {
+  return `jsonsqlite plugin list
+jsonsqlite plugin info <name>
+
+Lists the built-in catalog. vector and s3 are callable stubs.
+A usable vector index is planned for 3.3. A usable S3 storage plugin is planned for 3.1.
+This command does not install plugins from a registry.
 `;
 }
 
@@ -183,19 +195,22 @@ export function helpCompat(): string {
   return `jsonsqlite compat [--json]
 jsonsqlite version [--json]
 Print getCompatibilityInfo() / version.
-On 2.2.x: lts is true, ltsLine is "2.2", writers is "single".
+On 2.3.0: lts is false, ltsLine is still "2.2" (the line to pin), writers is "single".
+2.3.0 is not LTS. Production that does not need this storage format should pin 2.2.
 `;
 }
 
 export function helpConfig(): string {
   return `jsonsqlite config validate --file <path>
 
-Check a JSON file against the frozen 2.2 keys in config.example.json.
+Check a JSON file against the 2.2 keys plus the 2.3 opt-in keys.
 Does not open a database.
 Unknown keys are refused (exit 1, code INVALID_CONFIG) and are not applied.
 Dangerous keys (cluster, replica, replication, raft, quorum, shard, writers,
-plugin, columnStore, graphql, vector, s3, savepoint, geo, wasm, l3, redis, cache)
-are named in the error. The frozen cache field is cacheSize, not cache / cache.l3.
+savepoint, graphql, wasm, l3, redis, cache) are named in the error.
+2.3 opt-in keys (columnStore, storageTiers, smartCompression, and the rest
+listed in config validation) are accepted and default off.
+The frozen cache field is cacheSize, not cache / cache.l3.
 `;
 }
 
@@ -217,6 +232,10 @@ export function helpFor(path: string[]): string | null {
       return helpDelete();
     case 'index':
       return helpIndex();
+    case 'plugin':
+    case 'plugin list':
+    case 'plugin info':
+      return helpPlugin();
     case 'sql':
       return helpSql();
     case 'admin':

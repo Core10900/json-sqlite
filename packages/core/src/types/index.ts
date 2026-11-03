@@ -55,6 +55,16 @@ export interface FilterOp {
    */
   $regex?: string | { pattern: string; flags?: string };
   $exists?: boolean;
+  /**
+   * Bounding box. Points use `{ lat, lon }`, `{ latitude, longitude }`,
+   * GeoJSON Point, or `[lon, lat]`. Without a geo index this is a scan.
+   */
+  $geoWithin?: {
+    minLat: number;
+    minLon: number;
+    maxLat: number;
+    maxLon: number;
+  };
   $and?: FilterCondition[];
   $or?: FilterCondition[];
 }
@@ -187,11 +197,64 @@ export interface JSONSQLiteOptions {
     }>;
     webhookUrl?: string | null;
   };
+  /**
+   * Master switch for the 2.3 column store. Default false.
+   * Tables are listed in `columnCollections`, or enabled later with
+   * `enableColumnStore`. The WAL remains the commit source.
+   */
+  columnStore?: boolean;
+  /** Tables that rebuild a column projection. Default empty (off). */
+  columnCollections?: string[];
+  /**
+   * 2.3 hot/warm/cold layout. Default false.
+   * This is not the 1.8 `tiering` flag. `tiering` still means the
+   * experimental cold.jsonl sweep on close.
+   */
+  storageTiers?: boolean;
+  /** Access count at or below this is moved to cold when storageTiers is on. Default 0. */
+  coldAfter?: number;
+  /** Access count at or below this (and above coldAfter) is warm. Default 1. */
+  warmAfter?: number;
+  /**
+   * Delta / dictionary / RLE / gzip with a block header. Default false.
+   * The 2.2 `compression` flag stays gzip-only.
+   */
+  smartCompression?: boolean;
+  /** Append index segment parts instead of overwriting one file. Default false. */
+  indexDeltaSegments?: boolean;
+  /** Gzip large query-cache values. Default false. Hits return the original documents. */
+  cacheCompression?: boolean;
+  /** Byte length at or above which a cached result is compressed. Default 4096. */
+  cacheCompressionThreshold?: number;
+  /** Prefetch the next page after a page miss. Default false. Failure falls back to on-demand reads. */
+  prefetchPages?: boolean;
+  /**
+   * When > 0, collection scans filter in chunks of this size, then sort
+   * and project once. Default 0 (one shot, same as 2.2). 0 disables chunking.
+   */
+  queryChunkSize?: number;
+  /** `none` (default) or the built-in `bigram` tokenizer. No extra dependency. */
+  chineseTokenizer?: 'none' | 'bigram';
+  /**
+   * Optional tokenizer package name. If the module is missing, open still
+   * succeeds and Chinese tokenization stays unavailable.
+   */
+  tokenizerModule?: string;
 }
 
 /** Optional read scope. `txId` selects a REPEATABLE_READ snapshot. */
 export interface QueryReadOptions {
   txId?: number;
+  /**
+   * Override `queryChunkSize` for this call. `0` forces a single pass.
+   * Omit to use the open() option (default 0).
+   */
+  chunkSize?: number;
+  /**
+   * `false` forces the document scan even when a column store is ready.
+   * Omit to use the column store when it is ready.
+   */
+  column?: boolean;
 }
 
 export interface RekeyOptions {
@@ -242,7 +305,7 @@ export interface DoctorReport {
   timestamp: number;
 }
 
-export type IndexType = 'object' | 'tree' | 'inverted' | 'composite';
+export type IndexType = 'object' | 'tree' | 'inverted' | 'composite' | 'geo';
 
 /** Soft schema field types for table DDL / CLI dialogue. */
 export type FieldType = 'string' | 'number' | 'boolean' | 'json' | 'any';

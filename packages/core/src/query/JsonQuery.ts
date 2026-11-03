@@ -7,6 +7,7 @@ import type {
   OrderBySpec,
 } from '../types/index.js';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
+import { assertGeoBox, pointInBox } from '../index/geo.js';
 import { matchLike } from './like.js';
 
 export function executeJsonQuery(
@@ -85,6 +86,17 @@ function matchCondition(value: unknown, condition: FilterValue): boolean {
   }
   if ('$exists' in op) {
     return op.$exists ? value !== undefined : value === undefined;
+  }
+  if ('$geoWithin' in op && op.$geoWithin) {
+    try {
+      assertGeoBox(op.$geoWithin);
+    } catch (err) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    return pointInBox(value, op.$geoWithin);
   }
 
   // Plain object used as equality (rare)

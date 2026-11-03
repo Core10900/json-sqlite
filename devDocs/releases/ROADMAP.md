@@ -1,7 +1,7 @@
 # JSONSQLite 版本路线图
 
 > 基准日期：2026-10-27（按生产级目标重排 2.x / 3.x）  
-> 当前代码线：`@webofcat/jsonsqlite@2.2.0`（**LTS-2**，单写者，不是集群版）  
+> 当前代码线：`@webofcat/jsonsqlite@2.3.0`（**非 LTS**，单写者）。生产 pin 仍是 **LTS-2 = 2.2.x**  
 > 已宣布的长期稳定线：**LTS-1 = 1.6.x**（并行安全补丁）与 **LTS-2 = 2.2.x**（新项目主推荐）  
 > 能力对照：[FEATURE-MATRIX.md](./FEATURE-MATRIX.md)  
 > 设计依据：`devDocs/design/`。生产红线以《技术实现方案》§12.2、§13、§17 为准  

@@ -20,7 +20,7 @@ export function planIndexIds(
 } | null {
   const candidate = pickIndex(query.filter, indexes);
   if (!candidate) return null;
-  const { index, mode, value, min, max, text, prefixValues } = candidate;
+  const { index, mode, value, min, max, text, prefixValues, box } = candidate;
   let ids: string[] = [];
   if (mode === 'eq') ids = index.lookupEq(value);
   else if (mode === 'range') ids = index.lookupRange(min, max);
@@ -29,6 +29,8 @@ export function planIndexIds(
     ids = index.lookupPrefix
       ? index.lookupPrefix(prefixValues)
       : index.lookupEq(prefixValues);
+  } else if (mode === 'geo' && box) {
+    ids = index.lookupGeo ? index.lookupGeo(box) : [];
   }
   return {
     ids,
@@ -84,12 +86,18 @@ function pickIndex(
 ):
   | {
       index: Index;
-      mode: 'eq' | 'range' | 'text' | 'composite';
+      mode: 'eq' | 'range' | 'text' | 'composite' | 'geo';
       value?: unknown;
       min?: unknown;
       max?: unknown;
       text?: string;
       prefixValues?: unknown[];
+      box?: {
+        minLat: number;
+        minLon: number;
+        maxLat: number;
+        maxLon: number;
+      };
     }
   | null {
   if (!filter) return null;
@@ -160,6 +168,9 @@ function pickIndex(
   }
   if (index.meta.type === 'inverted' && '$contains' in op) {
     return { index, mode: 'text', text: String(op.$contains ?? '') };
+  }
+  if (index.meta.type === 'geo' && op.$geoWithin && index.lookupGeo) {
+    return { index, mode: 'geo', box: op.$geoWithin };
   }
   return null;
 }

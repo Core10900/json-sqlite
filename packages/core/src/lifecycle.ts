@@ -13,16 +13,19 @@ declare const __JSONSQLITE_VERSION__: string;
 export interface CompatibilityInfo {
   version: string;
   formatVersion: number;
-  /** True on LTS-1 (1.6.x) and LTS-2 (2.2.x). */
+  /**
+   * True on an LTS binary. 2.3.0 is not LTS.
+   * Production that does not need the 2.3 storage format should pin 2.2.
+   */
   lts: boolean;
   /**
-   * LTS line name. `2.2` means LTS-2.
-   * Read this field instead of parsing `version`.
+   * Recommended production LTS line. `2.2` means LTS-2.
+   * On 2.3 this stays `2.2`: it names the line to pin, not this package.
    */
   ltsLine: '2.2';
-  /** CLI command surface generation. Frozen at 2.2.0 for the 2.2.x line. */
+  /** CLI command surface generation. 2.3.0 adds plugin and index compact. */
   cliSurface: string;
-  /** LTS-2 keeps a single writer. */
+  /** Still a single writer. Multi-writer is 2.5. */
   writers: 'single';
   features: string[];
 }
@@ -55,9 +58,9 @@ export function getCompatibilityInfo(): CompatibilityInfo {
   return {
     version: getVersion(),
     formatVersion: FORMAT_VERSION,
-    lts: true,
+    lts: false,
     ltsLine: '2.2',
-    cliSurface: '2.2.0',
+    cliSurface: '2.3.0',
     writers: 'single',
     features: [
       'encryption',
@@ -95,6 +98,19 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'predicate-pushdown',
       'lts-2',
       'cli-2.2',
+      'column-store',
+      'storage-tiers',
+      'smart-compression',
+      'index-compact',
+      'cache-compression',
+      'page-prefetch',
+      'plugins',
+      'vector-stub',
+      's3-stub',
+      'chunk-query',
+      'geo-index',
+      'chinese-tokenizer',
+      'cli-2.3',
     ],
   };
 }

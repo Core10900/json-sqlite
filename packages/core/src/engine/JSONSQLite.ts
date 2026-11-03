@@ -8,7 +8,7 @@ import {
   type ResolvedOptions,
 } from '../config/defaults.js';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
-import { L1Cache } from '../cache/L1Cache.js';
+import { ResultCache } from '../cache/ResultCache.js';
 import { IndexManager } from '../index/IndexManager.js';
 import type { IndexType } from '../index/types.js';
 import { planAndExecute, planIndexIds } from '../query/Planner.js';
@@ -62,6 +62,21 @@ import { AuditLog, type AuditEntry } from '../ops/audit.js';
 import { repairDatabase, type RepairOptions, type RepairResult } from '../ops/repair.js';
 import { generateId } from '../utils/id.js';
 import { collectionDir, walFile } from '../utils/path.js';
+import { ColumnStore, type ColumnStoreStatus } from '../storage/columnStore.js';
+import { TierService, type TierSummary } from '../storage/tiers.js';
+import {
+  assertPluginManifest,
+  PluginRegistry,
+  type EnginePlugin,
+  type PluginErrorRecord,
+  type PluginManifest,
+} from '../plugins/registry.js';
+import { executeChunked } from '../query/chunk.js';
+import {
+  bigramTokenize,
+  tryLoadTokenizerModule,
+  type ChineseTokenizer,
+} from '../tokenize/chinese.js';
 import type {
   AlterTableSpec,
   CollectionInfo,
@@ -94,8 +109,22 @@ export class JSONSQLite extends EventEmitter {
   private store: DocumentStore | null = null;
   private tx: TransactionManager | null = null;
   private indexes: IndexManager | null = null;
-  private cache: L1Cache<Document[]> | null = null;
-  private l2: L1Cache<Document[]> | null = null;
+  private cache: ResultCache | null = null;
+  private l2: ResultCache | null = null;
+  private columns: ColumnStore | null = null;
+  private tiers: TierService | null = null;
+  private plugins: PluginRegistry | null = null;
+  private planInfo: QueryPlanInfo = {
+    source: 'document',
+    chunked: false,
+    chunks: 0,
+    columnFiles: 0,
+  };
+  private tokenizerState: {
+    available: boolean;
+    name: string | null;
+    reason: string | null;
+  } = { available: false, name: null, reason: 'not-configured' };
   private changelog: ChangeLog | null = null;
   private backup: BackupManager | null = null;
   private ddlJournal: DdlJournal | null = null;
@@ -193,7 +222,12 @@ export class JSONSQLite extends EventEmitter {
         }
       }
 
-      this.indexes = new IndexManager(root, sync, this.options.persistIndexes);
+      this.indexes = new IndexManager(
+        root,
+        sync,
+        this.options.persistIndexes,
+        this.options.indexDeltaSegments,
+      );
       this.store = new DocumentStore(
         root,
         this.catalog,
@@ -220,12 +254,38 @@ export class JSONSQLite extends EventEmitter {
         tierColdAfter: this.options.tierColdAfter,
         pageSize: this.options.pageSize,
         maxResidentDocs: this.options.maxResidentDocs,
+        smartCompression: this.options.smartCompression,
+        prefetchPages: this.options.prefetchPages,
       });
+      this.columns = new ColumnStore(root, sync);
+      this.plugins = new PluginRegistry(root, sync);
+      this.tiers = new TierService(
+        root,
+        sync,
+        this.encKey,
+        this.options.coldAfter,
+        this.options.warmAfter,
+      );
+      this.tiers.setHookSource(() =>
+        this.plugins!.storageHooks().map((plugin) => ({
+          putCold: async (collection: string, doc: Document) => {
+            await this.plugins!.isolate(plugin, () => plugin.putCold?.(collection, doc));
+          },
+        })),
+      );
       this.tx = new TransactionManager(this.store);
       this.changelog = new ChangeLog(root);
-      this.cache = new L1Cache(this.options.cacheSize);
+      this.cache = new ResultCache(
+        this.options.cacheSize,
+        this.options.cacheCompression,
+        this.options.cacheCompressionThreshold,
+      );
       this.l2 = this.options.l2Cache
-        ? new L1Cache(this.options.l2CacheSize)
+        ? new ResultCache(
+            this.options.l2CacheSize,
+            this.options.cacheCompression,
+            this.options.cacheCompressionThreshold,
+          )
         : null;
       this.backup = new BackupManager(root, this.encKey);
       this.ddlJournal = new DdlJournal(root, sync);
@@ -236,6 +296,24 @@ export class JSONSQLite extends EventEmitter {
 
       const lazy = this.options.lazyCollections;
       const prefetch = new Set(this.options.prefetchCollections ?? []);
+
+      if (this.options.chineseTokenizer === 'bigram') {
+        this.indexes.setTokenizer(bigramTokenize);
+        this.tokenizerState = { available: true, name: 'bigram', reason: null };
+      }
+      if (this.options.tokenizerModule) {
+        const loaded = await tryLoadTokenizerModule(this.options.tokenizerModule);
+        if (loaded.tokenize) {
+          this.indexes.setTokenizer(loaded.tokenize);
+          this.tokenizerState = { available: true, name: loaded.name, reason: null };
+        } else if (this.options.chineseTokenizer !== 'bigram') {
+          this.tokenizerState = {
+            available: false,
+            name: null,
+            reason: loaded.reason,
+          };
+        }
+      }
 
       await this.indexes.load();
 
@@ -284,11 +362,34 @@ export class JSONSQLite extends EventEmitter {
           dryRun: this.options.autoTuneDryRun !== false,
         },
       );
+      await this.columns.loadEnabled();
+      if (this.options.columnCollections.length > 0) {
+        for (const name of this.options.columnCollections) this.columns.enable(name);
+      }
+      for (const name of this.columns.enabledNames()) {
+        if (!this.catalog.has(name)) continue;
+        await this.store.ensureLoaded(name);
+        const trusted = await this.columns.restore(name, this.store.indexStats(name));
+        if (!trusted) this.scheduleColumnRebuild(name);
+      }
+      if (this.options.storageTiers) {
+        const names = this.catalog.list().map((info) => info.name);
+        await this.tiers.load(names);
+        this.tiers.startBackground(
+          () => this.catalog?.list().map((info) => info.name) ?? [],
+          async (name) => {
+            await this.store!.ensureLoaded(name);
+            return this.store!.readAll(name);
+          },
+        );
+      }
+
       this.ready = true;
       this.startBackupScheduler();
       this.emit('ready');
       return this;
     } catch (err) {
+      this.tiers?.stop();
       this.stopBackupScheduler();
       await this.lock.release().catch(() => undefined);
       this.lock = null;
@@ -299,6 +400,9 @@ export class JSONSQLite extends EventEmitter {
       this.indexes = null;
       this.cache = null;
       this.l2 = null;
+      this.columns = null;
+      this.tiers = null;
+      this.plugins = null;
       this.ddlJournal = null;
       this.changelog = null;
       this.backup = null;
@@ -312,6 +416,8 @@ export class JSONSQLite extends EventEmitter {
   async close(opts?: { flush?: boolean }): Promise<void> {
     if (!this.ready) return;
     this.stopBackupScheduler();
+    this.tiers?.stop();
+    if (opts?.flush !== false) await this.columns?.whenAllIdle();
     if (this.tx?.active) await this.tx.rollback();
     if (this.httpServer) {
       await new Promise<void>((resolve) => this.httpServer!.close(() => resolve()));
@@ -337,6 +443,9 @@ export class JSONSQLite extends EventEmitter {
     this.indexes = null;
     this.cache = null;
     this.l2 = null;
+    this.columns = null;
+    this.tiers = null;
+    this.plugins = null;
     this.ddlJournal = null;
     this.changelog = null;
     this.backup = null;
@@ -825,6 +934,7 @@ export class JSONSQLite extends EventEmitter {
         this.touchCaches(collection);
         this.monitor.recordWrite();
         await this.persistIndexState(collection);
+        this.afterMutation(collection, out.map((doc) => doc._id));
       }
       this.emit('dataChanged', { op: 'insert', collection, count: out.length });
       return out;
@@ -844,6 +954,7 @@ export class JSONSQLite extends EventEmitter {
       this.touchCaches(collection);
       this.monitor.recordWrite();
       await this.persistIndexState(collection);
+      this.afterMutation(collection, [doc._id]);
     }
     this.emit('dataChanged', { op: 'insert', collection, id: doc._id });
     return doc;
@@ -877,6 +988,7 @@ export class JSONSQLite extends EventEmitter {
       this.touchCaches(collection);
       this.monitor.recordWrite();
       await this.persistIndexState(collection);
+      this.afterMutation(collection, [id]);
     }
     this.emit('dataChanged', { op: 'update', collection, id });
     return doc;
@@ -902,6 +1014,7 @@ export class JSONSQLite extends EventEmitter {
       this.touchCaches(collection);
       this.monitor.recordWrite();
       await this.persistIndexState(collection);
+      this.afterMutation(collection, [id]);
     }
     if (ok) this.emit('dataChanged', { op: 'delete', collection, id });
     return ok;
@@ -932,20 +1045,45 @@ export class JSONSQLite extends EventEmitter {
       return this.tx!.snapshotGet(opts.txId, collection, id) ?? null;
     }
     await this.store!.ensureLoaded(collection);
-    return (await this.store!.getById(collection, id)) ?? null;
+    const hot = (await this.store!.getById(collection, id)) ?? null;
+    if (!this.options.storageTiers || !this.tiers) return hot;
+    const placed = this.tiers.lookup(collection, id);
+    if (placed && (!hot || placed.doc._version >= hot._version)) {
+      if (placed.tier === 'cold') this.tiers.noteColdRead();
+      else this.tiers.noteWarmRead();
+      this.tiers.noteAccess(collection, id);
+      return { ...placed.doc };
+    }
+    if (hot) this.tiers.noteAccess(collection, id);
+    return hot;
   }
 
   async query(query: JsonQuery, opts?: QueryReadOptions): Promise<Document[]> {
     this.assertReady();
     const start = Date.now();
+    await this.plugins?.invokeQuery(query.collection);
     if (opts?.txId !== undefined && this.tx!.isSnapshot(opts.txId)) {
       const snapDocs = this.tx!.snapshotDocs(opts.txId, query.collection);
       const planned = planAndExecute(snapDocs, query, [], () => []);
+      this.planInfo = {
+        source: 'document',
+        chunked: false,
+        chunks: 1,
+        columnFiles: 0,
+      };
       return planned.docs;
     }
-    const cacheKey = `${query.collection}::${JSON.stringify(query)}`;
+    const chunkKey = opts?.chunkSize ?? this.options.queryChunkSize;
+    const cacheKey = `${query.collection}::${JSON.stringify(query)}::chunk${chunkKey}::col${opts?.column === false ? 0 : 1}`;
     const cached = this.cache!.get(cacheKey);
     if (cached) {
+      this.planInfo = {
+        source: 'cache',
+        chunked: false,
+        chunks: 1,
+        columnFiles: 0,
+        usedIndex: 'cache',
+      };
       this.monitor.recordQuery({
         ts: Date.now(),
         collection: query.collection,
@@ -959,6 +1097,13 @@ export class JSONSQLite extends EventEmitter {
       const l2hit = this.l2.get(cacheKey);
       if (l2hit) {
         this.cache!.set(cacheKey, l2hit);
+        this.planInfo = {
+          source: 'l2',
+          chunked: false,
+          chunks: 1,
+          columnFiles: 0,
+          usedIndex: 'l2',
+        };
         this.monitor.recordQuery({
           ts: Date.now(),
           collection: query.collection,
@@ -975,7 +1120,15 @@ export class JSONSQLite extends EventEmitter {
     const indexed = planIndexIds(query, indexes);
     let plannedDocs: Document[];
     let usedIndex: { type: string; field: string } | undefined;
-    if (indexed) {
+    let chunked = false;
+    let chunks = 1;
+    let columnFiles = 0;
+    const columnar =
+      indexed || opts?.column === false ? null : await this.tryColumnQuery(query);
+    if (columnar) {
+      plannedDocs = columnar;
+      columnFiles = this.columns?.lastFileReads ?? 0;
+    } else if (indexed) {
       const resolved: Document[] = [];
       for (const id of indexed.ids) {
         const doc = await this.store!.getById(query.collection, id);
@@ -991,10 +1144,25 @@ export class JSONSQLite extends EventEmitter {
       usedIndex = indexed.usedIndex;
     } else {
       const all = await this.store!.readAll(query.collection);
-      const planned = planAndExecute(all, query, [], () => []);
-      plannedDocs = planned.docs;
+      const chunkSize = opts?.chunkSize ?? this.options.queryChunkSize;
+      if (chunkSize > 0) {
+        const executed = executeChunked(all, query, chunkSize);
+        plannedDocs = executed.docs;
+        chunked = executed.chunked;
+        chunks = executed.chunks;
+      } else {
+        const planned = planAndExecute(all, query, [], () => []);
+        plannedDocs = planned.docs;
+      }
     }
 
+    this.planInfo = {
+      source: columnar ? 'column' : 'document',
+      chunked,
+      chunks,
+      columnFiles,
+      usedIndex: usedIndex ? `${usedIndex.type}:${usedIndex.field}` : undefined,
+    };
     this.cache!.set(cacheKey, plannedDocs);
     this.l2?.set(cacheKey, plannedDocs);
     if (this.options.tiering) {
@@ -1183,6 +1351,8 @@ export class JSONSQLite extends EventEmitter {
         idx.build(await this.store!.readAll(c));
       }
       await this.persistIndexState(c);
+      this.tiers?.forgetCollection(c);
+      this.scheduleColumnRebuild(c);
     }
     if (result.touched.length > 0) this.monitor.recordWrite();
   }
@@ -1484,8 +1654,22 @@ export class JSONSQLite extends EventEmitter {
       compression: {
         enabled: this.store!.compressionEnabled(),
         threshold: this.options.compressionThreshold,
+        smart: this.options.smartCompression,
       },
       indexes: this.indexes!.diagnostics(),
+      cacheCompression: this.cache!.compressionStats(),
+      prefetch: this.store!.prefetchSnapshot(),
+      storageTiers: this.options.storageTiers
+        ? this.tiers!.summary()
+        : {
+            enabled: false as const,
+            hot: 0,
+            warm: 0,
+            cold: 0,
+            coldReads: 0,
+            warmReads: 0,
+            migrating: false,
+          },
     };
   }
 
@@ -1802,6 +1986,198 @@ export class JSONSQLite extends EventEmitter {
     this.l2?.invalidateCollection(collection);
   }
 
+  /** Last query's read path. Column and chunk flags stay false when those features are off. */
+  lastPlan(): QueryPlanInfo {
+    this.assertReady();
+    return { ...this.planInfo };
+  }
+
+  columnStoreStatus(collection: string): ColumnStoreStatus {
+    this.assertReady();
+    return this.columns!.status(collection);
+  }
+
+  /**
+   * Mark a table for column storage and schedule a rebuild.
+   * The call returns before the rebuild finishes. Writes stay on the WAL.
+   */
+  async enableColumnStore(collection: string): Promise<void> {
+    this.assertReady();
+    await this.store!.ensureLoaded(collection);
+    this.columns!.enable(collection);
+    await this.columns!.persistEnabled();
+    this.scheduleColumnRebuild(collection);
+  }
+
+  async flushColumnStore(collection: string): Promise<ColumnStoreStatus> {
+    this.assertReady();
+    await this.columns!.whenIdle(collection);
+    if (!this.columns!.status(collection).ready && this.columns!.isEnabled(collection)) {
+      this.scheduleColumnRebuild(collection);
+      await this.columns!.whenIdle(collection);
+    }
+    return this.columns!.status(collection);
+  }
+
+  resetColumnFileReads(): void {
+    this.assertReady();
+    this.columns!.resetFileReads();
+  }
+
+  prefetchStats(): { enabled: boolean; hits: number; fallbacks: number } {
+    this.assertReady();
+    return this.store!.prefetchSnapshot();
+  }
+
+  resetPrefetchStats(): void {
+    this.assertReady();
+    this.store!.resetPrefetchStats();
+  }
+
+  tokenizerStatus(): { available: boolean; name: string | null; reason: string | null } {
+    this.assertReady();
+    return { ...this.tokenizerState };
+  }
+
+  async registerTokenizer(tokenizer: ChineseTokenizer): Promise<void> {
+    this.assertReady();
+    assertPluginManifest({
+      kind: 'index',
+      name: tokenizer.name,
+      version: tokenizer.version,
+    });
+    this.indexes!.setTokenizer(tokenizer.tokenize);
+    this.tokenizerState = { available: true, name: tokenizer.name, reason: null };
+    const collections = new Set(
+      this.indexes!
+        .list()
+        .filter((meta) => meta.type === 'inverted')
+        .map((meta) => meta.collection),
+    );
+    for (const name of collections) {
+      await this.store!.ensureLoaded(name);
+      this.indexes!.rebuildCollection(name, await this.store!.readAll(name));
+    }
+  }
+
+  registerPlugin(plugin: EnginePlugin): void {
+    this.assertReady();
+    this.plugins!.register(plugin);
+    void this.plugins!.persist().catch(() => undefined);
+  }
+
+  listPlugins(): PluginManifest[] {
+    this.assertReady();
+    return this.plugins!.list();
+  }
+
+  pluginErrors(): PluginErrorRecord[] {
+    this.assertReady();
+    return this.plugins!.errorsSnapshot();
+  }
+
+  async vectorSearch(collection: string, vector: number[]): Promise<unknown> {
+    this.assertReady();
+    const plugin = this.plugins!.find('vector', 'index');
+    if (!plugin?.search) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        'vector plugin is not registered. The built-in vector entry is a stub; a usable vector index is planned for 3.3.',
+      );
+    }
+    const result = await this.plugins!.isolate(plugin, () =>
+      plugin.search!({ collection, vector }),
+    );
+    if (!result.ok) {
+      return {
+        hits: [],
+        stub: true,
+        availableIn: '3.3',
+        called: false,
+        collection,
+        error: result.error,
+      };
+    }
+    return result.value;
+  }
+
+  /**
+   * Run one hot/warm/cold pass. Do not await this from a write if the
+   * caller needs the write to stay unblocked; `insert` does not await it.
+   */
+  async migrateTiersOnce(): Promise<TierSummary> {
+    this.assertReady();
+    if (!this.options.storageTiers || !this.tiers) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        'storageTiers is off. Set storageTiers: true to use the 2.3 hot/warm/cold layout. The 1.8 tiering flag is a different switch.',
+      );
+    }
+    const names = this.catalog!.list().map((info) => info.name);
+    await this.tiers.migrate(async (name) => {
+      await this.store!.ensureLoaded(name);
+      return this.store!.readAll(name);
+    }, names);
+    return this.tiers.summary();
+  }
+
+  tierSummary(): TierSummary {
+    this.assertReady();
+    if (!this.options.storageTiers || !this.tiers) {
+      return {
+        enabled: false,
+        hot: 0,
+        warm: 0,
+        cold: 0,
+        coldReads: 0,
+        warmReads: 0,
+        migrating: false,
+      };
+    }
+    return this.tiers.summary();
+  }
+
+  /** Merge index segment parts. Does not drop indexes. */
+  async compactIndexes(
+    collection?: string,
+  ): Promise<{ indexes: string[]; partsMerged: number }> {
+    this.assertReady();
+    const names = collection
+      ? [collection]
+      : (await this.listTables()).map((table) => table.name);
+    for (const name of names) await this.store!.ensureLoaded(name);
+    return this.indexes!.compact(collection, (name) => this.store!.indexStats(name));
+  }
+
+  private afterMutation(collection: string, ids: string[]): void {
+    for (const id of ids) this.tiers?.forget(collection, id);
+    this.scheduleColumnRebuild(collection);
+  }
+
+  private scheduleColumnRebuild(collection: string): void {
+    if (!this.columns?.isEnabled(collection) || !this.store) return;
+    void this.columns.scheduleRebuild(collection, async () => {
+      await this.store!.ensureLoaded(collection);
+      return this.store!.readAll(collection);
+    });
+  }
+
+  private async tryColumnQuery(query: JsonQuery): Promise<Document[] | null> {
+    if (!this.columns?.isEnabled(query.collection)) return null;
+    const read = await this.columns.read(
+      query.collection,
+      neededColumnFields(query),
+    );
+    if (!read) return null;
+    return executeJsonQuery(read.docs, {
+      filter: query.filter,
+      projection: query.projection,
+      orderBy: query.orderBy,
+      limit: query.limit,
+      offset: query.offset,
+    });
+  }
+
   private async persistIndexState(collection: string): Promise<void> {
     if (!this.options.persistIndexes) return;
     await this.indexes!.flushCollection(
@@ -1817,6 +2193,53 @@ export class JSONSQLite extends EventEmitter {
         'Database is not open. Call open() first.',
       );
     }
+  }
+}
+
+export interface QueryPlanInfo {
+  source: 'cache' | 'l2' | 'column' | 'document';
+  chunked: boolean;
+  chunks: number;
+  columnFiles: number;
+  usedIndex?: string;
+}
+
+const COLUMN_SYSTEM = new Set(['_id', '_version', '_createdAt', '_updatedAt']);
+
+function neededColumnFields(query: JsonQuery): string[] | null {
+  const fields = new Set<string>();
+  if (query.projection) {
+    for (const field of query.projection) fields.add(field);
+  }
+  collectFilterFields(query.filter, fields);
+  const order = query.orderBy
+    ? Array.isArray(query.orderBy)
+      ? query.orderBy
+      : [query.orderBy]
+    : [];
+  for (const spec of order) {
+    for (const field of Object.keys(spec)) fields.add(field);
+  }
+  for (const field of COLUMN_SYSTEM) fields.delete(field);
+  if (!query.projection || query.projection.length === 0) return null;
+  return [...fields];
+}
+
+function collectFilterFields(
+  filter: JsonQuery['filter'] | undefined,
+  into: Set<string>,
+): void {
+  if (!filter) return;
+  for (const [key, value] of Object.entries(filter)) {
+    if ((key === '$and' || key === '$or') && Array.isArray(value)) {
+      for (const sub of value) {
+        if (sub && typeof sub === 'object') {
+          collectFilterFields(sub as JsonQuery['filter'], into);
+        }
+      }
+      continue;
+    }
+    into.add(key);
   }
 }
 

@@ -10,12 +10,20 @@ export interface SegmentBody {
   docCount: number;
   revisionSum: number;
   snapshot: IndexSnapshot;
+  /** Set when `index compact` merged segment parts into this body. */
+  merged?: boolean;
+  /** `gzip` means `packed` holds the snapshot; `snapshot.entries` may be empty. */
+  algorithm?: 'raw' | 'gzip';
+  packed?: string;
 }
 
 export interface SegmentStamp {
   checksum: string;
   docCount: number;
   revisionSum: number;
+  /** Delta segment count. Absent on the 2.2 single-file layout. */
+  parts?: number;
+  merged?: boolean;
 }
 
 export function revisionSum(docs: { _version: number }[]): number {

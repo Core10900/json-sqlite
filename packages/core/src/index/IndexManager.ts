@@ -1,12 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { Document, SyncMode } from '../types/index.js';
 import { writeFileAtomic } from '../utils/fsDurable.js';
 import { ObjectIndex } from './ObjectIndex.js';
 import { TreeIndex } from './TreeIndex.js';
-import { InvertedIndex } from './InvertedIndex.js';
+import { InvertedIndex, tokenize } from './InvertedIndex.js';
 import { CompositeIndex } from './CompositeIndex.js';
+import { GeoIndex } from './GeoIndex.js';
 import type { Index, IndexMeta, IndexType } from './types.js';
 import {
   INDEX_SEGMENT_FORMAT,
@@ -34,6 +36,10 @@ export interface IndexDiagnostics {
   rebuilt: string[];
   corrupt: { key: string; reason: string }[];
   segmentCount: number;
+  /** Index keys whose on-disk segment was produced by compact. */
+  merged: string[];
+  /** Part count for delta segments. Absent keys use a single file. */
+  parts: Record<string, number>;
 }
 
 export class IndexManager {
@@ -45,11 +51,19 @@ export class IndexManager {
   private corrupt: { key: string; reason: string }[] = [];
   private buildCount = 0;
 
+  private tokenizeFn: ((text: string) => string[]) | null = null;
+
   constructor(
     private readonly storagePath: string,
     private readonly syncMode: SyncMode = 'normal',
     private readonly persistSegments = true,
+    private readonly deltaSegments = false,
   ) {}
+
+  /** Inverted indexes built after this call use `fn`. Null restores the default splitter. */
+  setTokenizer(fn: ((text: string) => string[]) | null): void {
+    this.tokenizeFn = fn;
+  }
 
   private key(collection: string, field: string): string {
     return `${collection}:${field}`;
@@ -87,6 +101,8 @@ export class IndexManager {
       const idx = this.createInstance(meta);
       const k = this.key(meta.collection, meta.field);
       this.indexes.set(k, idx);
+      const hint = data.segments?.[k];
+      if (hint) this.segmentMeta.set(k, hint);
       if (this.persistSegments) await this.tryRestore(k, idx);
     }
   }
@@ -100,7 +116,7 @@ export class IndexManager {
     stats: { docCount: number; revisionSum: number },
     walReplay: boolean,
   ): boolean {
-    if (!this.persistSegments || walReplay) return false;
+    if (!this.persistSegments || walReplay || this.tokenizeFn) return false;
     const list = this.findForCollection(collection);
     if (list.length === 0) return true;
     const docCount = stats.docCount;
@@ -175,7 +191,67 @@ export class IndexManager {
       rebuilt: [...this.rebuilt],
       corrupt: this.corrupt.map((c) => ({ ...c })),
       segmentCount: this.segmentMeta.size,
+      merged: [...this.segmentMeta.entries()]
+        .filter(([, stamp]) => stamp.merged === true)
+        .map(([key]) => key),
+      parts: Object.fromEntries(
+        [...this.segmentMeta.entries()].map(([key, stamp]) => [key, stamp.parts ?? 1]),
+      ),
     };
+  }
+
+  /**
+   * Merge delta segment parts into one checksummed segment.
+   * Query postings stay in memory and are rewritten; this does not drop the index.
+   */
+  async compact(
+    collection: string | undefined,
+    statsFor: (name: string) => { docCount: number; revisionSum: number },
+  ): Promise<{ indexes: string[]; partsMerged: number }> {
+    const indexes: string[] = [];
+    let partsMerged = 0;
+    for (const idx of this.indexes.values()) {
+      if (collection && idx.meta.collection !== collection) continue;
+      const k = this.key(idx.meta.collection, idx.meta.field);
+      const stats = statsFor(idx.meta.collection);
+      const parts = this.segmentMeta.get(k)?.parts ?? 1;
+      partsMerged += parts;
+      const packed = gzipSync(
+        Buffer.from(JSON.stringify(idx.exportEntries()), 'utf8'),
+      ).toString('base64');
+      const body: SegmentBody = {
+        format: INDEX_SEGMENT_FORMAT,
+        meta: idx.meta,
+        docCount: stats.docCount,
+        revisionSum: stats.revisionSum,
+        snapshot: { entries: [] },
+        merged: true,
+        algorithm: 'gzip',
+        packed,
+      };
+      const checksum = checksumBody(body);
+      await writeFileAtomic(
+        this.segmentPath(idx.meta.collection, idx.meta.field),
+        JSON.stringify({ checksum, body }),
+        this.syncMode,
+      );
+      for (let n = 2; n <= parts; n++) {
+        await fs.rm(this.partPath(idx.meta.collection, idx.meta.field, n), {
+          force: true,
+        });
+      }
+      this.segmentMeta.set(k, {
+        checksum,
+        docCount: stats.docCount,
+        revisionSum: stats.revisionSum,
+        parts: 1,
+        merged: true,
+      });
+      this.restored.add(k);
+      indexes.push(k);
+    }
+    await this.save();
+    return { indexes, partsMerged };
   }
 
   async createIndex(
@@ -263,8 +339,16 @@ export class IndexManager {
     for (const idx of this.findForCollection(collection)) idx.remove(doc);
   }
 
+  private partPath(collection: string, field: string, part: number): string {
+    return `${this.segmentPath(collection, field)}.p${part}`;
+  }
+
   private async tryRestore(k: string, idx: Index): Promise<void> {
-    const file = this.segmentPath(idx.meta.collection, idx.meta.field);
+    const hint = this.segmentMeta.get(k);
+    const file =
+      hint && (hint.parts ?? 1) > 1 && hint.merged !== true
+        ? this.partPath(idx.meta.collection, idx.meta.field, hint.parts ?? 1)
+        : this.segmentPath(idx.meta.collection, idx.meta.field);
     let raw: string;
     try {
       raw = await fs.readFile(file, 'utf8');
@@ -288,11 +372,25 @@ export class IndexManager {
         this.noteCorrupt(k, `unsupported segment format ${parsed.body.format}`);
         return;
       }
+      if (parsed.body.algorithm === 'gzip') {
+        if (typeof parsed.body.packed !== 'string') {
+          this.noteCorrupt(k, 'merged segment missing packed snapshot');
+          return;
+        }
+        const json = gunzipSync(Buffer.from(parsed.body.packed, 'base64')).toString(
+          'utf8',
+        );
+        parsed.body.snapshot = JSON.parse(json) as SegmentBody['snapshot'];
+      }
       idx.importEntries(parsed.body.snapshot);
       const stamp: SegmentStamp = {
         checksum,
         docCount: parsed.body.docCount,
         revisionSum: parsed.body.revisionSum,
+        ...(hint?.parts !== undefined || parsed.body.merged
+          ? { parts: parsed.body.merged ? 1 : hint?.parts ?? 1 }
+          : {}),
+        ...(parsed.body.merged ? { merged: true } : {}),
       };
       this.segmentMeta.set(k, stamp);
       this.restored.add(k);
@@ -307,6 +405,14 @@ export class IndexManager {
   ): Promise<void> {
     if (!this.persistSegments) return;
     const k = this.key(idx.meta.collection, idx.meta.field);
+    const existing = this.segmentMeta.get(k);
+    if (
+      existing?.merged &&
+      existing.docCount === stats.docCount &&
+      existing.revisionSum === stats.revisionSum
+    ) {
+      return;
+    }
     const body: SegmentBody = {
       format: INDEX_SEGMENT_FORMAT,
       meta: idx.meta,
@@ -315,15 +421,18 @@ export class IndexManager {
       snapshot: idx.exportEntries(),
     };
     const checksum = checksumBody(body);
-    await writeFileAtomic(
-      this.segmentPath(idx.meta.collection, idx.meta.field),
-      JSON.stringify({ checksum, body }),
-      this.syncMode,
-    );
+    const appendPart =
+      this.deltaSegments && existing !== undefined && existing.merged !== true;
+    const parts = appendPart ? (existing?.parts ?? 1) + 1 : 1;
+    const file = appendPart
+      ? this.partPath(idx.meta.collection, idx.meta.field, parts)
+      : this.segmentPath(idx.meta.collection, idx.meta.field);
+    await writeFileAtomic(file, JSON.stringify({ checksum, body }), this.syncMode);
     this.segmentMeta.set(k, {
       checksum,
       docCount: body.docCount,
       revisionSum: body.revisionSum,
+      ...(this.deltaSegments ? { parts, merged: false } : {}),
     });
     this.restored.add(k);
     this.corrupt = this.corrupt.filter((c) => c.key !== k);
@@ -334,10 +443,14 @@ export class IndexManager {
     field: string,
     k: string,
   ): Promise<void> {
+    const parts = this.segmentMeta.get(k)?.parts ?? 1;
     this.segmentMeta.delete(k);
     this.restored.delete(k);
     this.corrupt = this.corrupt.filter((c) => c.key !== k);
     await fs.rm(this.segmentPath(collection, field), { force: true });
+    for (let n = 2; n <= parts; n++) {
+      await fs.rm(this.partPath(collection, field, n), { force: true });
+    }
   }
 
   private noteCorrupt(k: string, reason: string): void {
@@ -353,9 +466,11 @@ export class IndexManager {
       case 'tree':
         return new TreeIndex(meta);
       case 'inverted':
-        return new InvertedIndex(meta);
+        return new InvertedIndex(meta, this.tokenizeFn ?? tokenize);
       case 'composite':
         return new CompositeIndex(meta);
+      case 'geo':
+        return new GeoIndex(meta);
       default:
         throw new JSONSQLiteError(
           ErrorCode.INVALID_CONFIG,

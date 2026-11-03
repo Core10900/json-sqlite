@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.3.0 — 2026-11-03 · 非 LTS
+
+**非 LTS。** 相对 2.2 为 MINOR。默认配置打开 2.2 库时行为与 LTS-2 一致。列存、热/温/冷新布局、智能压缩、插件、缓存压缩、热页预取、chunk 执行、Geo 索引、中文分词全部默认关闭。
+
+生产仍应 pin **2.2**，除非需要本版存储格式。`lts` 继续指向 2.2。`latest` 指向 2.3.0。
+
+### Added
+- 按表列存。写入仍先落 WAL，列存异步重建。投影跳过无用列，结果与文档模式一致
+- `storageTiers` 热/温/冷后台迁移，不阻塞写入。冷层可接 `storage` 插件。1.8 的 `tiering` 仍是实验旗标，对应关系见迁移指南
+- 智能压缩：数值差分、低基数字典、RLE、gzip。块头记录算法。先压缩再加密
+- `index compact` 合并分段。查询结果不变，再次打开命中合并段
+- 大缓存值压缩；热页预取有命中计数，失败则退回按需读页（退回不是错误）
+- 插件：`index` / `storage` / `compression` / `backup` / `queryLanguage`。校验名称与版本。钩子抛错不拖垮查询
+- vector stub（可用实现在 3.3）、S3 stub（可用实现在 3.1）
+- 大结果 chunk 执行，与非 chunk 结果相同
+- 可选 GeoIndex、可选中文分词。缺少分词模块时 `open` 仍然成功
+- CLI：`plugin list`、`plugin info`、`index create --type geo`、`index compact`
+- `getCompatibilityInfo()`：`lts: false`，`ltsLine: '2.2'`，`cliSurface: '2.3.0'`
+
+### Not in this release
+savepoint（2.4）、多写者、复制、GraphQL、Raft、WASM、可用向量检索、可用 S3 上传。
+
 ## 2.2.0 — 2026-11-02 · **LTS-2**
 
 **LTS-2。** 相对 2.1 为 MINOR，**不增加功能**。默认仍是单写者。本版不是集群版。
