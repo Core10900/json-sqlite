@@ -1,8 +1,8 @@
 # @webofcat/jsonsqlite
 
-**版本：2.3.0** · **非 LTS** · 单写者 · Node.js ≥ 20 · 作者：hanlin
+**版本：2.4.0** · **非 LTS** · 默认单写者 · Node.js ≥ 20 · 作者：hanlin
 
-生产环境请继续 pin **2.2**（LTS-2）：
+生产环境请继续 pin **2.2**（LTS-2）。需要多写者的生产 pin 是 **2.5**，不是本版：
 
 ```bash
 npm install @webofcat/jsonsqlite@2.2
@@ -10,32 +10,124 @@ npm install @webofcat/jsonsqlite@2.2
 npm install @webofcat/jsonsqlite@lts
 ```
 
-只有需要本版的列存、热/温/冷分层或插件时才安装 2.3。`npm install @webofcat/jsonsqlite`（`latest`）会装到 2.3.0。`lts` 仍指向 2.2，不要把 2.3 当成更稳定的替代。
+只有需要列存、热/温/冷分层、插件，或要试用单机多写者时才安装 2.4。`npm install @webofcat/jsonsqlite`（`latest`）会装到 2.4.0。`lts` 仍指向 2.2，不要把 2.4 当成生产 pin。
 
-2.3 不改变默认路径。不传新选项时，`open` 可以打开 2.2 的库（`formatVersion` 仍是 2，不用迁移），查询、索引、备份和 CLI 的稳定命令与 LTS-2 一致。列存、分层、智能压缩、插件、大值缓存压缩、热页预取、chunk 执行、Geo 索引、中文分词**全部默认关闭**。
+2.4 不改变默认路径。不传 `writers` 时仍是单写者，`open` 可以打开 2.2 / 2.3 的库（`formatVersion` 仍是 2，不用迁移）。列存、分层、智能压缩、插件、大值缓存压缩、热页预取、chunk 执行、Geo 索引、中文分词**全部默认关闭**。多写者也默认关闭。
 
 ```ts
 import { getCompatibilityInfo, open } from '@webofcat/jsonsqlite';
 
 const info = getCompatibilityInfo();
 // {
-//   version: '2.3.0',    // 本包版本。这不是 LTS 包
+//   version: '2.4.0',    // 本包版本。这不是 LTS 包
 //   formatVersion: 2,    // 与 2.2 相同，旧的 2.2 目录可以直接 open
 //   lts: false,          // 本二进制不是长期支持线
 //   ltsLine: '2.2',      // 建议 pin 的生产 LTS 线。不要把它读成「本包属于 2.2」
-//   writers: 'single',   // 仍然是单写者。多写者在 2.5
-//   cliSurface: '2.3.0', // 在 2.2 命令之外增加了 plugin 与 index compact
+//   writers: 'single',   // 默认仍是单写者。显式 multi 见下文；生产多写者等 2.5
+//   cliSurface: '2.4.0', // 在 2.3 命令之外增加了全局 --writers
 // }
 ```
 
 | 字段 | 含义 |
 |------|------|
-| `lts: false` | 这个 2.3.0 包不是长期支持版本。需要稳定契约时 pin 2.2。 |
-| `ltsLine: '2.2'` | 当前建议生产使用的 LTS 线。2.3 发布后这个字段仍是 `'2.2'`。 |
-| `writers: 'single'` | 第二个进程 `open` 同一目录会得到 `LOCK_FAILED`。 |
-| `cliSurface: '2.3.0'` | 2.2 的子命令都还在，并且可以多出 `plugin` 和 `index compact`。 |
+| `lts: false` | 这个 2.4.0 包不是长期支持版本。需要稳定契约时 pin 2.2。 |
+| `ltsLine: '2.2'` | 当前建议生产使用的 LTS 线。2.4 发布后这个字段仍是 `'2.2'`。 |
+| `writers: 'single'` | 这是默认开库模式。不写 `writers` 时，第二个进程 `open` 同一目录会得到 `LOCK_FAILED`。 |
+| `cliSurface: '2.4.0'` | 2.3 的子命令都还在，并且可以多出全局 `--writers single\|multi`。 |
 
-默认隔离级别仍是 `READ_COMMITTED`。另一种可用级别是 `REPEATABLE_READ`。`READ_UNCOMMITTED` 和 `SERIALIZABLE` 会拒绝。LTS-1（1.6.x）继续收安全补丁，并行窗口不少于 12 个月，或到 LTS-3（2.5）发布后 6 个月。`@webofcat/jsonsqlite@2.2.0` 是这条 LTS-2 的首个版本。
+默认隔离级别仍是 `READ_COMMITTED`。另一种在 single 下可用的级别是 `REPEATABLE_READ`。`READ_UNCOMMITTED` 会拒绝。single 模式下 `SERIALIZABLE` 也会拒绝。LTS-1（1.6.x）继续收安全补丁，并行窗口不少于 12 个月，或到 LTS-3（2.5）发布后 6 个月。`@webofcat/jsonsqlite@2.2.0` 是这条 LTS-2 的首个版本。
+
+---
+
+## 单写者与多写者
+
+锁协议的全文在 [RFC-锁协议.md](../../devDocs/releases/v2.4.0/RFC-锁协议.md)。下面是可以直接照着做的部分。
+
+### 两种模式
+
+什么都不写，就是 single，和第二进程互斥：
+
+```ts
+const db = await open({ storagePath: './data' });
+// 另一个进程再 open 同一个目录：错误码 LOCK_FAILED，不可重试
+await db.close();
+```
+
+```bash
+jsonsqlite doctor -p ./data --json
+# writers 字段是 "single"
+# lockHolder 字段是 { "pid": <持有 meta/.lock 的进程> }
+```
+
+显式打开多写者（库 API 和 CLI 等价，都不写就不会变成 multi）：
+
+```ts
+const db = await open({ storagePath: './data', writers: 'multi' });
+await db.close();
+```
+
+```bash
+jsonsqlite --writers multi doctor -p ./data --json
+# writers 字段是 "multi"
+# lockHolder 字段是 { "pids": [ <活着的持有者> ] }
+# 已经退出的 pid 不会出现在 pids 里
+```
+
+`writers: 'single'` 与 LTS-2 相同。`config validate --file` 接受 `writers`，默认仍是 `single`。
+
+### 崩溃之后谁持有锁
+
+文档锁、提交锁、`meta/.lock`、`meta/holders/<pid>.json` 都只记录 pid。进程死了，这把锁**无人持有**。下一个需要它的进程删掉过期文件再获取，不会把锁过继给别的进程。已 fsync 的提交留在页上；没 fsync 的修改消失。可重试的错误是 `WRITE_CONFLICT`、`DEADLOCK`、`SERIALIZABLE_CONFLICT`（`details.retryable === true`）。`LOCK_FAILED` 不可重试，要等对方 `close`。
+
+### 两个进程写同一个文档
+
+1. 进程 A、B 都用 `writers: 'multi'` 打开同一目录，并都读到 `{ _id: 'doc1', _version: 1 }`。
+2. 两边都 `update('docs', 'doc1', { name })`。
+3. 先提交成功的那一边，文档留在库里。另一边得到 `WRITE_CONFLICT`，`details.retryable` 为 `true`。
+4. 失败的一边重新 `findById`，在新的 `_version` 上再改一次，再提交。
+
+写不同 `_id` 时两边都会成功。
+
+### SERIALIZABLE
+
+只在 multi 下提供。single 里 `beginTransaction('SERIALIZABLE')` 得到 `ISOLATION_UNSUPPORTED`；把 `defaultIsolation` 设成 `SERIALIZABLE` 且不写 `writers: 'multi'`，`open` 得到 `INVALID_CONFIG`。换隔离级别不会打开多写者。
+
+```ts
+const db = await open({ storagePath: './data', writers: 'multi' });
+await db.beginTransaction('SERIALIZABLE');
+await db.findById('docs', 'doc1');
+await db.update('docs', 'doc1', { name: 'next' });
+await db.commitTransaction();
+```
+
+如果另一个 multi 进程在这次 `begin` 之后提交了同一个文档，这边 `commit` 得到 `SERIALIZABLE_CONFLICT`（可重试），事务回滚，不会留下脏写。
+
+### 死锁
+
+`acquireDocLock(collection, id)` 按调用顺序立刻加文档锁。两个进程以相反顺序各锁两个文档时，等待图成环。**pid 较大的一方**得到 `DEADLOCK`（可重试），整个事务回滚并释放自己的锁。pid 较小的一方继续，然后提交成功。这是看等待图，不是靠超时猜的。
+
+### savepoint
+
+默认事务仍是一层。`beginTransaction()` 两次得到 `TX_NESTED`。savepoint 是显式 API，不是第二层 `begin`：
+
+```ts
+await db.beginTransaction();
+await db.update('docs', 'a', { n: 2 });          // 外层暂存
+const sp = await db.savepoint('inner');
+await db.update('docs', 'a', { n: 3 });          // savepoint 内
+await db.insert('docs', { _id: 'inner', n: 9 });
+await db.rollbackSavepoint(sp);                  // 内层撤销
+// findById('docs','a').n === 2，inner 不存在
+await db.commitTransaction();                    // 外层的 n: 2 被提交
+```
+
+### 崩溃之后能看到什么
+
+写进程在页 fsync 之前死掉：重新打开后，已提交的文档还在，这次没写完的字段不在，页里没有半个文档。fsync 完成之后再死：这次 `commit`（或自动提交）的文档还在，同一个事务里没有 `commit` 的修改不在。索引用页上的已提交文档，不会把没提交的修改算进去。
+
+### 本版没有的东西
+
+异步复制、Quorum、Raft、自动分片、GraphQL、多库管理、跨机锁。`writers: 'multi'` 不是 LTS。生产环境的多写者等 2.5。
 
 ---
 

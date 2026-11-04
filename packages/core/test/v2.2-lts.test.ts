@@ -124,7 +124,11 @@ describe('v2.2.0 LTS-2', () => {
       expect(frozen.has(key)).toBe(true);
       expect(dangerous.has(key)).toBe(false);
     }
-    for (const key of ['cluster', 'replica', 'l3', 'redis', 'cache', 'writers', 'raft']) {
+    const requiredDangerous = ['cluster', 'replica', 'l3', 'redis', 'cache', 'raft'];
+    if (getVersion().startsWith('2.2.') || getVersion().startsWith('2.3.')) {
+      requiredDangerous.push('writers');
+    }
+    for (const key of requiredDangerous) {
       expect(dangerous.has(key)).toBe(true);
       expect(example).not.toHaveProperty(key);
     }

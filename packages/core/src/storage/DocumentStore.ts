@@ -75,6 +75,8 @@ export class DocumentStore {
 
   /** Test hook: after writing WAL, skip snapshot persist (simulates crash). */
   crashAfterWal = false;
+  /** Test hook: die before the WAL/page fsync. Disk must not gain a partial document. */
+  crashBeforeWalFsync = false;
 
   /** Serializes mutations so concurrent autocommit writes cannot clobber a page. */
   private mutation: Promise<void> = Promise.resolve();
@@ -329,6 +331,67 @@ export class DocumentStore {
     });
   }
 
+  /** Put a savepoint image back. Does not fsync. */
+  async restoreMemory(name: string, docs: Document[]): Promise<void> {
+    return this.enqueue(async () => {
+      await this.ensureLoaded(name);
+      this.replaceAll(name, docs.map((doc) => ({ ...doc })));
+    });
+  }
+
+  /**
+   * Version of a committed document on disk. Memory is ignored.
+   * 0 means the id is absent. Untruncated WAL commits overlay the page.
+   */
+  async committedVersion(name: string, id: string): Promise<number> {
+    let version = 0;
+    try {
+      const raw = await fs.readFile(pagesManifest(this.storagePath, name), 'utf8');
+      const dir = JSON.parse(raw) as PageDirectory;
+      const pageId = dir.idToPage?.[id];
+      if (pageId !== undefined) {
+        const docs = await this.readDocFile(pageFile(this.storagePath, name, pageId));
+        const hit = docs.find((doc) => doc._id === id);
+        if (hit) version = hit._version;
+      }
+    } catch (err) {
+      if (err instanceof JSONSQLiteError) throw err;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+    }
+    const entries = await this.wal.readCommitted(name);
+    for (const entry of entries) {
+      const payload = entry.payload as { _id?: string; _version?: number };
+      if (payload._id !== id) continue;
+      if (entry.op === 'delete') version = 0;
+      else if (typeof payload._version === 'number') version = payload._version;
+    }
+    return version;
+  }
+
+  /**
+   * Reload the collection from disk, then overlay this transaction's documents.
+   * Call under the commit lock, then commitCollections.
+   */
+  async overlayCommit(
+    name: string,
+    items: { id: string; doc: Document | null }[],
+  ): Promise<void> {
+    return this.enqueue(async () => {
+      this.unload(name);
+      if (!this.catalog.has(name)) await this.catalog.ensure(name);
+      await this.loadCollection(name);
+      for (const item of items) {
+        if (item.doc) {
+          await this.putExact(name, { ...item.doc });
+        } else {
+          const existing = await this.getById(name, item.id);
+          if (existing) this.removeExact(name, item.id, existing._version);
+        }
+      }
+    });
+  }
+
   async insert(
     name: string,
     data: Record<string, unknown>,
@@ -486,6 +549,7 @@ export class DocumentStore {
     op: 'insert' | 'update' | 'delete',
     payload: Document | { _id: string },
   ): Promise<void> {
+    this.throwIfCrashBeforeFsync();
     await this.wal.append({
       ts: Date.now(),
       txId: null,
@@ -550,7 +614,16 @@ export class DocumentStore {
     });
   }
 
+  private throwIfCrashBeforeFsync(): void {
+    if (!this.crashBeforeWalFsync) return;
+    throw new JSONSQLiteError(
+      ErrorCode.INTERNAL,
+      'Simulated crash before WAL fsync',
+    );
+  }
+
   private async persistNow(name: string): Promise<void> {
+    this.throwIfCrashBeforeFsync();
     const dir = this.dirs.get(name);
     if (!dir) return;
     const dirty = this.dirtyPages.get(name) ?? new Set<number>();

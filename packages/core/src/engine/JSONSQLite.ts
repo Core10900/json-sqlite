@@ -22,6 +22,15 @@ import { ChangeLog, type ChangeEntry } from '../storage/ChangeLog.js';
 import { DdlJournal } from '../storage/DdlJournal.js';
 import { DocumentStore } from '../storage/DocumentStore.js';
 import { FileLock } from '../storage/FileLock.js';
+import {
+  MultiLock,
+  assertSingleOpenAllowed,
+  describeLocks,
+  docKey,
+  parseDocKey,
+  type LockReport,
+} from '../storage/multiLock.js';
+import type { WriteIntent } from '../transaction/TransactionManager.js';
 import { diagnoseWalDirectory, Wal } from '../storage/Wal.js';
 import {
   compareByOrder,
@@ -104,6 +113,7 @@ export class JSONSQLite extends EventEmitter {
   private readonly options: ResolvedOptions;
   private readonly encKey: Buffer | null;
   private lock: FileLock | null = null;
+  private multi: MultiLock | null = null;
   private catalog: Catalog | null = null;
   private wal: Wal | null = null;
   private store: DocumentStore | null = null;
@@ -175,8 +185,14 @@ export class JSONSQLite extends EventEmitter {
     await fs.mkdir(path.join(root, 'deltas'), { recursive: true });
     await fs.mkdir(path.join(root, 'backups'), { recursive: true });
 
-    this.lock = new FileLock(root);
-    await this.lock.acquire();
+    if (this.options.writers === 'multi') {
+      this.multi = new MultiLock(root);
+      await this.multi.join();
+    } else {
+      await assertSingleOpenAllowed(root);
+      this.lock = new FileLock(root);
+      await this.lock.acquire();
+    }
 
     try {
       this.catalog = new Catalog(root, sync);
@@ -273,7 +289,7 @@ export class JSONSQLite extends EventEmitter {
           },
         })),
       );
-      this.tx = new TransactionManager(this.store);
+      this.tx = new TransactionManager(this.store, this.options.writers === 'multi');
       this.changelog = new ChangeLog(root);
       this.cache = new ResultCache(
         this.options.cacheSize,
@@ -391,8 +407,10 @@ export class JSONSQLite extends EventEmitter {
     } catch (err) {
       this.tiers?.stop();
       this.stopBackupScheduler();
-      await this.lock.release().catch(() => undefined);
+      await this.lock?.release().catch(() => undefined);
+      await this.multi?.leave().catch(() => undefined);
       this.lock = null;
+      this.multi = null;
       this.catalog = null;
       this.wal = null;
       this.store = null;
@@ -435,6 +453,7 @@ export class JSONSQLite extends EventEmitter {
       await this.indexes?.save();
     }
     await this.lock?.release();
+    await this.multi?.leave();
     this.ready = false;
     this.store = null;
     this.catalog = null;
@@ -452,6 +471,7 @@ export class JSONSQLite extends EventEmitter {
     this.audit = null;
     this.alerts = null;
     this.lock = null;
+    this.multi = null;
     this.autoTune = null;
     this.emit('close');
   }
@@ -908,6 +928,9 @@ export class JSONSQLite extends EventEmitter {
     data: Record<string, unknown> | Record<string, unknown>[],
   ): Promise<Document | Document[]> {
     this.assertReady();
+    if (this.options.writers === 'multi' && !this.tx!.active) {
+      return this.withImplicitTx(() => this.insert(collection, data));
+    }
     const inTx = !!this.tx!.active;
     if (inTx) await this.tx!.touch(collection);
 
@@ -917,6 +940,7 @@ export class JSONSQLite extends EventEmitter {
         const doc = await this.store!.insert(collection, item, {
           durable: !inTx,
         });
+        if (inTx) this.noteWriteIntent(collection, doc._id, 'insert', 0, doc);
         if (!inTx) {
           this.indexes!.onInsert(collection, doc);
           await this.changelog!.append({
@@ -941,6 +965,7 @@ export class JSONSQLite extends EventEmitter {
     }
 
     const doc = await this.store!.insert(collection, data, { durable: !inTx });
+    if (inTx) this.noteWriteIntent(collection, doc._id, 'insert', 0, doc);
     if (!inTx) {
       this.indexes!.onInsert(collection, doc);
       await this.changelog!.append({
@@ -967,14 +992,21 @@ export class JSONSQLite extends EventEmitter {
     opts?: { expectedVersion?: number },
   ): Promise<Document> {
     this.assertReady();
+    if (this.options.writers === 'multi' && !this.tx!.active) {
+      return this.withImplicitTx(() => this.update(collection, id, patch, opts));
+    }
     const inTx = !!this.tx!.active;
     if (inTx) await this.tx!.touch(collection);
     await this.store!.ensureLoaded(collection);
     const prev = await this.store!.getById(collection, id);
+    if (inTx && prev) this.tx!.noteRead(collection, id, prev._version);
     const doc = await this.store!.update(collection, id, patch, {
       ...opts,
       durable: !inTx,
     });
+    if (inTx) {
+      this.noteWriteIntent(collection, id, 'update', prev?._version ?? 0, doc);
+    }
     if (!inTx) {
       this.indexes!.onUpdate(collection, prev, doc);
       await this.changelog!.append({
@@ -996,11 +1028,18 @@ export class JSONSQLite extends EventEmitter {
 
   async delete(collection: string, id: string): Promise<boolean> {
     this.assertReady();
+    if (this.options.writers === 'multi' && !this.tx!.active) {
+      return this.withImplicitTx(() => this.delete(collection, id));
+    }
     const inTx = !!this.tx!.active;
     if (inTx) await this.tx!.touch(collection);
     await this.store!.ensureLoaded(collection);
     const prev = await this.store!.getById(collection, id);
+    if (inTx && prev) this.tx!.noteRead(collection, id, prev._version);
     const ok = await this.store!.delete(collection, id, { durable: !inTx });
+    if (inTx && ok) {
+      this.noteWriteIntent(collection, id, 'delete', prev?._version ?? 0, null);
+    }
     if (ok && !inTx && prev) {
       this.indexes!.onDelete(collection, prev);
       await this.changelog!.append({
@@ -1046,6 +1085,7 @@ export class JSONSQLite extends EventEmitter {
     }
     await this.store!.ensureLoaded(collection);
     const hot = (await this.store!.getById(collection, id)) ?? null;
+    if (hot) this.tx?.noteRead(collection, id, hot._version);
     if (!this.options.storageTiers || !this.tiers) return hot;
     const placed = this.tiers.lookup(collection, id);
     if (placed && (!hot || placed.doc._version >= hot._version)) {
@@ -1156,6 +1196,7 @@ export class JSONSQLite extends EventEmitter {
       }
     }
 
+    this.noteSerializableDocs(query.collection, plannedDocs);
     this.planInfo = {
       source: columnar ? 'column' : 'document',
       chunked,
@@ -1343,10 +1384,115 @@ export class JSONSQLite extends EventEmitter {
 
   async commitTransaction(txId?: number): Promise<void> {
     this.assertReady();
+    if (txId !== undefined && this.tx!.isSnapshot(txId)) {
+      await this.tx!.commit(txId);
+      return;
+    }
+    if (this.options.writers === 'multi' && this.tx!.active) {
+      await this.commitMulti(txId);
+      return;
+    }
     const result = await this.tx!.commit(txId);
     if (result.kind === 'snapshot') return;
-    for (const c of result.touched) this.touchCaches(c);
-    for (const c of result.touched) {
+    await this.afterWriteCommit(result.touched);
+  }
+
+  /**
+   * Take one document lock immediately. multi only.
+   * A wait-for cycle rolls this transaction back and throws DEADLOCK.
+   */
+  async acquireDocLock(collection: string, id: string): Promise<void> {
+    this.assertReady();
+    if (this.options.writers !== 'multi' || !this.multi) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        'acquireDocLock requires writers: "multi"',
+      );
+    }
+    if (!this.tx!.active) {
+      throw new JSONSQLiteError(ErrorCode.TX_NOT_FOUND, 'No active transaction');
+    }
+    try {
+      await this.multi.acquireOne(docKey(collection, id));
+    } catch (err) {
+      if (err instanceof JSONSQLiteError && err.code === ErrorCode.DEADLOCK) {
+        await this.multi.releaseMine();
+        await this.rollbackTransaction().catch(() => undefined);
+      }
+      throw err;
+    }
+  }
+
+  /** Mark a savepoint inside the current write transaction. The outer begin stays one level. */
+  async savepoint(name = `sp${Date.now()}`): Promise<string> {
+    this.assertReady();
+    const active = this.tx!.active;
+    if (!active) {
+      throw new JSONSQLiteError(ErrorCode.TX_NOT_FOUND, 'No active transaction');
+    }
+    const docs = new Map<string, Document[]>();
+    for (const collection of active.touched) {
+      docs.set(collection, await this.store!.readAll(collection));
+    }
+    this.tx!.markSavepoint(name, docs);
+    return name;
+  }
+
+  /** Drop changes after the savepoint. Modifications staged before it remain. */
+  async rollbackSavepoint(name: string): Promise<void> {
+    this.assertReady();
+    const touched = new Set(this.tx!.active?.touched ?? []);
+    const snap = this.tx!.rollbackSavepoint(name);
+    for (const [collection, docs] of snap) {
+      await this.store!.restoreMemory(collection, docs);
+      touched.delete(collection);
+    }
+    for (const collection of touched) {
+      await this.store!.reloadFromDisk(collection);
+    }
+  }
+
+  async releaseSavepoint(name: string): Promise<void> {
+    this.assertReady();
+    this.tx!.releaseSavepoint(name);
+  }
+
+  /** Current open mode and the live lock holder. Dead pids are not holders. */
+  async lockReport(): Promise<LockReport> {
+    this.assertReady();
+    return describeLocks(this.storagePath, this.options.writers);
+  }
+
+  private async withImplicitTx<T>(fn: () => Promise<T>): Promise<T> {
+    await this.beginTransaction();
+    try {
+      const value = await fn();
+      await this.commitTransaction();
+      return value;
+    } catch (err) {
+      await this.rollbackTransaction().catch(() => undefined);
+      throw err;
+    }
+  }
+
+  private noteWriteIntent(
+    collection: string,
+    id: string,
+    op: WriteIntent['op'],
+    baseVersion: number,
+    after: Document | null,
+  ): void {
+    this.tx?.noteIntent({ collection, id, op, baseVersion, after });
+  }
+
+  private noteSerializableDocs(collection: string, docs: Document[]): void {
+    if (this.tx?.isolation() !== 'SERIALIZABLE') return;
+    for (const doc of docs) this.tx.noteRead(collection, doc._id, doc._version);
+  }
+
+  private async afterWriteCommit(touched: string[]): Promise<void> {
+    for (const c of touched) this.touchCaches(c);
+    for (const c of touched) {
       for (const idx of this.indexes!.findForCollection(c)) {
         idx.build(await this.store!.readAll(c));
       }
@@ -1354,7 +1500,56 @@ export class JSONSQLite extends EventEmitter {
       this.tiers?.forgetCollection(c);
       this.scheduleColumnRebuild(c);
     }
-    if (result.touched.length > 0) this.monitor.recordWrite();
+    if (touched.length > 0) this.monitor.recordWrite();
+  }
+
+  private async commitMulti(txId?: number): Promise<void> {
+    const prepared = this.tx!.exportWrite(txId);
+    const collapsed = collapseIntents(prepared.intents);
+    const touched = [...new Set(collapsed.map((intent) => intent.collection))];
+    try {
+      await this.multi!.acquireMissing(collapsed.map((intent) => docKey(intent.collection, intent.id)));
+      await this.multi!.withCommitLock(async () => {
+        for (const [key, version] of prepared.reads) {
+          const parsed = parseDocKey(key);
+          const disk = await this.store!.committedVersion(parsed.collection, parsed.id);
+          if (disk !== version) {
+            throw new JSONSQLiteError(
+              ErrorCode.SERIALIZABLE_CONFLICT,
+              `SERIALIZABLE conflict on ${parsed.collection}/${parsed.id}: read ${version}, disk ${disk}`,
+              { retryable: true, collection: parsed.collection, id: parsed.id },
+            );
+          }
+        }
+        for (const intent of collapsed) {
+          const disk = await this.store!.committedVersion(intent.collection, intent.id);
+          if (disk !== intent.baseVersion) {
+            throw new JSONSQLiteError(
+              ErrorCode.WRITE_CONFLICT,
+              `Write conflict on ${intent.collection}/${intent.id}: base ${intent.baseVersion}, disk ${disk}`,
+              { retryable: true, collection: intent.collection, id: intent.id },
+            );
+          }
+        }
+        const byCollection = new Map<string, { id: string; doc: Document | null }[]>();
+        for (const intent of collapsed) {
+          const list = byCollection.get(intent.collection) ?? [];
+          list.push({ id: intent.id, doc: intent.after });
+          byCollection.set(intent.collection, list);
+        }
+        for (const [name, items] of byCollection) {
+          await this.store!.overlayCommit(name, items);
+        }
+        if (touched.length > 0) await this.store!.commitCollections(touched);
+      });
+      this.tx!.finishCommitted(txId);
+    } catch (err) {
+      await this.multi?.releaseMine().catch(() => undefined);
+      await this.rollbackTransaction(txId).catch(() => undefined);
+      throw err;
+    }
+    await this.multi?.releaseMine();
+    await this.afterWriteCommit(touched);
   }
 
   async rollbackTransaction(txId?: number): Promise<void> {
@@ -2363,6 +2558,25 @@ function decodeCursor(cursor: string): Document {
   } catch {
     throw new JSONSQLiteError(ErrorCode.INVALID_CONFIG, 'Invalid query cursor');
   }
+}
+
+function collapseIntents(intents: WriteIntent[]): WriteIntent[] {
+  const map = new Map<string, WriteIntent>();
+  for (const intent of intents) {
+    const key = docKey(intent.collection, intent.id);
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, { ...intent, after: intent.after ? { ...intent.after } : null });
+      continue;
+    }
+    map.set(key, {
+      ...intent,
+      baseVersion: prev.baseVersion,
+      op: prev.op === 'insert' && intent.op !== 'delete' ? 'insert' : intent.op,
+      after: intent.after ? { ...intent.after } : null,
+    });
+  }
+  return [...map.values()];
 }
 
 export async function open(options: JSONSQLiteOptions): Promise<JSONSQLite> {

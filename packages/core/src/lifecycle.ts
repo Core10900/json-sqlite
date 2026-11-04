@@ -14,18 +14,18 @@ export interface CompatibilityInfo {
   version: string;
   formatVersion: number;
   /**
-   * True on an LTS binary. 2.3.0 is not LTS.
-   * Production that does not need the 2.3 storage format should pin 2.2.
+   * True on an LTS binary. 2.4.0 is not LTS.
+   * Production single-writer pin remains 2.2. Production multi-writer waits for 2.5.
    */
   lts: boolean;
   /**
    * Recommended production LTS line. `2.2` means LTS-2.
-   * On 2.3 this stays `2.2`: it names the line to pin, not this package.
+   * On 2.4 this stays `2.2`: it names the line to pin, not this package.
    */
   ltsLine: '2.2';
-  /** CLI command surface generation. 2.3.0 adds plugin and index compact. */
+  /** CLI command surface generation. 2.4.0 adds --writers. */
   cliSurface: string;
-  /** Still a single writer. Multi-writer is 2.5. */
+  /** Default open mode. Multi-writer is opt-in and is not this field. */
   writers: 'single';
   features: string[];
 }
@@ -60,7 +60,7 @@ export function getCompatibilityInfo(): CompatibilityInfo {
     formatVersion: FORMAT_VERSION,
     lts: false,
     ltsLine: '2.2',
-    cliSurface: '2.3.0',
+    cliSurface: '2.4.0',
     writers: 'single',
     features: [
       'encryption',
@@ -111,6 +111,11 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'geo-index',
       'chinese-tokenizer',
       'cli-2.3',
+      'multi-writer',
+      'savepoint',
+      'serializable',
+      'deadlock-detection',
+      'cli-2.4',
     ],
   };
 }

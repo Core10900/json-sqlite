@@ -52,6 +52,9 @@ export const V23_CONFIG_KEYS = [
   'tokenizerModule',
 ] as const;
 
+/** Opt-in in 2.4. Default remains single. Omitted keys do not enable multi-writer. */
+export const V24_CONFIG_KEYS = ['writers'] as const;
+
 /**
  * Design §9 / later-plan keys that must not appear in a 2.2 config.
  * They are refused by name. They are not stripped and not applied.
@@ -69,13 +72,12 @@ export const DANGEROUS_CONFIG_KEYS = [
   'quorum',
   'shard',
   'sharding',
-  'writers',
   'savepoint',
   'graphql',
   'wasm',
 ] as const;
 
-const frozen = new Set<string>([...FROZEN_CONFIG_KEYS, ...V23_CONFIG_KEYS]);
+const frozen = new Set<string>([...FROZEN_CONFIG_KEYS, ...V23_CONFIG_KEYS, ...V24_CONFIG_KEYS]);
 const dangerous = new Set<string>(DANGEROUS_CONFIG_KEYS);
 
 /**
@@ -100,13 +102,13 @@ export function validateConfig(input: unknown): ResolvedOptions {
     if (rejectedDangerous.length > 0) {
       const names = rejectedDangerous.map((k) => `"${k}"`).join(', ');
       parts.push(
-        `Rejected dangerous config key(s) ${names}: not part of the supported contract (no cluster, replica, L3/redis, multi-writer, savepoint, GraphQL, or WASM). The key is not applied`,
+        `Rejected dangerous config key(s) ${names}: not part of the supported contract (no cluster, replica, L3/redis, GraphQL, or WASM). The key is not applied`,
       );
     }
     if (unknown.length > 0) {
       const names = unknown.map((k) => `"${k}"`).join(', ');
       parts.push(
-        `Unknown config key(s) ${names}: not in the 2.2 frozen set or the 2.3 opt-in set. Refused and not applied`,
+        `Unknown config key(s) ${names}: not in the 2.2 frozen set or the 2.3/2.4 opt-in set. Refused and not applied`,
       );
     }
     throw new JSONSQLiteError(ErrorCode.INVALID_CONFIG, parts.join('; '), {

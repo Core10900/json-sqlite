@@ -33,7 +33,10 @@ export async function withDb<T>(
   };
   process.once('SIGINT', onSig);
   try {
-    db = await open({ storagePath: ctx.storagePath });
+    db = await open({
+      storagePath: ctx.storagePath,
+      ...(ctx.globals.writers ? { writers: ctx.globals.writers } : {}),
+    });
     return await fn(db);
   } catch (err) {
     return failFromError(ctx.out, err);

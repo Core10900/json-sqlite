@@ -6,6 +6,10 @@ export interface GlobalFlags {
   json: boolean;
   quiet: boolean;
   help: boolean;
+  /** Omitted means single. multi is opt-in and is not an LTS mode. */
+  writers?: 'single' | 'multi';
+  /** Set when --writers is present but not single or multi. */
+  writersError?: string;
   /** Remaining positional + unknown flags after stripping globals. */
   rest: string[];
   raw: string[];
@@ -60,6 +64,8 @@ export function parseGlobalFlags(argv: string[]): GlobalFlags {
   let json = false;
   let quiet = false;
   let help = false;
+  let writers: 'single' | 'multi' | undefined;
+  let writersError: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -83,10 +89,16 @@ export function parseGlobalFlags(argv: string[]): GlobalFlags {
       help = true;
       continue;
     }
+    if (a === '--writers') {
+      const value = argv[++i];
+      if (value === 'single' || value === 'multi') writers = value;
+      else writersError = value ?? '';
+      continue;
+    }
     rest.push(a);
   }
 
-  return { path: pathFlag, yes, json, quiet, help, rest, raw: argv };
+  return { path: pathFlag, yes, json, quiet, help, writers, writersError, rest, raw: argv };
 }
 
 export function flag(args: string[], name: string): string | undefined {

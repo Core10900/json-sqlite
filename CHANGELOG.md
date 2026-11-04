@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.4.0 — 2026-11-04 · 非 LTS
+
+**非 LTS。** 相对 2.3 为 MINOR。默认仍是单写者。`writers: 'multi'` 必须显式打开，锁语义见 [RFC-锁协议.md](./devDocs/releases/v2.4.0/RFC-锁协议.md)。
+
+生产仍应 pin **2.2**。需要多写者的生产 pin 是 **2.5**，不是本版。`lts` 继续指向 2.2。`latest` 指向 2.4.0。
+
+### Added
+- 同一台机器上的多进程写（opt-in）。冲突返回 `WRITE_CONFLICT`，可重试；成功的文档不丢
+- multi 模式下的 `SERIALIZABLE`。single 模式仍拒绝。冲突返回 `SERIALIZABLE_CONFLICT`
+- 等待图死锁检测。pid 较大的一方回滚，错误码 `DEADLOCK`
+- savepoint：回滚内层不影响外层已暂存的修改。默认事务仍是一层
+- CLI `--writers single|multi`。`doctor` 的 JSON 含 `writers` 与 `lockHolder`
+- `getCompatibilityInfo()`：`lts: false`，`ltsLine: '2.2'`，`cliSurface: '2.4.0'`，默认 `writers: 'single'`
+
+### Not in this release
+异步复制、Quorum、Raft、自动分片、GraphQL、多库管理、跨机锁。
+
 ## 2.3.0 — 2026-11-03 · 非 LTS
 
 **非 LTS。** 相对 2.2 为 MINOR。默认配置打开 2.2 库时行为与 LTS-2 一致。列存、热/温/冷新布局、智能压缩、插件、缓存压缩、热页预取、chunk 执行、Geo 索引、中文分词全部默认关闭。

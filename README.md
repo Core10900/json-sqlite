@@ -1,8 +1,8 @@
 # JSONSQLite
 
-**当前包：2.3.0**（**非 LTS**，单写者） · **生产 pin：2.2.x**（`lts`） · **`latest`：2.3.0** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**当前包：2.4.0**（**非 LTS**，默认单写者） · **生产 pin：2.2.x**（`lts`） · **`latest`：2.4.0** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
-2.3 默认不改变 2.2 库的行为。列存、分层和插件要显式打开。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要这些存储格式时：
+2.4 默认不改变 2.2 库的行为。多写者、列存、分层和插件都要显式打开。生产多写者等 2.5。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要这些能力时：
 
 ```bash
 npm install @webofcat/jsonsqlite@lts

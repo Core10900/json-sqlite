@@ -11,7 +11,7 @@ export type {
   InitDatabaseResult,
   CompatibilityInfo,
 } from './lifecycle.js';
-export { JSONSQLiteError, ErrorCode } from './errors.js';
+export { JSONSQLiteError, ErrorCode, isRetryableError } from './errors.js';
 export { parseSql } from './sql/parse.js';
 export { rekeyDatabase } from './ops/rekey.js';
 export { migrateDatabase } from './ops/migrate.js';

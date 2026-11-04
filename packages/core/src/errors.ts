@@ -6,6 +6,12 @@ export enum ErrorCode {
   COLLECTION_EXISTS = 'COLLECTION_EXISTS',
   DOCUMENT_NOT_FOUND = 'DOCUMENT_NOT_FOUND',
   VERSION_CONFLICT = 'VERSION_CONFLICT',
+  /** Another multi-writer commit won this document. details.retryable is true. */
+  WRITE_CONFLICT = 'WRITE_CONFLICT',
+  /** Wait-for cycle. This transaction was rolled back. details.retryable is true. */
+  DEADLOCK = 'DEADLOCK',
+  /** SERIALIZABLE read set changed. details.retryable is true. */
+  SERIALIZABLE_CONFLICT = 'SERIALIZABLE_CONFLICT',
   LOCK_FAILED = 'LOCK_FAILED',
   TX_ACTIVE = 'TX_ACTIVE',
   TX_NOT_FOUND = 'TX_NOT_FOUND',
@@ -26,6 +32,17 @@ export enum ErrorCode {
   QUERY_TIMEOUT = 'QUERY_TIMEOUT',
   ENCRYPTION = 'ENCRYPTION',
   INTERNAL = 'INTERNAL',
+}
+
+const RETRYABLE = new Set<ErrorCode>([
+  ErrorCode.WRITE_CONFLICT,
+  ErrorCode.DEADLOCK,
+  ErrorCode.SERIALIZABLE_CONFLICT,
+]);
+
+/** True for WRITE_CONFLICT, DEADLOCK, and SERIALIZABLE_CONFLICT. */
+export function isRetryableError(err: unknown): boolean {
+  return err instanceof JSONSQLiteError && RETRYABLE.has(err.code);
 }
 
 export class JSONSQLiteError extends Error {

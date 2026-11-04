@@ -8,6 +8,9 @@ Usage:
 
 Global flags (anywhere):
   -p, --path <dir>   storage path (default: ./data or $JSONSQLITE_PATH)
+  --writers single|multi
+                     default single (second process gets LOCK_FAILED).
+                     multi is opt-in and is not LTS; production multi-writer is 2.5
   -y, --yes          skip confirmations
   --json             machine-readable JSON output
   -q, --quiet        suppress human chatter
@@ -29,7 +32,7 @@ Commands:
   aggregate                  aggregation pipeline (unwind/lookup)
   admin serve                start Admin HTTP + SSE
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version (2.3.0, lts: false, ltsLine 2.2)
+  compat / version [--json]  compatibility / version (2.4.0, lts: false, ltsLine 2.2)
   config validate --file <f> check a file against the frozen 2.2 config keys
   backup / vacuum [--compress] / rekey    ops
   backup --type full|incremental|differential
@@ -38,7 +41,7 @@ Commands:
   tune [--dry-run] [json-query]          AutoTune / Advisor (default dry-run)
   audit list [--action name]             read-only audit log
   migrate --from <db> --to <new> --yes   1.x → 2.x
-  doctor [--deep]            health / consistency (healable index vs refuse-open data)
+  doctor [--deep]            health / consistency; JSON includes writers and lockHolder
   version                    print version
 
 Exit codes: 0 ok · 1 usage/business · 2 system/IO · 3 lock failed
@@ -195,19 +198,20 @@ export function helpCompat(): string {
   return `jsonsqlite compat [--json]
 jsonsqlite version [--json]
 Print getCompatibilityInfo() / version.
-On 2.3.0: lts is false, ltsLine is still "2.2" (the line to pin), writers is "single".
-2.3.0 is not LTS. Production that does not need this storage format should pin 2.2.
+On 2.4.0: lts is false, ltsLine is still "2.2" (the line to pin), writers is "single".
+2.4.0 is not LTS. Default open stays single-writer. Production multi-writer waits for 2.5.
 `;
 }
 
 export function helpConfig(): string {
   return `jsonsqlite config validate --file <path>
 
-Check a JSON file against the 2.2 keys plus the 2.3 opt-in keys.
+Check a JSON file against the 2.2 keys plus the 2.3 and 2.4 opt-in keys.
 Does not open a database.
 Unknown keys are refused (exit 1, code INVALID_CONFIG) and are not applied.
-Dangerous keys (cluster, replica, replication, raft, quorum, shard, writers,
-savepoint, graphql, wasm, l3, redis, cache) are named in the error.
+Dangerous keys (cluster, replica, replication, raft, quorum, shard,
+graphql, wasm, l3, redis, cache) are named in the error.
+2.4 opt-in key writers is single or multi (default single). Omitting it stays single.
 2.3 opt-in keys (columnStore, storageTiers, smartCompression, and the rest
 listed in config validation) are accepted and default off.
 The frozen cache field is cacheSize, not cache / cache.l3.

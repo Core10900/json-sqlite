@@ -1,7 +1,7 @@
 {
   "name": "@webofcat/jsonsqlite",
-  "version": "2.3.0",
-  "description": "JSON-native embedded database for Node.js — 2.3.0 storage extensions (not LTS; production pin remains 2.2)",
+  "version": "2.4.0",
+  "description": "JSON-native embedded database for Node.js — 2.4.0 multi-writer opt-in (not LTS; production pin remains 2.2)",
   "license": "MIT",
   "author": "hanlin <lincent909@163.com>",
   "repository": {

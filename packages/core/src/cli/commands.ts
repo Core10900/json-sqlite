@@ -47,6 +47,15 @@ export async function dispatch(argv: string[]): Promise<void> {
   const globals = parseGlobalFlags(argv);
   const [cmd, ...rest] = globals.rest;
 
+  if (globals.writersError !== undefined) {
+    fail(
+      { json: globals.json, quiet: globals.quiet },
+      '--writers must be single or multi',
+      'USAGE',
+      ExitCode.USAGE,
+    );
+  }
+
   if (!cmd || cmd === 'help') {
     const sub = rest.filter((a) => !a.startsWith('-'));
     const text = helpFor(sub) ?? helpRoot();
@@ -1305,17 +1314,19 @@ async function cmdDoctor(ctx: CliContext, rest: string[]): Promise<void> {
   }
   await withDb(ctx, async (db) => {
     const storage = db.storageSummary();
+    const locks = await db.lockReport();
     if (deep) {
       const report = await db.doctor({ deep: true });
-      printData(ctx.out, JSON.stringify(report, null, 2), {
+      printData(ctx.out, JSON.stringify({ ...report, ...locks }, null, 2), {
         action: 'doctor',
         ...report,
         ...storage,
+        ...locks,
       });
       if (report.status !== 'healthy') setExit(ExitCode.USAGE);
     } else {
       const h = await db.health();
-      const body = { ...h, ...storage };
+      const body = { ...h, ...storage, ...locks };
       printData(ctx.out, JSON.stringify(body, null, 2), {
         action: 'doctor',
         ...body,

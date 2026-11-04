@@ -1,7 +1,8 @@
 /**
  * Transaction isolation.
  * Implemented: READ_COMMITTED (default), REPEATABLE_READ (snapshot at begin).
- * READ_UNCOMMITTED and SERIALIZABLE throw ISOLATION_UNSUPPORTED.
+ * SERIALIZABLE is implemented only with writers: 'multi'.
+ * READ_UNCOMMITTED throws ISOLATION_UNSUPPORTED. single mode also rejects SERIALIZABLE.
  * Configuring them as defaultIsolation throws INVALID_CONFIG.
  */
 export type IsolationLevel =
@@ -113,9 +114,16 @@ export interface JSONSQLiteOptions {
   /**
    * Default isolation for new transactions.
    * READ_COMMITTED (default) or REPEATABLE_READ.
-   * READ_UNCOMMITTED and SERIALIZABLE are rejected.
+   * SERIALIZABLE is accepted only together with writers: 'multi'.
+   * READ_UNCOMMITTED is rejected. single mode rejects SERIALIZABLE.
    */
   defaultIsolation?: IsolationLevel;
+  /**
+   * single (default) is the LTS-2 lock: a second process gets LOCK_FAILED.
+   * multi opts into same-machine writers. Omitting this stays single.
+   * Production multi-writer pin is 2.5, not 2.4.
+   */
+  writers?: 'single' | 'multi';
   /**
    * Soft limit for query wall time (ms). Exceeding throws QUERY_TIMEOUT.
    * Default 30000; set 0 to disable.

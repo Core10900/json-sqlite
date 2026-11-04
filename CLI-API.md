@@ -326,4 +326,18 @@ jsonsqlite insert|update|delete|index|sql --help
 
 全局 flag 与退出码和 2.2 相同。
 
+---
+
+## 19. 2.4 多写者增补（非 LTS，默认仍单写者）
+
+> **2.4.0 非 LTS。** 生产仍应 pin 2.2。多写者的生产 pin 是 2.5，不是本版。锁协议见 `devDocs/releases/v2.4.0/RFC-锁协议.md`。没有 replica、cluster。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `--writers single\|multi` | ✅ | 全局 flag，默认 `single`。不写不会变成 multi |
+| `doctor` | ✅ | JSON 含 `writers` 与 `lockHolder`（single 为 `{ pid }`，multi 为 `{ pids }`） |
+| `version --json` / `compat` | ✅ | `version` 为 `2.4.0`，`lts` 为 false，`ltsLine` 仍是 `"2.2"`，`writers` 为 `"single"`（默认模式） |
+
+退出码与 2.2 相同。`LOCK_FAILED` 仍是 3。
+
 

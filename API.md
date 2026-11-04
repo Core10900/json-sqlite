@@ -251,6 +251,9 @@ unsubscribe();
 | `COLLECTION_EXISTS` | 已存在 |
 | `DOCUMENT_NOT_FOUND` | 文档不存在 |
 | `VERSION_CONFLICT` | 乐观锁冲突 |
+| `WRITE_CONFLICT` | 多写者提交冲突，可重试（2.4，`writers: 'multi'`） |
+| `DEADLOCK` | 等待图成环，本事务已回滚，可重试（2.4） |
+| `SERIALIZABLE_CONFLICT` | SERIALIZABLE 读集变化，可重试（2.4，仅 multi） |
 | `LOCK_FAILED` | 文件锁失败 |
 | `TX_ACTIVE` | 事务状态冲突 |
 | `TX_NOT_FOUND` | 事务不存在 |
@@ -510,4 +513,21 @@ getCompatibilityInfo();
 ### 迁移
 
 1.6 与 1.8（`formatVersion` 1）使用 `migrateDatabase({ from, to, yes: true })` 或 CLI `migrate --from --to --yes`。直接 `open` 抛 `MIGRATION_REQUIRED`。步骤见 [`devDocs/releases/v2.2.0/迁移指南.md`](./devDocs/releases/v2.2.0/迁移指南.md)。
+
+---
+
+## 2.4 多写者（非 LTS，默认仍单写者）
+
+相对 2.3 为 **MINOR**。不写 `writers` 时行为与 LTS-2 相同。生产多写者等 **2.5**。锁协议见 [`devDocs/releases/v2.4.0/RFC-锁协议.md`](./devDocs/releases/v2.4.0/RFC-锁协议.md)。
+
+| 符号 | 说明 |
+|------|------|
+| `writers: 'multi'` | 同一台机器多个进程可写。默认 `'single'` |
+| `acquireDocLock(collection, id)` | 立刻取文档锁。等待图成环时 pid 较大的一方 `DEADLOCK` 并回滚 |
+| `savepoint(name?)` / `rollbackSavepoint(name)` / `releaseSavepoint(name)` | 显式保存点。默认事务仍是一层 |
+| `lockReport()` | `{ writers, lockHolder }` |
+| `isRetryableError(err)` | `WRITE_CONFLICT`、`DEADLOCK`、`SERIALIZABLE_CONFLICT` 为 true |
+| `beginTransaction('SERIALIZABLE')` | 仅 multi。single 仍是 `ISOLATION_UNSUPPORTED` |
+
+`getCompatibilityInfo()` 在 2.4.0 上是 `lts: false`、`ltsLine: '2.2'`、`writers: 'single'`（默认模式）、`cliSurface: '2.4.0'`。
 

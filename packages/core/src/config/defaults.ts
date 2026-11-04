@@ -85,6 +85,11 @@ const optionsSchema = z.object({
   queryChunkSize: z.number().int().nonnegative().default(0),
   chineseTokenizer: z.enum(['none', 'bigram']).default('none'),
   tokenizerModule: z.string().min(1).optional(),
+  /**
+   * single (default) matches LTS-2: a second process gets LOCK_FAILED.
+   * multi is opt-in same-machine writers. Not an LTS contract until 2.5.
+   */
+  writers: z.enum(['single', 'multi']).default('single'),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;
@@ -96,13 +101,20 @@ const IMPLEMENTED_ISOLATION = new Set<IsolationLevel>([
 
 /**
  * READ_COMMITTED and REPEATABLE_READ are implemented.
- * READ_UNCOMMITTED and SERIALIZABLE are rejected — never coerced.
+ * SERIALIZABLE is implemented only when writers is multi.
+ * READ_UNCOMMITTED is rejected — never coerced.
  */
-export function assertIsolationSupported(level: IsolationLevel): void {
+export function assertIsolationSupported(
+  level: IsolationLevel,
+  writers: 'single' | 'multi' = 'single',
+): void {
+  if (level === 'SERIALIZABLE' && writers === 'multi') return;
   if (!IMPLEMENTED_ISOLATION.has(level)) {
     throw new JSONSQLiteError(
       ErrorCode.ISOLATION_UNSUPPORTED,
-      `Isolation level ${level} is not implemented (supported: READ_COMMITTED, REPEATABLE_READ)`,
+      level === 'SERIALIZABLE'
+        ? 'SERIALIZABLE requires writers: "multi" (single mode rejects it; changing isolation does not enable multi-writer)'
+        : `Isolation level ${level} is not implemented (supported: READ_COMMITTED, REPEATABLE_READ)`,
     );
   }
 }
@@ -118,7 +130,7 @@ export function resolveOptions(input: JSONSQLiteOptions): ResolvedOptions {
   }
   const data = parsed.data;
   try {
-    assertIsolationSupported(data.defaultIsolation);
+    assertIsolationSupported(data.defaultIsolation, data.writers);
   } catch (err) {
     if (err instanceof JSONSQLiteError && err.code === ErrorCode.ISOLATION_UNSUPPORTED) {
       throw new JSONSQLiteError(
