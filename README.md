@@ -799,9 +799,9 @@ pnpm --filter @jsonsqlite/bench start
 |------|------|
 | [API.md](./API.md) | **1.6 LTS** 库 API 权威手册 |
 | [CLI-API.md](./CLI-API.md) | **1.6 LTS** CLI 权威手册（冻结自 1.5.5） |
-| [devDocs/releases/ROADMAP.md](./devDocs/releases/ROADMAP.md) | **完整路线至 3.0** + **LTS-1/2/3** 标注 |
+| [devDocs/releases/ROADMAP.md](./devDocs/releases/ROADMAP.md) | **完整路线至 3.6** + **LTS-1/2/3/4** 标注 |
 | [devDocs/releases/FEATURE-MATRIX.md](./devDocs/releases/FEATURE-MATRIX.md) | 设计能力采纳矩阵（完工勾选真源） |
-| [devDocs/releases/CLI-EVOLUTION.md](./devDocs/releases/CLI-EVOLUTION.md) | 1.7→3.0 **CLI / CLI-API** 适配与再冻结点 |
+| [devDocs/releases/CLI-EVOLUTION.md](./devDocs/releases/CLI-EVOLUTION.md) | 1.7→3.6 **CLI / CLI-API** 适配与再冻结点 |
 | [devDocs/releases/v1.6.0/开发计划.md](./devDocs/releases/v1.6.0/开发计划.md) | **LTS-1** `1.6.x`（已发布） |
 | [devDocs/releases/v1.7.0/开发计划.md](./devDocs/releases/v1.7.0/开发计划.md) | v1.7 体验补齐（非 LTS） |
 | [devDocs/releases/v1.8.0/开发计划.md](./devDocs/releases/v1.8.0/开发计划.md) | v1.8 性能预备（非 LTS） |
@@ -811,7 +811,8 @@ pnpm --filter @jsonsqlite/bench start
 | [devDocs/releases/v2.3.0/开发计划.md](./devDocs/releases/v2.3.0/开发计划.md) | v2.3 存储与查询增强（非 LTS，已发布） |
 | [devDocs/releases/v2.4.0/开发计划.md](./devDocs/releases/v2.4.0/开发计划.md) | v2.4 多写者 opt-in（非 LTS，已发布） |
 | [devDocs/releases/v2.5.0/开发计划.md](./devDocs/releases/v2.5.0/开发计划.md) | **LTS-3** `2.5.x`（已发布） |
-| [devDocs/releases/v3.0.0/开发计划.md](./devDocs/releases/v3.0.0/开发计划.md) | v3.0 异步复制浸泡（非 LTS，规划） |
+| [devDocs/releases/v3.0.0/开发计划.md](./devDocs/releases/v3.0.0/开发计划.md) | v3.0 查询引擎补齐（非 LTS，规划） |
+| [devDocs/releases/v3.6.0/开发计划.md](./devDocs/releases/v3.6.0/开发计划.md) | **LTS-4** `3.6.x` 设计完工冻结（规划）。3.1–3.5 见路线图 |
 | [devDocs/releases/v1.5.5/开发计划.md](./devDocs/releases/v1.5.5/开发计划.md) | v1.5.5 **CLI LTS 化**（命令扩展 / 交互与脚本契约） |
 | [devDocs/releases/v1.5.0/开发计划.md](./devDocs/releases/v1.5.0/开发计划.md) | v1.5.0 生产就绪（rekey / vacuum / 压测） |
 | [devDocs/releases/v1.4.0/开发计划.md](./devDocs/releases/v1.4.0/开发计划.md) | v1.4.0 加密主存 / LIKE·JOIN / 导入导出 |
