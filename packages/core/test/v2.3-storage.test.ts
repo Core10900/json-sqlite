@@ -58,11 +58,11 @@ describe('v2.3.0 defaults stay on the 2.2 path', () => {
   it('FT-V23-VER-01 version is 2.3.0 and not LTS', () => {
     const info = getCompatibilityInfo();
     expect(info.version).toBe(getVersion());
-    expect(info.lts).toBe(false);
-    expect(info.ltsLine).toBe('2.2');
     expect(info.writers).toBe('single');
     if (info.version.startsWith('2.3.')) {
       expect(getVersion()).toBe('2.3.0');
+      expect(info.lts).toBe(false);
+      expect(info.ltsLine).toBe('2.2');
       expect(info.cliSurface).toBe('2.3.0');
     }
     expect(info.features).toContain('column-store');
@@ -536,8 +536,10 @@ describe('v2.3.0 CLI', () => {
 
     const ver = await cli(['version', '--json']);
     const body = JSON.parse(ver.stdout) as { version: string; lts: boolean; ltsLine: string };
-    expect(body.lts).toBe(false);
-    expect(body.ltsLine).toBe('2.2');
-    if (body.version.startsWith('2.3.')) expect(body.version).toBe('2.3.0');
+    if (body.version.startsWith('2.3.')) {
+      expect(body.version).toBe('2.3.0');
+      expect(body.lts).toBe(false);
+      expect(body.ltsLine).toBe('2.2');
+    }
   });
 });

@@ -340,4 +340,21 @@ jsonsqlite insert|update|delete|index|sql --help
 
 退出码与 2.2 相同。`LOCK_FAILED` 仍是 3。
 
+---
+
+## 20. 2.5 LTS-3 冻结
+
+> **2.5.0 是 LTS-3。** 需要多写者才升级；否则留在 LTS-2。默认仍是单写者。PATCH 不新增子命令。`lts` 继续指向 2.2，本线的 tag 是 `lts-3`。
+
+相对 2.4 不增加命令。下表是本线读者会用的稳定入口。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `--writers single\|multi` | ✅ | 全局 flag，默认 `single`。不写不会变成 multi |
+| `doctor` | ✅ | JSON 含 `writers` 与 `lockHolder`（single 为 `{ pid }`，multi 为 `{ pids }`） |
+| `version --json` / `compat` | ✅ | `version` 为 `2.5.0`，`lts` 为 true，`ltsLine: "2.5"`，`writers` 为 `"single"`，`cliSurface` 为 `"2.5.0"` |
+| `config validate --file <path>` | ✅ | 仍接受 2.2 冻结字段和已经落地的可选字段。成功时 JSON 的 `ltsLine` 为 `"2.5"` |
+
+退出码与 2.2 相同。`LOCK_FAILED` 仍是 3。没有 replica、cluster、GraphQL。
+
 

@@ -87,11 +87,17 @@ describe('v2.2.0 LTS-2', () => {
   it('FT-V22-VER-01 / FT-V22-LTS-01 version is 2.2.0 LTS-2', () => {
     const info = getCompatibilityInfo();
     expect(info.version).toBe(getVersion());
-    expect(info.ltsLine).toBe('2.2');
     expect(info.writers).toBe('single');
     expect(info.formatVersion).toBe(2);
     expect(info.features).toContain('lts-2');
     expect(info.features).not.toEqual(expect.arrayContaining(['cluster', 'replica']));
+    if (
+      info.version.startsWith('2.2.') ||
+      info.version.startsWith('2.3.') ||
+      info.version.startsWith('2.4.')
+    ) {
+      expect(info.ltsLine).toBe('2.2');
+    }
     if (info.version.startsWith('2.2.')) {
       expect(getVersion()).toBe('2.2.0');
       expect(info.lts).toBe(true);
@@ -141,7 +147,8 @@ describe('v2.2.0 LTS-2', () => {
     expect(cliOk.code).toBe(0);
     const okBody = JSON.parse(cliOk.stdout) as { action: string; ltsLine: string };
     expect(okBody.action).toBe('config.validate');
-    expect(okBody.ltsLine).toBe('2.2');
+    if (getVersion().startsWith('2.5.')) expect(okBody.ltsLine).toBe('2.5');
+    else expect(okBody.ltsLine).toBe('2.2');
 
     const badFile = path.join(await tmpDir(), 'cluster.json');
     await fs.writeFile(
@@ -167,8 +174,9 @@ describe('v2.2.0 LTS-2', () => {
       ltsLine: string;
       writers: string;
     };
-    expect(body.ltsLine).toBe('2.2');
     expect(body.writers).toBe('single');
+    if (body.version.startsWith('2.5.')) expect(body.ltsLine).toBe('2.5');
+    else expect(body.ltsLine).toBe('2.2');
     if (body.version.startsWith('2.2.')) {
       expect(body.version).toBe('2.2.0');
       expect(body.lts).toBe(true);
@@ -176,7 +184,9 @@ describe('v2.2.0 LTS-2', () => {
 
     const compat = await cli(['compat', '--json']);
     expect(compat.code).toBe(0);
-    expect(JSON.parse(compat.stdout).ltsLine).toBe('2.2');
+    const compatLine = (JSON.parse(compat.stdout) as { ltsLine: string }).ltsLine;
+    if (body.version.startsWith('2.5.')) expect(compatLine).toBe('2.5');
+    else expect(compatLine).toBe('2.2');
   });
 
   it('FT-V22-CLI-02 help matches the frozen CLI-API surface', async () => {

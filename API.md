@@ -531,3 +531,24 @@ getCompatibilityInfo();
 
 `getCompatibilityInfo()` 在 2.4.0 上是 `lts: false`、`ltsLine: '2.2'`、`writers: 'single'`（默认模式）、`cliSurface: '2.4.0'`。
 
+---
+
+## 2.5 LTS-3（冻结多写者，默认仍单写者）
+
+相对 2.4 为 **MINOR**，不增加功能。需要多写者才升级；否则留在 LTS-2。
+
+```ts
+getCompatibilityInfo();
+// version: '2.5.0'
+// formatVersion: 2
+// lts: true
+// ltsLine: '2.5'
+// writers: 'single'
+// cliSurface: '2.5.0'
+```
+
+- `lts: true` 表示这个二进制是长期支持线。单写者生产仍 pin 2.2。
+- `ltsLine: '2.5'` 是本包所属的线（LTS-3）。不要把它和 `version` 字符串当成同一个数。2.2 包上的同一字段是 `ltsLine: '2.2'`。
+- `writers: 'single'` 仍是默认开库模式。第二个进程 `open` 同一目录抛 `LOCK_FAILED`。
+- `2.5.x` PATCH 不缩小 `writers: 'multi'`、`SERIALIZABLE`、`DEADLOCK`、`WRITE_CONFLICT`、`SERIALIZABLE_CONFLICT`、savepoint 的文档语义，也不加入复制或集群。
+

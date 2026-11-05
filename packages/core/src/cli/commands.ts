@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { create, init } from '../lifecycle.js';
+import { create, getCompatibilityInfo, init } from '../lifecycle.js';
 import { rekeyDatabase, resolveRekeyKeys } from '../ops/rekey.js';
 import { migrateDatabase } from '../ops/migrate.js';
 import { diagnoseWalDirectory } from '../storage/Wal.js';
@@ -189,7 +189,7 @@ async function cmdConfig(ctx: CliContext, rest: string[]): Promise<void> {
       action: 'config.validate',
       file: resolvedPath,
       storagePath: resolved.storagePath,
-      ltsLine: '2.2',
+      ltsLine: getCompatibilityInfo().ltsLine,
     });
   } catch (err) {
     if (err instanceof JSONSQLiteError) {

@@ -14,16 +14,16 @@ export interface CompatibilityInfo {
   version: string;
   formatVersion: number;
   /**
-   * True on an LTS binary. 2.4.0 is not LTS.
-   * Production single-writer pin remains 2.2. Production multi-writer waits for 2.5.
+   * True on an LTS binary. 2.5.0 is LTS-3.
+   * The recommended single-writer pin remains LTS-2 (2.2). This flag does not switch the default open mode.
    */
   lts: boolean;
   /**
-   * Recommended production LTS line. `2.2` means LTS-2.
-   * On 2.4 this stays `2.2`: it names the line to pin, not this package.
+   * LTS line of this binary. `2.5` means LTS-3.
+   * It is not the package version string, and it is not the recommended pin for single-writer users.
    */
-  ltsLine: '2.2';
-  /** CLI command surface generation. 2.4.0 adds --writers. */
+  ltsLine: '2.5';
+  /** Frozen CLI surface. 2.5.0 keeps the 2.4 commands, including global --writers. */
   cliSurface: string;
   /** Default open mode. Multi-writer is opt-in and is not this field. */
   writers: 'single';
@@ -58,9 +58,9 @@ export function getCompatibilityInfo(): CompatibilityInfo {
   return {
     version: getVersion(),
     formatVersion: FORMAT_VERSION,
-    lts: false,
-    ltsLine: '2.2',
-    cliSurface: '2.4.0',
+    lts: true,
+    ltsLine: '2.5',
+    cliSurface: '2.5.0',
     writers: 'single',
     features: [
       'encryption',
@@ -116,6 +116,7 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'serializable',
       'deadlock-detection',
       'cli-2.4',
+      'lts-3',
     ],
   };
 }

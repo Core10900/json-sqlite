@@ -10,7 +10,8 @@ Global flags (anywhere):
   -p, --path <dir>   storage path (default: ./data or $JSONSQLITE_PATH)
   --writers single|multi
                      default single (second process gets LOCK_FAILED).
-                     multi is opt-in and is not LTS; production multi-writer is 2.5
+                     multi is opt-in (LTS-3). Omitting it stays single.
+                     The lts tag stays on 2.2; install this line with lts-3
   -y, --yes          skip confirmations
   --json             machine-readable JSON output
   -q, --quiet        suppress human chatter
@@ -32,7 +33,7 @@ Commands:
   aggregate                  aggregation pipeline (unwind/lookup)
   admin serve                start Admin HTTP + SSE
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version (2.4.0, lts: false, ltsLine 2.2)
+  compat / version [--json]  compatibility / version (2.5.0, lts: true, ltsLine 2.5)
   config validate --file <f> check a file against the frozen 2.2 config keys
   backup / vacuum [--compress] / rekey    ops
   backup --type full|incremental|differential
@@ -198,8 +199,9 @@ export function helpCompat(): string {
   return `jsonsqlite compat [--json]
 jsonsqlite version [--json]
 Print getCompatibilityInfo() / version.
-On 2.4.0: lts is false, ltsLine is still "2.2" (the line to pin), writers is "single".
-2.4.0 is not LTS. Default open stays single-writer. Production multi-writer waits for 2.5.
+On 2.5.0: lts is true, ltsLine is "2.5" (this package's line, not the version string).
+writers is "single". Default open stays single-writer. Pin 2.2 unless you need multi-writer.
+The lts tag stays on 2.2. This line is the lts-3 tag. PATCH adds no subcommands.
 `;
 }
 

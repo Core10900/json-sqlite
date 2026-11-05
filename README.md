@@ -1,8 +1,8 @@
 # JSONSQLite
 
-**当前包：2.4.0**（**非 LTS**，默认单写者） · **生产 pin：2.2.x**（`lts`） · **`latest`：2.4.0** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**当前包：2.5.0**（**LTS-3**，默认单写者） · **生产 pin：2.2.x**（`lts`） · **`latest`：2.4.0** · **多写者 pin：`lts-3`** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
-2.4 默认不改变 2.2 库的行为。多写者、列存、分层和插件都要显式打开。生产多写者等 2.5。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要这些能力时：
+2.5 不增加功能，只冻结 2.4 的多写者契约。默认仍是单写者。需要多写者才升级；否则留在 LTS-2。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
 
 ```bash
 npm install @webofcat/jsonsqlite@lts
@@ -22,7 +22,8 @@ JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**�
 | 线 | 版本 | 说明 |
 |----|------|------|
 | **LTS-1** | `1.6.x` | 旧单写者契约。继续只收安全/正确性补丁，并行不少于 12 个月，或至 LTS-3 发布后 6 个月 |
-| **LTS-2** | `2.2.x`（当前主推荐） | 单写者、分页、诚实的 RC/RR、可恢复备份。不是集群版 |
+| **LTS-2** | `2.2.x`（当前主推荐，`lts` / `lts-2`） | 单写者、分页、诚实的 RC/RR、可恢复备份。不是集群版 |
+| **LTS-3** | `2.5.x`（`lts-3`） | 同一台机器多进程写。默认仍是单写者。需要多写者才升级 |
 
 完整路线与能力勾选见 [ROADMAP](./devDocs/releases/ROADMAP.md) / [FEATURE-MATRIX](./devDocs/releases/FEATURE-MATRIX.md)。
 
@@ -808,7 +809,9 @@ pnpm --filter @jsonsqlite/bench start
 | [devDocs/releases/v2.1.0/开发计划.md](./devDocs/releases/v2.1.0/开发计划.md) | v2.1 硬化（非 LTS） |
 | [devDocs/releases/v2.2.0/开发计划.md](./devDocs/releases/v2.2.0/开发计划.md) | **LTS-2** `2.2.x`（已发布） |
 | [devDocs/releases/v2.3.0/开发计划.md](./devDocs/releases/v2.3.0/开发计划.md) | v2.3 存储与查询增强（非 LTS，已发布） |
-| [devDocs/releases/v3.0.0/开发计划.md](./devDocs/releases/v3.0.0/开发计划.md) | **LTS-3 / Vision Complete**（规划） |
+| [devDocs/releases/v2.4.0/开发计划.md](./devDocs/releases/v2.4.0/开发计划.md) | v2.4 多写者 opt-in（非 LTS，已发布） |
+| [devDocs/releases/v2.5.0/开发计划.md](./devDocs/releases/v2.5.0/开发计划.md) | **LTS-3** `2.5.x`（已发布） |
+| [devDocs/releases/v3.0.0/开发计划.md](./devDocs/releases/v3.0.0/开发计划.md) | v3.0 异步复制浸泡（非 LTS，规划） |
 | [devDocs/releases/v1.5.5/开发计划.md](./devDocs/releases/v1.5.5/开发计划.md) | v1.5.5 **CLI LTS 化**（命令扩展 / 交互与脚本契约） |
 | [devDocs/releases/v1.5.0/开发计划.md](./devDocs/releases/v1.5.0/开发计划.md) | v1.5.0 生产就绪（rekey / vacuum / 压测） |
 | [devDocs/releases/v1.4.0/开发计划.md](./devDocs/releases/v1.4.0/开发计划.md) | v1.4.0 加密主存 / LIKE·JOIN / 导入导出 |

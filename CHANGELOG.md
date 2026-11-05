@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.5.0 — 2026-11-05 · LTS-3
+
+**LTS-3。** 相对 2.4 为 MINOR，本版不增加功能。默认仍是单写者。需要多写者才升级；否则留在 LTS-2。
+
+`writers: 'multi'`、`SERIALIZABLE`、死锁错误码、savepoint 的语义与 2.4 已冻结的锁协议相同，`2.5.x` PATCH 不缩小这些语义，也不加入复制或集群。
+
+`lts` 继续指向 2.2。`lts-2` 指向 2.2。`lts-3` 指向 2.5。`npm install` 不带 tag 仍跟随 `latest`（2.4.0），不会因为本版发布就改到 2.5。
+
+### Changed
+- `getCompatibilityInfo()`：`lts: true`，`ltsLine: '2.5'`，`cliSurface: '2.5.0'`，默认 `writers: 'single'`
+- `version --json` 能区分 `ltsLine: "2.5"`。这是本包所属的线，不是包版本字符串，也不是单写者用户的主推荐 pin
+
+### Not in this release
+新存储格式、复制、GraphQL、选主。
+
 ## 2.4.0 — 2026-11-04 · 非 LTS
 
 **非 LTS。** 相对 2.3 为 MINOR。默认仍是单写者。`writers: 'multi'` 必须显式打开，锁语义见 [RFC-锁协议.md](./devDocs/releases/v2.4.0/RFC-锁协议.md)。

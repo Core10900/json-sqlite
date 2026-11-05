@@ -1,47 +1,114 @@
 # @webofcat/jsonsqlite
 
-**版本：2.4.0** · **非 LTS** · 默认单写者 · Node.js ≥ 20 · 作者：hanlin
+**版本：2.5.0** · **LTS-3** · 默认单写者 · Node.js ≥ 20 · 作者：hanlin
 
-生产环境请继续 pin **2.2**（LTS-2）。需要多写者的生产 pin 是 **2.5**，不是本版：
+**需要多写者才升级；否则留在 LTS-2（2.2）。** 本版不增加功能，只冻结 2.4 已经跑绿的契约。不传 `writers` 时仍是单写者，从 2.2 升上来不会自动变成多写者。
+
+| 线 | 谁应该 pin |
+|----|------------|
+| **LTS-2 = 2.2.x** | 单写者生产。不需要多进程写就留在这里。 |
+| **LTS-3 = 2.5.x** | 同一台机器上的多进程写。默认仍是单写者。 |
 
 ```bash
-npm install @webofcat/jsonsqlite@2.2
-# 或
+# 主推荐仍是单写者
 npm install @webofcat/jsonsqlite@lts
+npm install @webofcat/jsonsqlite@2.2
+
+# 需要同一台机器多进程写时才装本线
+npm install @webofcat/jsonsqlite@lts-3
+npm install @webofcat/jsonsqlite@2.5
 ```
 
-只有需要列存、热/温/冷分层、插件，或要试用单机多写者时才安装 2.4。`npm install @webofcat/jsonsqlite`（`latest`）会装到 2.4.0。`lts` 仍指向 2.2，不要把 2.4 当成生产 pin。
+`npm install @webofcat/jsonsqlite` 不带 tag，装到的是 `latest`（2.4.0），不会因为本版发布就改到 2.5。`lts` 继续指向 2.2。`lts-2` 指向 2.2。`lts-3` 指向 2.5。两条线并行维护，安全补丁两条线的公告都要看。
 
-2.4 不改变默认路径。不传 `writers` 时仍是单写者，`open` 可以打开 2.2 / 2.3 的库（`formatVersion` 仍是 2，不用迁移）。列存、分层、智能压缩、插件、大值缓存压缩、热页预取、chunk 执行、Geo 索引、中文分词**全部默认关闭**。多写者也默认关闭。
+承诺边界：默认 single 的正确性不低于 LTS-2。`writers: 'multi'`、`SERIALIZABLE`、死锁错误码、savepoint 的文档语义在 `2.5.x` PATCH 中不缩小。PATCH 不加入复制或集群，也不新增子命令。
+
+`formatVersion` 仍是 2。列存、分层、智能压缩、插件、大值缓存压缩、热页预取、chunk 执行、Geo 索引、中文分词**全部默认关闭**。多写者也默认关闭。
+
+## 怎么看兼容字段
+
+`version` 是包版本字符串。`ltsLine` 是这条二进制所属的长期支持线。两者不是同一个数。2.2 包上的同一字段是 `ltsLine: '2.2'`。本包是 `ltsLine: '2.5'`，同时 `lts: true`。
 
 ```ts
 import { getCompatibilityInfo, open } from '@webofcat/jsonsqlite';
 
 const info = getCompatibilityInfo();
 // {
-//   version: '2.4.0',    // 本包版本。这不是 LTS 包
+//   version: '2.5.0',    // 包版本。不要把它读成线名
 //   formatVersion: 2,    // 与 2.2 相同，旧的 2.2 目录可以直接 open
-//   lts: false,          // 本二进制不是长期支持线
-//   ltsLine: '2.2',      // 建议 pin 的生产 LTS 线。不要把它读成「本包属于 2.2」
-//   writers: 'single',   // 默认仍是单写者。显式 multi 见下文；生产多写者等 2.5
-//   cliSurface: '2.4.0', // 在 2.3 命令之外增加了全局 --writers
+//   lts: true,           // 本二进制是长期支持线（LTS-3）
+//   ltsLine: '2.5',      // 本包所属的线。不是「建议所有人 pin 2.5」
+//   writers: 'single',   // 默认开库模式。不写 writers 时第二个进程得到 LOCK_FAILED
+//   cliSurface: '2.5.0', // 冻结的命令面，包含全局 --writers。PATCH 不新增子命令
 // }
 ```
 
 | 字段 | 含义 |
 |------|------|
-| `lts: false` | 这个 2.4.0 包不是长期支持版本。需要稳定契约时 pin 2.2。 |
-| `ltsLine: '2.2'` | 当前建议生产使用的 LTS 线。2.4 发布后这个字段仍是 `'2.2'`。 |
-| `writers: 'single'` | 这是默认开库模式。不写 `writers` 时，第二个进程 `open` 同一目录会得到 `LOCK_FAILED`。 |
-| `cliSurface: '2.4.0'` | 2.3 的子命令都还在，并且可以多出全局 `--writers single\|multi`。 |
+| `version: '2.5.0'` | 这个包的版本字符串。 |
+| `lts: true` | 这个 2.5.0 包是长期支持版本，线名是 LTS-3。单写者生产仍 pin 2.2。 |
+| `ltsLine: '2.5'` | 本二进制的线。2.2 包上报的是 `ltsLine: '2.2'`。 |
+| `writers: 'single'` | 默认开库模式。显式 `writers: 'multi'` 才会多进程写。 |
+| `cliSurface: '2.5.0'` | 稳定入口含 2.2 起的子命令，以及 2.4 的全局 `--writers single\|multi`。 |
 
-默认隔离级别仍是 `READ_COMMITTED`。另一种在 single 下可用的级别是 `REPEATABLE_READ`。`READ_UNCOMMITTED` 会拒绝。single 模式下 `SERIALIZABLE` 也会拒绝。LTS-1（1.6.x）继续收安全补丁，并行窗口不少于 12 个月，或到 LTS-3（2.5）发布后 6 个月。`@webofcat/jsonsqlite@2.2.0` 是这条 LTS-2 的首个版本。
+```bash
+jsonsqlite version --json
+# version 2.5.0，lts true，ltsLine "2.5"，writers "single"，cliSurface "2.5.0"
+
+jsonsqlite compat --json
+# 与 getCompatibilityInfo() 相同的字段
+```
+
+默认隔离级别仍是 `READ_COMMITTED`。另一种在 single 下可用的级别是 `REPEATABLE_READ`。`READ_UNCOMMITTED` 会拒绝。single 模式下 `SERIALIZABLE` 也会拒绝。LTS-1（1.6.x）继续收安全补丁，并行窗口不少于 12 个月，或到 LTS-3（2.5）发布后 6 个月。`@webofcat/jsonsqlite@2.2.0` 是 LTS-2 的首个版本。
+
+## 从 2.2 迁到 2.5
+
+2.2 的库是 `formatVersion` 2，直接打开。下面每一步都不写 `writers`，所以写者模式仍是 single。
+
+```ts
+const db = await open({ storagePath: './data' });
+// 第二个进程再 open 同一个目录：LOCK_FAILED
+await db.close();
+```
+
+```bash
+jsonsqlite doctor -p ./data --json
+# writers 是 "single"，lockHolder 是 { "pid": <持有 meta/.lock 的进程> }
+```
+
+1.x（`formatVersion` 1）不能直接 `open`，先迁移。迁移本身不改写者模式，打开目标库时默认仍是 single：
+
+```bash
+jsonsqlite migrate --from ./old --to ./data --yes
+jsonsqlite doctor -p ./data --json
+```
+
+```ts
+import { migrateDatabase, open } from '@webofcat/jsonsqlite';
+
+await migrateDatabase({ from: './old', to: './data', yes: true });
+const db = await open({ storagePath: './data' });
+await db.close();
+```
+
+只有需要同一台机器上多个进程一起写时，才显式打开 multi。不写就不会变成 multi：
+
+```ts
+const db = await open({ storagePath: './data', writers: 'multi' });
+await db.close();
+```
+
+```bash
+jsonsqlite --writers multi doctor -p ./data --json
+```
+
+锁的持有、崩溃后谁拥有锁、冲突时谁成功，见下一节。协议全文在 [RFC-锁协议.md](../../devDocs/releases/v2.4.0/RFC-锁协议.md)。
 
 ---
 
 ## 单写者与多写者
 
-锁协议的全文在 [RFC-锁协议.md](../../devDocs/releases/v2.4.0/RFC-锁协议.md)。下面是可以直接照着做的部分。
+下面是 2.4 已经跑绿、并在 2.5.x PATCH 中不缩小的契约。锁协议全文在 [RFC-锁协议.md](../../devDocs/releases/v2.4.0/RFC-锁协议.md)。
 
 ### 两种模式
 
@@ -473,35 +540,46 @@ await db.query({ collection: 'notes', filter: { text: { $contains: '数据库' }
 
 ## CLI
 
-2.2 的稳定命令没有改名，也没有删掉。全局 flag 仍是 `-p/--path`、`-y/--yes`、`--json`、`-q/--quiet`、`-h/--help`。退出码仍是 `0` 成功、`1` 用法或业务、`2` 系统/IO、`3` 锁失败。`backup`、`doctor`、`migrate`、`config validate`、`index rebuild` 的语义与 2.2 相同。
+命令面在本线冻结，包含全局 `--writers`。`2.5.x` PATCH 不新增子命令。2.2 起的稳定命令没有改名，也没有删掉。
 
-本版新命令：
+读者会用到的稳定入口：
+
+| 入口 | 作用 |
+|------|------|
+| `create` / `init` | 建库。不传 `--writers` 时是 single |
+| `insert` / `update` / `delete` / `get` / `count` | 行读写 |
+| `run` / `sql` / `query` | SQL 与 JSON 查询 |
+| `tables` / `table` | 表 |
+| `index` | 索引，含 `index rebuild`、`index compact` |
+| `backup` / `vacuum` / `rekey` / `migrate` / `doctor` | 运维。`doctor` 的 JSON 含 `writers` 与 `lockHolder` |
+| `config validate --file` | 校验配置文件，不打开数据库 |
+| `version --json` / `compat` | 打印兼容信息，能区分 `ltsLine: "2.5"` |
+| `--writers single\|multi` | 全局 flag，默认 `single` |
+
+全局 flag 还有 `-p/--path`、`-y/--yes`、`--json`、`-q/--quiet`、`-h/--help`。退出码仍是 `0` 成功、`1` 用法或业务、`2` 系统/IO、`3` 锁失败。
 
 ```bash
 jsonsqlite version --json
-# version 2.3.0，lts false，ltsLine "2.2"，writers "single"
-
+jsonsqlite --writers multi doctor -p ./data --json
 jsonsqlite plugin list --json
-jsonsqlite plugin info vector --json
-jsonsqlite plugin info s3 --json
-
-jsonsqlite index create places loc --type geo -p ./data --json
 jsonsqlite index compact places -p ./data --json
 ```
 
 这些命令在非 TTY 下不提问。`plugin list` / `plugin info` 不打开数据库，也不安装远程插件。
 
-`config validate --file` 仍接受 `config.example.json` 里的 2.2 字段。2.3 的可选字段（`columnStore`、`columnCollections`、`storageTiers`、`coldAfter`、`warmAfter`、`smartCompression`、`indexDeltaSegments`、`cacheCompression`、`cacheCompressionThreshold`、`prefetchPages`、`queryChunkSize`、`chineseTokenizer`、`tokenizerModule`）可以出现，默认都是关闭。`cluster`、`replica`、`raft`、`writers`、`l3`、`redis`、`cache`（嵌套对象；冻结字段是 `cacheSize`）、`savepoint`、`graphql`、`wasm` 仍会拒绝且不生效，退出码 1，`INVALID_CONFIG`。
+`config validate --file` 接受 `config.example.json` 里的 2.2 字段，也接受已经落地的可选字段：`writers`（`single` 或 `multi`，默认 `single`），以及 2.3 的 `columnStore`、`columnCollections`、`storageTiers`、`coldAfter`、`warmAfter`、`smartCompression`、`indexDeltaSegments`、`cacheCompression`、`cacheCompressionThreshold`、`prefetchPages`、`queryChunkSize`、`chineseTokenizer`、`tokenizerModule`。不写这些键就不会打开对应能力。`cluster`、`replica`、`raft`、`l3`、`redis`、`cache`（嵌套对象；冻结字段是 `cacheSize`）、`savepoint`（这是库 API，不是配置键）、`graphql`、`wasm` 会拒绝且不生效，退出码 1，`INVALID_CONFIG`。
 
 ---
 
 ## 这一版没有的东西
 
-- **savepoint**：放到 2.4 的事务模型里做。配置里写 `savepoint` 会被拒绝。
-- 多写者、复制、自动选主。稳定的多写者线是 **2.5**。
+- 新存储格式。`formatVersion` 仍是 2。
+- 复制、集群、自动选主。
 - GraphQL、Raft、WASM。
 - 可用的向量检索。`vectorSearch` 和 `createVectorStub()` 只证明钩子能被调用，命中列表为空。可用实现在 3.3。
 - 可用的 S3 上传。`createS3Stub()` 只计数，不传对象。可用实现在 3.1。
+
+需要多写者才升级；否则留在 LTS-2。
 
 ## 许可
 
