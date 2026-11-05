@@ -19,7 +19,7 @@ npm install @webofcat/jsonsqlite@lts-3
 npm install @webofcat/jsonsqlite@2.5
 ```
 
-`npm install @webofcat/jsonsqlite` 不带 tag，装到的是 `latest`（2.4.0），不会因为本版发布就改到 2.5。`lts` 继续指向 2.2。`lts-2` 指向 2.2。`lts-3` 指向 2.5。两条线并行维护，安全补丁两条线的公告都要看。
+`npm install @webofcat/jsonsqlite` 不带 tag，装到的是 `latest`（2.5.0）。默认仍是单写者。`lts` 继续指向 2.2。`lts-2` 指向 2.2。`lts-3` 指向 2.5。两条线并行维护，安全补丁两条线的公告都要看。生产 pin 仍是 `lts`（2.2）。
 
 承诺边界：默认 single 的正确性不低于 LTS-2。`writers: 'multi'`、`SERIALIZABLE`、死锁错误码、savepoint 的文档语义在 `2.5.x` PATCH 中不缩小。PATCH 不加入复制或集群，也不新增子命令。
 

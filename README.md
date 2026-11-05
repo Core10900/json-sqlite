@@ -1,6 +1,6 @@
 # JSONSQLite
 
-**当前包：2.5.0**（**LTS-3**，默认单写者） · **生产 pin：2.2.x**（`lts`） · **`latest`：2.4.0** · **多写者 pin：`lts-3`** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**当前包：2.5.0**（**LTS-3**，默认单写者） · **生产 pin：2.2.x**（`lts`） · **`latest`：2.5.0** · **多写者 pin：`lts-3`** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
 2.5 不增加功能，只冻结 2.4 的多写者契约。默认仍是单写者。需要多写者才升级；否则留在 LTS-2。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
 

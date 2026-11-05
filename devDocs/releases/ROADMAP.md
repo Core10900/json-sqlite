@@ -140,5 +140,6 @@
 |------|------|
 | [FEATURE-MATRIX.md](./FEATURE-MATRIX.md) | 能力排到哪一版 |
 | 各 `v*/开发计划.md` 与 `功能测试计划.md` | 该版任务与放行 |
+| 各 `v3.*/发布说明.md` | 该版 npm 的 `latest` / `lts*` 怎么打、发出后怎么核对。`npm view` 不带版本号读的是 `latest` |
 | [CLI-EVOLUTION.md](./CLI-EVOLUTION.md) | 命令面演进到 3.6 |
 | `design/*` | 架构与边界。本路线不把大纲示例里的强制 AI、全面超越 SQLite、完整 SQL 方言纳进验收 |

@@ -6,7 +6,7 @@
 
 `writers: 'multi'`、`SERIALIZABLE`、死锁错误码、savepoint 的语义与 2.4 已冻结的锁协议相同，`2.5.x` PATCH 不缩小这些语义，也不加入复制或集群。
 
-`lts` 继续指向 2.2。`lts-2` 指向 2.2。`lts-3` 指向 2.5。`npm install` 不带 tag 仍跟随 `latest`（2.4.0），不会因为本版发布就改到 2.5。
+`lts` 继续指向 2.2。`lts-2` 指向 2.2。`lts-3` 指向 2.5。`latest` 指向 2.5。`npm install` 不带 tag 装到 2.5，默认仍是单写者。生产 pin 仍是 `lts`（2.2）。
 
 ### Changed
 - `getCompatibilityInfo()`：`lts: true`，`ltsLine: '2.5'`，`cliSurface: '2.5.0'`，默认 `writers: 'single'`
