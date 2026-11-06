@@ -552,3 +552,21 @@ getCompatibilityInfo();
 - `writers: 'single'` 仍是默认开库模式。第二个进程 `open` 同一目录抛 `LOCK_FAILED`。
 - `2.5.x` PATCH 不缩小 `writers: 'multi'`、`SERIALIZABLE`、`DEADLOCK`、`WRITE_CONFLICT`、`SERIALIZABLE_CONFLICT`、savepoint 的文档语义，也不加入复制或集群。
 
+---
+
+## 3.0 查询引擎（非 LTS，默认仍单写者）
+
+相对 2.5 为 **MINOR**。不传新参数时，旧过滤得到原来的文档。`lts` 为 false。`ltsLine` 仍是 `'2.5'`（最新 LTS 线，不是本包版本）。生产 pin 仍是 2.2。
+
+| 符号 | 说明 |
+|------|------|
+| `jsonPath(collection, path)` | 支持 `$[?(@.age>18)].name`。脚本和 `..` 抛 `JSONPATH_UNSUPPORTED` |
+| `query(q, { timeout, signal })` | 扫描中超时 `QUERY_TIMEOUT`，取消 `QUERY_CANCELLED`。不返回部分结果 |
+| `explain(q)` | `selectivity`、`indexWeight`、`chunked`、`earlyStop`、`stages`。无统计时 `indexChoice: 'rules'` |
+| `lastProfile()` | `parseMs`、`optimizeMs`、`indexScanMs`、`dataLoadMs`、`executeMs`、`memoryDelta` |
+| `run(sql, params)` | `?` 占位符。值不进入语句文本 |
+| `advise(q)` | 含 `jsonPath` 与 `estimatedCost`。未执行查询也可以调用 |
+| `compileFilters: true` | 默认 false。拒绝把用户字符串编译进函数体 |
+
+单字段 `GROUP BY` 支持 `COUNT` / `SUM` / `AVG` / `MIN` / `MAX`。`HAVING` 抛 `SQL_UNSUPPORTED`。
+

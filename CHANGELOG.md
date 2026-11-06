@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.0.0 — 2026-11-06 · 非 LTS
+
+**非 LTS。** 相对 2.5 为 MINOR。默认仍是单写者，文档页格式不变。不传新参数时，已有 JSON 过滤和 SQL 子集的结果保持不变。
+
+`latest` 指向 3.0.0。`lts` / `lts-2` 仍是 2.2。`lts-3` 仍是 2.5。生产 pin 仍是 `lts`（2.2）。需要多写者用 `lts-3`。
+
+### Added
+- JSONPath 比较和存在过滤，安全表达式树，相同路径复用解释树。脚本和 `..` 抛 `JSONPATH_UNSUPPORTED`
+- 扫描中的 `queryTimeout` 与 `AbortSignal`。超时 `QUERY_TIMEOUT`，取消 `QUERY_CANCELLED`，不返回部分结果
+- 计划器：常量折叠、`?` 参数绑定、投影下推、LIMIT 早停、按选择率 × 索引权重选索引。没有统计时退回 2.5 规则
+- 剖析：`parse`、`optimize`、`indexScan`、`dataLoad`、`execute` 与内存增量
+- 分批执行的结果与关闭分批一致
+- 单字段 `GROUP BY` 的 `COUNT` / `SUM` / `AVG` / `MIN` / `MAX`。不支持的语法用 `SQL_UNSUPPORTED` 点名构造
+- `compileFilters` 默认关闭。只编译引擎白名单运算符
+- Advisor 给出替代 `jsonPath` 和 `estimatedCost`
+- CLI：`explain` 输出选择率、权重、是否分批、是否早停；`query --timeout`
+
+### Not in this release
+B+Tree、新的列存编码、复制、Redis、GraphQL、集群、完整 SQL 方言、`READ_UNCOMMITTED`。
+
 ## 2.5.0 — 2026-11-05 · LTS-3
 
 **LTS-3。** 相对 2.4 为 MINOR，本版不增加功能。默认仍是单写者。需要多写者才升级；否则留在 LTS-2。

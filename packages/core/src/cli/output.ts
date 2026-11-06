@@ -90,7 +90,10 @@ export function mapErrorToExit(err: unknown): ExitCode {
       err.code === ErrorCode.BACKUP_BASELINE ||
       err.code === ErrorCode.DATA_CORRUPT ||
       err.code === ErrorCode.ISOLATION_UNSUPPORTED ||
-      err.code === ErrorCode.WAL_CORRUPT
+      err.code === ErrorCode.WAL_CORRUPT ||
+      err.code === ErrorCode.QUERY_TIMEOUT ||
+      err.code === ErrorCode.QUERY_CANCELLED ||
+      err.code === ErrorCode.JSONPATH_UNSUPPORTED
     ) {
       return ExitCode.USAGE;
     }

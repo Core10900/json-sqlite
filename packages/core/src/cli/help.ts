@@ -24,16 +24,16 @@ Commands:
   insert / update / delete   row mutations
   get / count                row read helpers
   run / sql                  SQL execute / interactive REPL
-  query                      JSON query
+  query [--timeout ms]       JSON query. --timeout overrides queryTimeout (exit 1 on QUERY_TIMEOUT)
   index list|create|drop|rebuild|compact   index management
   plugin list|info           built-in plugin catalog (no remote install)
   stats                      database / table statistics
-  explain                    query advice / plan hints
+  explain                    index, selectivity, chunked, earlyStop, profile stages
   advise                     Advisor (aligns with explain fields)
   aggregate                  aggregation pipeline (unwind/lookup)
   admin serve                start Admin HTTP + SSE
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version (2.5.0, lts: true, ltsLine 2.5)
+  compat / version [--json]  compatibility / version (3.0.0, lts: false, ltsLine 2.5)
   config validate --file <f> check a file against the frozen 2.2 config keys
   backup / vacuum [--compress] / rekey    ops
   backup --type full|incremental|differential
@@ -199,9 +199,9 @@ export function helpCompat(): string {
   return `jsonsqlite compat [--json]
 jsonsqlite version [--json]
 Print getCompatibilityInfo() / version.
-On 2.5.0: lts is true, ltsLine is "2.5" (this package's line, not the version string).
-writers is "single". Default open stays single-writer. Pin 2.2 unless you need multi-writer.
-The lts tag stays on 2.2. This line is the lts-3 tag. PATCH adds no subcommands.
+On 3.0.0: lts is false. ltsLine stays "2.5" (latest LTS line, LTS-3), not this package version.
+writers is "single". Default open stays single-writer. Pin 2.2 unless you need multi-writer (lts-3 / 2.5).
+This release is not LTS. The lts tag stays on 2.2. PATCH on 3.0.x adds no subcommands.
 `;
 }
 

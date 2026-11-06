@@ -57,6 +57,10 @@ export class GeoIndex implements Index {
     return [];
   }
 
+  stats(): { keys: number; docs: number } {
+    return { keys: this.points.size, docs: this.points.size };
+  }
+
   lookupGeo(box: GeoBox): string[] {
     const ids: string[] = [];
     for (const [id, point] of this.points) {

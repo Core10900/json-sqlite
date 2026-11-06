@@ -109,6 +109,10 @@ export class InvertedIndex implements Index {
       .map(([id]) => id);
   }
 
+  stats(): { keys: number; docs: number } {
+    return { keys: this.map.size, docs: this.totalDocs };
+  }
+
   exportEntries(): IndexSnapshot {
     return {
       entries: [...this.map].map(([k, ids]) => [k, [...ids]]),

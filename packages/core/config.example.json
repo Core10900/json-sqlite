@@ -22,5 +22,6 @@
   "backupIntervalMs": 0,
   "alerts": {
     "rules": []
-  }
+  },
+  "compileFilters": false
 }

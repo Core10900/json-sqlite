@@ -8,37 +8,69 @@ import type {
 } from '../types/index.js';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import { assertGeoBox, pointInBox } from '../index/geo.js';
+import { checkpoint, type ExecContext } from './checkpoint.js';
 import { matchLike } from './like.js';
 
 export function executeJsonQuery(
   docs: Document[],
   query: Omit<JsonQuery, 'collection'>,
+  ctx?: ExecContext,
 ): Document[] {
-  let result = docs;
+  const offset = query.offset ?? 0;
+  const limit = query.limit;
+  const early = !query.orderBy && limit !== undefined;
+  const stopAt = early ? offset + limit : Number.POSITIVE_INFINITY;
+  const pushed = projectionIsPushed(query);
+  if (ctx) ctx.projectionPushed = pushed;
 
-  if (query.filter && Object.keys(query.filter).length > 0) {
-    result = result.filter((doc) => matchFilter(doc, query.filter!));
+  if (stopAt <= 0) {
+    if (ctx) ctx.earlyStop = docs.length > 0;
+    return [];
   }
 
+  const matched: Document[] = [];
+  for (let i = 0; i < docs.length; i++) {
+    checkpoint(ctx);
+    if (ctx?.recordScan) ctx.scanned += 1;
+    const doc = docs[i]!;
+    if (!docMatches(doc, query, ctx)) continue;
+    const fields = query.projection ?? [];
+    matched.push(pushed ? projectDoc(doc, fields) : doc);
+    if (matched.length >= stopAt) {
+      if (ctx) ctx.earlyStop = i < docs.length - 1;
+      break;
+    }
+  }
+
+  let result = matched;
   if (query.orderBy) {
     const specs = normalizeOrderBy(query.orderBy);
     result = [...result].sort((a, b) => compareByOrder(a, b, specs));
   }
-
-  const offset = query.offset ?? 0;
-  const limit = query.limit;
   if (offset > 0 || limit !== undefined) {
     result = result.slice(offset, limit === undefined ? undefined : offset + limit);
   }
-
-  if (query.projection && query.projection.length > 0) {
-    result = result.map((doc) => projectDoc(doc, query.projection!));
+  const projection = query.projection;
+  if (projection && projection.length > 0 && !pushed) {
+    result = result.map((doc) => projectDoc(doc, projection));
   }
-
   return result;
 }
 
+function docMatches(
+  doc: Document,
+  query: Omit<JsonQuery, 'collection'>,
+  ctx?: ExecContext,
+): boolean {
+  if (ctx?.predicate) return ctx.predicate(doc);
+  if (!query.filter || Object.keys(query.filter).length === 0) return true;
+  return matchFilter(doc, query.filter);
+}
+
 export function matchFilter(doc: Document, filter: FilterCondition): boolean {
+  if (Object.keys(filter).length === 1 && typeof filter.$const === 'boolean') {
+    return filter.$const;
+  }
   if ('$and' in filter && Array.isArray(filter.$and)) {
     return (filter.$and as FilterCondition[]).every((f) => matchFilter(doc, f));
   }
@@ -158,6 +190,17 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** Projection can run before sort when every sort key is kept. */
+export function projectionIsPushed(query: {
+  projection?: string[];
+  orderBy?: OrderBySpec | OrderBySpec[];
+}): boolean {
+  if (!query.projection || query.projection.length === 0) return false;
+  if (!query.orderBy) return true;
+  const fields = normalizeOrderBy(query.orderBy).flatMap((spec) => Object.keys(spec));
+  return fields.every((field) => query.projection!.includes(field));
+}
+
 export function normalizeOrderBy(orderBy: OrderBySpec | OrderBySpec[]): OrderBySpec[] {
   return Array.isArray(orderBy) ? orderBy : [orderBy];
 }
@@ -174,7 +217,7 @@ export function compareByOrder(a: Document, b: Document, specs: OrderBySpec[]): 
   return 0;
 }
 
-function projectDoc(doc: Document, fields: string[]): Document {
+export function projectDoc(doc: Document, fields: string[]): Document {
   const out: Document = {
     _id: doc._id,
     _version: doc._version,

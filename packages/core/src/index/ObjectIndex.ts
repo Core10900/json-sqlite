@@ -58,6 +58,12 @@ export class ObjectIndex implements Index {
     return [];
   }
 
+  stats(): { keys: number; docs: number } {
+    let docs = 0;
+    for (const ids of this.map.values()) docs += ids.size;
+    return { keys: this.map.size, docs };
+  }
+
   exportEntries(): IndexSnapshot {
     return {
       entries: [...this.map].map(([k, ids]) => [k, [...ids]]),

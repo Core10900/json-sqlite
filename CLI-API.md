@@ -357,4 +357,18 @@ jsonsqlite insert|update|delete|index|sql --help
 
 退出码与 2.2 相同。`LOCK_FAILED` 仍是 3。没有 replica、cluster、GraphQL。
 
+---
+
+## 21. 3.0 查询引擎（非 LTS）
+
+> **3.0.0 非 LTS。** 不新增子命令。`version` 为 `3.0.0`，`lts` 为 false，`ltsLine` 仍是 `"2.5"`（最新 LTS 线）。默认仍是单写者。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `explain "<sql\|json>" --json` | ✅ | 含 `selectivity`、`indexWeight`、`chunked`、`earlyStop`、`stages` |
+| `query '<json>' --timeout <ms>` | ✅ | 覆盖 `queryTimeout`。超时退出码 `1`，`code` 为 `QUERY_TIMEOUT` |
+| `version --json` | ✅ | `3.0.0`，`lts: false` |
+
+帮助文本里没有 replica、cluster。
+
 

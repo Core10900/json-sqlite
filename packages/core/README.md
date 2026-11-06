@@ -1,8 +1,196 @@
 # @webofcat/jsonsqlite
 
-**版本：2.5.0** · **LTS-3** · 默认单写者 · Node.js ≥ 20 · 作者：hanlin
+**版本：3.0.0** · **非 LTS** · 默认单写者 · Node.js ≥ 20 · 作者：hanlin
 
-**需要多写者才升级；否则留在 LTS-2（2.2）。** 本版不增加功能，只冻结 2.4 已经跑绿的契约。不传 `writers` 时仍是单写者，从 2.2 升上来不会自动变成多写者。
+这一版补齐查询引擎。相对 2.5 是 **MINOR**：文档页格式不变（`formatVersion` 仍是 2），默认仍是单写者。不传新参数时，2.5 的过滤、排序和点查得到原来的文档。
+
+生产 pin 仍是 **LTS-2（2.2）**。需要同一台机器多写者时用 **LTS-3（2.5，`lts-3`）**。本包不是长期支持线。
+
+```bash
+# 不带 tag：latest，这一版是 3.0.0。默认仍是单写者
+npm install @webofcat/jsonsqlite
+
+# 单写者生产
+npm install @webofcat/jsonsqlite@lts
+npm install @webofcat/jsonsqlite@lts-2
+
+# 需要多写者
+npm install @webofcat/jsonsqlite@lts-3
+```
+
+`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.0.0。
+
+```ts
+import { getCompatibilityInfo, open } from '@webofcat/jsonsqlite';
+
+const info = getCompatibilityInfo();
+// version: '3.0.0'
+// lts: false
+// ltsLine: '2.5'   // 最新的 LTS 线（LTS-3），不是本包版本
+// writers: 'single'
+```
+
+下面用同一批文档说明旧过滤没有改结果：
+
+```ts
+const db = await open({ storagePath: './data' });
+await db.insert('users', { _id: 'a', name: 'ann', age: 17 });
+await db.insert('users', { _id: 'b', name: 'bo', age: 21 });
+
+const legacy = await db.query({
+  collection: 'users',
+  filter: { age: { $gt: 18 } },
+});
+// 仍然是 [_id = b]。不传 signal、timeout、chunkSize 时走原来的过滤
+```
+
+## JSONPath
+
+支持字段读取，以及比较和存在判断。解释器是表达式树。同一条路径文本会复用解释树，缓存键只有路径，不含文档或参数。默认不使用 `new Function`。
+
+支持：
+
+- `$.name`、`$.a.b`、`$[*].age`
+- `$[?(@.age>18)]`、`$[?(@.age>18)].name`
+- 比较：`=`、`==`、`!=`、`>`、`>=`、`<`、`<=`
+- 存在：`@.nickname`（字段不是 `undefined`）
+- `&&`、`||`
+
+不支持脚本（例如 `$.name()`）和递归下降 `..`。这两种在执行前抛 `JSONPATH_UNSUPPORTED`，表达式不会跑。
+
+```ts
+const names = await db.jsonPath('users', '$[?(@.age>18)].name');
+// ['bo']
+
+await db.jsonPath('users', '$..name');
+// JSONSQLiteError，code 是 JSONPATH_UNSUPPORTED，消息里有 recursive descent (..)
+
+await db.jsonPath('users', '$.name()');
+// 同样是 JSONPATH_UNSUPPORTED，消息里有 script
+```
+
+## 取消
+
+`queryTimeout` 在扫描过程中检查，不是等结果拼完再抛。调用可以再传 `AbortSignal`。中止后抛错，不会把扫到一半的数组当成成功。下一次查询还能用。超时错误码是 `QUERY_TIMEOUT`，取消错误码是 `QUERY_CANCELLED`。
+
+```ts
+await db.query(
+  { collection: 'users', filter: { age: { $gte: 0 } } },
+  { timeout: 30 },
+);
+
+const ac = new AbortController();
+const pending = db.query({ collection: 'users' }, { signal: ac.signal });
+ac.abort();
+// pending 拒绝，code 是 QUERY_CANCELLED
+```
+
+命令行用 `--timeout` 覆盖这一次的 `queryTimeout`。超时的退出码是 `1`，JSON 里的 `code` 是 `QUERY_TIMEOUT`。
+
+```bash
+jsonsqlite query '{"collection":"users"}' --timeout 30 -p ./data --json
+```
+
+## explain
+
+`db.explain(query)` 和 `jsonsqlite explain` 不扫文档。字段：
+
+| 字段 | 含义 |
+|------|------|
+| `selectivity` | 估计选择率。等值索引有统计时是 `1 / 键数` |
+| `indexWeight` | 索引类型权重。代价是选择率 × 权重，越小越优先 |
+| `indexChoice` | `cost` 表示按代价选；`rules` 表示没有统计，退回 2.5 的规则选择 |
+| `chunked` | 打开库时的 `queryChunkSize > 0` |
+| `earlyStop` | 有 `limit`、没有排序、也不做全量聚合时，扫到 `offset + limit` 即停 |
+| `projectionPushed` | 排序键都在投影里（或没有排序）时，投影可以提前做 |
+| `stages` | `parse`、`optimize`、`indexScan`、`dataLoad`、`execute` |
+
+没有统计时 `indexChoice` 是 `rules`，选中的索引与 2.5 相同，结果与全表过滤一致。
+
+参数用占位符，值不写进语句文本：
+
+```ts
+const sql = 'SELECT * FROM users WHERE name = ?';
+await db.run(sql, ['bo']);
+```
+
+`parseSql(sql)` 的文本里只有 `$param`，没有 `bo`。绑定在折叠之前完成。
+
+## Advisor
+
+`db.advise(query)` 不执行查询，也不访问网络。建议里有一条替代 JSONPath 和预估代价：
+
+- `jsonPath`：例如 `$[?(@.age>18)]`
+- `estimatedCost`：用本版的 parse、optimize、indexScan、dataLoad、execute 权重估算
+
+```ts
+const advice = db.advise({
+  collection: 'users',
+  filter: { age: { $gt: 18 } },
+});
+const alt = advice.find((item) => item.jsonPath);
+```
+
+## 分批
+
+`queryChunkSize` 默认 `0`，一次扫完，和 2.2 一样。设成正数后按块过滤（能提前投影时也在块内投影），再排序、分页。排序在分批过滤之后。打开和关闭的文档集合一致。
+
+```ts
+const db = await open({ storagePath: './data', queryChunkSize: 2 });
+const rows = await db.query({
+  collection: 'users',
+  filter: { age: { $gte: 0 } },
+  orderBy: { name: 'asc' },
+});
+```
+
+单次覆盖：`db.query(q, { chunkSize: 0 })` 关掉分批，`{ chunkSize: 8 }` 打开。
+
+## SQL 子集
+
+单个 `GROUP BY` 字段支持 `COUNT`、`SUM`、`AVG`、`MIN`、`MAX`。这不是完整 SQL。
+
+```ts
+const summed = await db.run(
+  'SELECT city, SUM(amount) AS total FROM orders GROUP BY city',
+);
+```
+
+不支持的构造会抛 `SQL_UNSUPPORTED`，消息里带构造名。例如：
+
+```ts
+await db.run('SELECT city, SUM(amount) FROM orders GROUP BY city HAVING SUM(amount) > 1');
+// 消息含 HAVING
+
+await db.run('SELECT city, COUNT(*) FROM orders GROUP BY city, name');
+// 消息含 GROUP BY（多个字段）
+```
+
+`SELECT * FROM t GROUP BY city` 同样是 `SQL_UNSUPPORTED`，因为 `GROUP BY` 必须带聚合函数。
+
+## 编译开关
+
+配置名是 `compileFilters`，默认 `false`。默认路径不调用 `new Function`。
+
+打开之后，只有引擎自己的白名单运算符（等值、比较、`$exists`）可以编译。用户字符串不能拼进函数体；调用 `compileUserSource` 会抛 `INVALID_CONFIG`，查询不会执行那段字符串。值通过参数数组传入。
+
+```ts
+const db = await open({ storagePath: './data', compileFilters: true });
+```
+
+`config.example.json` 里写着 `"compileFilters": false`。
+
+## 这一版没有
+
+B+Tree、新的列存编码、复制、Redis、GraphQL、集群、完整 SQL 方言、`READ_UNCOMMITTED`。多写者仍是显式 `writers: 'multi'`，默认单写者。
+
+---
+
+## 2.5 LTS-3 说明（历史）
+
+**版本：2.5.0** · **LTS-3** · 默认单写者。
+
+**需要多写者才升级；否则留在 LTS-2（2.2）。** 2.5 不增加功能，只冻结 2.4 已经跑绿的契约。不传 `writers` 时仍是单写者。`lts` 不会因为本版发布就改到 2.5；2.5 走 `lts-3`。从 2.2 升上来不会自动变成多写者。
 
 | 线 | 谁应该 pin |
 |----|------------|

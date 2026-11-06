@@ -28,6 +28,10 @@ export enum ErrorCode {
   DB_NOT_FOUND = 'DB_NOT_FOUND',
   SQL_PARSE = 'SQL_PARSE',
   SQL_UNSUPPORTED = 'SQL_UNSUPPORTED',
+  /** JSONPath script, recursive descent, or other rejected syntax. */
+  JSONPATH_UNSUPPORTED = 'JSONPATH_UNSUPPORTED',
+  /** `AbortSignal` fired while a query was scanning. Not a partial success. */
+  QUERY_CANCELLED = 'QUERY_CANCELLED',
   SCHEMA_VIOLATION = 'SCHEMA_VIOLATION',
   QUERY_TIMEOUT = 'QUERY_TIMEOUT',
   ENCRYPTION = 'ENCRYPTION',

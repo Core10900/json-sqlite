@@ -6,7 +6,7 @@ import type {
   FilterOp,
   FilterValue,
 } from '../types/index.js';
-import type { SqlStatement } from './ast.js';
+import type { SqlAggregate, SqlStatement } from './ast.js';
 import { tokenize, type Token } from './tokenize.js';
 
 export function parseSql(sql: string): SqlStatement {
@@ -45,7 +45,14 @@ export function parseSql(sql: string): SqlStatement {
 
 class Parser {
   private i = 0;
+  private params = 0;
   constructor(private readonly tokens: Token[]) {}
+
+  private countParams(): number {
+    const index = this.params;
+    this.params += 1;
+    return index;
+  }
 
   parseStatement(): SqlStatement {
     const t = this.peek();
@@ -82,37 +89,57 @@ class Parser {
 
   private parseSelect(): SqlStatement {
     this.expectKw('SELECT');
-    const { columns, aggregate } = this.parseSelectList();
+    const { columns, aggregate, aggregates } = this.parseSelectList();
     this.expectKw('FROM');
     const table = this.expectIdent();
     const alias = this.parseOptionalAlias();
     const join = this.parseJoinAfterFrom();
-    if (aggregate === 'count' && join) {
+    if (join && (aggregate === 'count' || aggregates.length > 0)) {
       throw new JSONSQLiteError(
         ErrorCode.SQL_UNSUPPORTED,
-        'COUNT(*) does not support JOIN in v1.5',
+        aggregate === 'count'
+          ? 'COUNT(*) does not support JOIN in v1.5'
+          : 'JOIN does not support aggregate functions',
       );
     }
     let filter: FilterCondition | undefined;
     if (this.matchKw('WHERE')) {
       filter = this.parseOrExpr();
     }
+    if (this.matchKw('HAVING')) {
+      throw new JSONSQLiteError(
+        ErrorCode.SQL_UNSUPPORTED,
+        'HAVING is not supported',
+      );
+    }
     let groupBy: string | undefined;
     if (this.matchKw('GROUP')) {
       this.expectKw('BY');
       groupBy = this.expectColumnRef();
+      if (this.checkPunct(',')) {
+        throw new JSONSQLiteError(
+          ErrorCode.SQL_UNSUPPORTED,
+          'Multiple columns in GROUP BY are not supported',
+        );
+      }
       if (join) {
         throw new JSONSQLiteError(
           ErrorCode.SQL_UNSUPPORTED,
           'GROUP BY does not support JOIN',
         );
       }
-      if (aggregate !== 'count') {
+      if (aggregates.length === 0) {
         throw new JSONSQLiteError(
           ErrorCode.SQL_UNSUPPORTED,
-          'GROUP BY requires COUNT(*) in this version',
+          'GROUP BY requires an aggregate function (COUNT, SUM, AVG, MIN, or MAX)',
         );
       }
+    }
+    if (this.matchKw('HAVING')) {
+      throw new JSONSQLiteError(
+        ErrorCode.SQL_UNSUPPORTED,
+        'HAVING is not supported',
+      );
     }
     let orderBy: Record<string, 'asc' | 'desc'> | undefined;
     if (this.matchKw('ORDER')) {
@@ -149,6 +176,7 @@ class Parser {
       join,
       columns,
       aggregate,
+      aggregates: aggregates.length > 0 ? aggregates : undefined,
       groupBy,
       filter,
       orderBy,
@@ -160,30 +188,67 @@ class Parser {
   private parseSelectList(): {
     columns: '*' | string[];
     aggregate?: 'count';
+    aggregates: SqlAggregate[];
   } {
-    if (this.matchKw('COUNT')) {
-      this.expectPunct('(');
-      this.expectPunct('*');
-      this.expectPunct(')');
-      return { columns: ['count'], aggregate: 'count' };
-    }
-    if (this.matchPunct('*')) return { columns: '*' };
+    if (this.matchPunct('*')) return { columns: '*', aggregates: [] };
     const columns: string[] = [];
-    let aggregate: 'count' | undefined;
+    const aggregates: SqlAggregate[] = [];
     const take = (): void => {
-      if (this.matchKw('COUNT')) {
-        this.expectPunct('(');
-        this.expectPunct('*');
-        this.expectPunct(')');
-        aggregate = 'count';
-        columns.push('count');
+      const agg = this.tryParseAggregate();
+      if (agg) {
+        aggregates.push(agg);
+        columns.push(agg.alias);
         return;
       }
       columns.push(this.expectColumnRef());
     };
     take();
     while (this.matchPunct(',')) take();
-    return { columns, aggregate };
+    const onlyCountStar =
+      aggregates.length === 1 &&
+      aggregates[0]!.fn === 'count' &&
+      aggregates[0]!.field === undefined &&
+      columns.length === 1;
+    return {
+      columns,
+      aggregate: onlyCountStar ? 'count' : undefined,
+      aggregates,
+    };
+  }
+
+  private tryParseAggregate(): SqlAggregate | null {
+    const t = this.peek();
+    if (t.kind !== 'kw') return null;
+    const fns: Record<string, SqlAggregate['fn']> = {
+      COUNT: 'count',
+      SUM: 'sum',
+      AVG: 'avg',
+      MIN: 'min',
+      MAX: 'max',
+    };
+    const fn = fns[t.value];
+    if (!fn) return null;
+    this.next();
+    this.expectPunct('(');
+    let field: string | undefined;
+    if (this.matchPunct('*')) {
+      if (fn !== 'count') {
+        throw new JSONSQLiteError(
+          ErrorCode.SQL_UNSUPPORTED,
+          `${t.value} does not accept *`,
+        );
+      }
+    } else {
+      field = this.expectColumnRef();
+    }
+    this.expectPunct(')');
+    let alias = field
+      ? `${fn}_${field.replace(/\./g, '_')}`
+      : fn === 'count'
+        ? 'count'
+        : fn;
+    if (this.matchKw('AS')) alias = this.expectIdent();
+    return { fn, field, alias };
   }
 
   private parseJoinAfterFrom(): import('./ast.js').JoinClause | undefined {
@@ -384,10 +449,16 @@ class Parser {
 
   private parsePredicate(): FilterCondition {
     if (this.matchPunct('(')) {
+      if (this.isLiteralStart()) {
+        const pred = this.parseConstPredicate();
+        this.expectPunct(')');
+        return pred;
+      }
       const inner = this.parseOrExpr();
       this.expectPunct(')');
       return inner;
     }
+    if (this.isLiteralStart()) return this.parseConstPredicate();
     const col = this.expectColumnRef();
     if (this.matchKw('IS')) {
       const negated = this.matchKw('NOT');
@@ -462,8 +533,35 @@ class Parser {
     return { [col]: filterOp } as FilterCondition;
   }
 
+  private isLiteralStart(): boolean {
+    const t = this.peek();
+    if (t.kind === 'number' || t.kind === 'string') return true;
+    return (
+      t.kind === 'kw' &&
+      (t.value === 'TRUE' || t.value === 'FALSE' || t.value === 'NULL')
+    );
+  }
+
+  private parseConstPredicate(): FilterCondition {
+    const left = this.parseValue();
+    const opTok = this.peek();
+    if (opTok.kind !== 'op') {
+      throw new JSONSQLiteError(
+        ErrorCode.SQL_PARSE,
+        'Expected comparison operator',
+      );
+    }
+    this.next();
+    const right = this.parseValue();
+    return { $const: evalConst(left, opTok.value, right) } as FilterCondition;
+  }
+
   private parseValue(): unknown {
     const t = this.peek();
+    if (t.kind === 'punct' && t.value === '?') {
+      this.next();
+      return { $param: this.countParams() };
+    }
     if (t.kind === 'string') {
       this.next();
       return t.value;
@@ -592,6 +690,27 @@ class Parser {
       );
     }
   }
+}
+
+function evalConst(left: unknown, op: string, right: unknown): boolean {
+  if (op === '=' || op === '==') return constEqual(left, right);
+  if (op === '!=' || op === '<>') return !constEqual(left, right);
+  const cmp = constCmp(left, right);
+  if (op === '>') return cmp > 0;
+  if (op === '>=') return cmp >= 0;
+  if (op === '<') return cmp < 0;
+  if (op === '<=') return cmp <= 0;
+  throw new JSONSQLiteError(ErrorCode.SQL_PARSE, `Unknown operator ${op}`);
+}
+
+function constEqual(a: unknown, b: unknown): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
+}
+
+function constCmp(a: unknown, b: unknown): number {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  if (typeof a === 'string' && typeof b === 'string') return a < b ? -1 : a > b ? 1 : 0;
+  return String(a).localeCompare(String(b));
 }
 
 function mapSqlType(raw: string): FieldType {

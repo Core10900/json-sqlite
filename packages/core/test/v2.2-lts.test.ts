@@ -8,6 +8,7 @@ import { helpRoot } from '../src/cli/help.js';
 import {
   DANGEROUS_CONFIG_KEYS,
   FROZEN_CONFIG_KEYS,
+  V30_CONFIG_KEYS,
   validateConfig,
   validateConfigFile,
 } from '../src/config/validate.js';
@@ -124,7 +125,7 @@ describe('v2.2.0 LTS-2', () => {
     expect(resolved.tiering).toBe(false);
 
     const example = JSON.parse(await fs.readFile(exampleFile, 'utf8')) as Record<string, unknown>;
-    const frozen = new Set<string>(FROZEN_CONFIG_KEYS);
+    const frozen = new Set<string>([...FROZEN_CONFIG_KEYS, ...V30_CONFIG_KEYS]);
     const dangerous = new Set<string>(DANGEROUS_CONFIG_KEYS);
     for (const key of Object.keys(example)) {
       expect(frozen.has(key)).toBe(true);
@@ -147,7 +148,7 @@ describe('v2.2.0 LTS-2', () => {
     expect(cliOk.code).toBe(0);
     const okBody = JSON.parse(cliOk.stdout) as { action: string; ltsLine: string };
     expect(okBody.action).toBe('config.validate');
-    if (getVersion().startsWith('2.5.')) expect(okBody.ltsLine).toBe('2.5');
+    if (getVersion().startsWith('2.5.') || getVersion().startsWith('3.')) expect(okBody.ltsLine).toBe('2.5');
     else expect(okBody.ltsLine).toBe('2.2');
 
     const badFile = path.join(await tmpDir(), 'cluster.json');
@@ -175,7 +176,7 @@ describe('v2.2.0 LTS-2', () => {
       writers: string;
     };
     expect(body.writers).toBe('single');
-    if (body.version.startsWith('2.5.')) expect(body.ltsLine).toBe('2.5');
+    if (body.version.startsWith('2.5.') || body.version.startsWith('3.')) expect(body.ltsLine).toBe('2.5');
     else expect(body.ltsLine).toBe('2.2');
     if (body.version.startsWith('2.2.')) {
       expect(body.version).toBe('2.2.0');
@@ -185,7 +186,7 @@ describe('v2.2.0 LTS-2', () => {
     const compat = await cli(['compat', '--json']);
     expect(compat.code).toBe(0);
     const compatLine = (JSON.parse(compat.stdout) as { ltsLine: string }).ltsLine;
-    if (body.version.startsWith('2.5.')) expect(compatLine).toBe('2.5');
+    if (body.version.startsWith('2.5.') || body.version.startsWith('3.')) expect(compatLine).toBe('2.5');
     else expect(compatLine).toBe('2.2');
   });
 

@@ -248,6 +248,11 @@ export interface JSONSQLiteOptions {
    * succeeds and Chinese tokenization stays unavailable.
    */
   tokenizerModule?: string;
+  /**
+   * Compile whitelist filter operators. Default false (interpret only).
+   * Opening this does not accept caller-supplied source strings.
+   */
+  compileFilters?: boolean;
 }
 
 /** Optional read scope. `txId` selects a REPEATABLE_READ snapshot. */
@@ -263,6 +268,13 @@ export interface QueryReadOptions {
    * Omit to use the column store when it is ready.
    */
   column?: boolean;
+  /**
+   * Override `queryTimeout` for this call, in milliseconds.
+   * `0` disables the limit. Omit to use the open() option.
+   */
+  timeout?: number;
+  /** Abort the scan. Cancellation throws `QUERY_CANCELLED` and does not return a partial array. */
+  signal?: AbortSignal;
 }
 
 export interface RekeyOptions {

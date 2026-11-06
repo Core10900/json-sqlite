@@ -14,16 +14,16 @@ export interface CompatibilityInfo {
   version: string;
   formatVersion: number;
   /**
-   * True on an LTS binary. 2.5.0 is LTS-3.
+   * True on an LTS binary. 3.0.0 is not LTS.
    * The recommended single-writer pin remains LTS-2 (2.2). This flag does not switch the default open mode.
    */
   lts: boolean;
   /**
-   * LTS line of this binary. `2.5` means LTS-3.
-   * It is not the package version string, and it is not the recommended pin for single-writer users.
+   * Latest LTS line known to this binary. `2.5` means LTS-3.
+   * On 3.0.0 this is not the package version. Single-writer users still pin 2.2.
    */
   ltsLine: '2.5';
-  /** Frozen CLI surface. 2.5.0 keeps the 2.4 commands, including global --writers. */
+  /** CLI surface. 3.0.0 keeps the 2.5 commands and adds query --timeout plus explain fields. */
   cliSurface: string;
   /** Default open mode. Multi-writer is opt-in and is not this field. */
   writers: 'single';
@@ -58,9 +58,9 @@ export function getCompatibilityInfo(): CompatibilityInfo {
   return {
     version: getVersion(),
     formatVersion: FORMAT_VERSION,
-    lts: true,
+    lts: false,
     ltsLine: '2.5',
-    cliSurface: '2.5.0',
+    cliSurface: '3.0.0',
     writers: 'single',
     features: [
       'encryption',
@@ -117,6 +117,12 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'deadlock-detection',
       'cli-2.4',
       'lts-3',
+      'jsonpath-filter',
+      'query-cancel',
+      'cost-index',
+      'query-profile',
+      'sql-group-agg',
+      'compile-filters',
     ],
   };
 }

@@ -1020,29 +1020,56 @@ async function cmdExplain(ctx: CliContext, rest: string[]): Promise<void> {
         projection: stmt.columns === '*' ? undefined : stmt.columns,
       };
     }
-    const advice = db.advise(query);
+    const plan = db.explain(query);
     const indexes = (await db.listIndexes()).filter(
       (i) => i.collection === query.collection,
     );
     const human = [
       `collection: ${query.collection}`,
+      `index: ${plan.usedIndex ? `${plan.usedIndex.field}(${plan.usedIndex.type})` : '(none)'}`,
+      `selectivity: ${plan.selectivity}`,
+      `indexWeight: ${plan.indexWeight}`,
+      `indexChoice: ${plan.indexChoice}`,
+      `chunked: ${plan.chunked}`,
+      `earlyStop: ${plan.earlyStop}`,
+      `projectionPushed: ${plan.projectionPushed}`,
+      `stages: ${plan.stages.join(',')}`,
       `indexes: ${indexes.map((i) => `${i.field}(${i.type})`).join(', ') || '(none)'}`,
-      ...advice.map((a) => `- [${a.type}] ${a.message}`),
+      ...plan.advice.map((a) => `- [${a.type}] ${a.message}`),
     ].join('\n');
     printData(ctx.out, human, {
       action: 'explain',
       collection: query.collection,
       query,
       indexes,
-      advice,
+      advice: plan.advice,
+      selectivity: plan.selectivity,
+      indexWeight: plan.indexWeight,
+      indexChoice: plan.indexChoice,
+      chunked: plan.chunked,
+      earlyStop: plan.earlyStop,
+      projectionPushed: plan.projectionPushed,
+      usedIndex: plan.usedIndex ?? null,
+      stages: plan.stages,
     });
   });
 }
 
 async function cmdQuery(ctx: CliContext, rest: string[]): Promise<void> {
   const jsonArg = rest.find((a) => a.trim().startsWith('{')) ?? '{}';
+  const timeoutRaw = flag(rest, '--timeout');
+  let timeout: number | undefined;
+  if (timeoutRaw !== undefined) {
+    timeout = Number(timeoutRaw);
+    if (!Number.isInteger(timeout) || timeout < 0) {
+      fail(ctx.out, '--timeout 必须是大于等于 0 的整数毫秒', 'USAGE');
+    }
+  }
   await withDb(ctx, async (db) => {
-    const rows = await db.query(JSON.parse(jsonArg));
+    const rows = await db.query(
+      JSON.parse(jsonArg),
+      timeout !== undefined ? { timeout } : undefined,
+    );
     printData(ctx.out, JSON.stringify(rows, null, 2), { action: 'query', rows });
   });
 }

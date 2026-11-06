@@ -1,8 +1,8 @@
 # JSONSQLite
 
-**当前包：2.5.0**（**LTS-3**，默认单写者） · **生产 pin：2.2.x**（`lts`） · **`latest`：2.5.0** · **多写者 pin：`lts-3`** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**当前包：3.0.0**（**非 LTS**，查询引擎补齐，默认单写者） · **生产 pin：2.2.x**（`lts` / `lts-2`） · **`latest`：3.0.0** · **多写者 pin：`lts-3` = 2.5** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
-2.5 不增加功能，只冻结 2.4 的多写者契约。默认仍是单写者。需要多写者才升级；否则留在 LTS-2。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
+3.0.0 相对 2.5 是 MINOR。不传新参数时，原来的 JSON 过滤得到原来的文档。默认仍是单写者，页格式不变。需要多写者才装 `lts-3`（2.5）；单写者生产仍 pin `lts`（2.2）。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
 
 ```bash
 npm install @webofcat/jsonsqlite@lts
@@ -81,7 +81,7 @@ jsonsqlite run "SELECT * FROM users" --path ./my-db
 | **WAL**        | 预写日志 + 启动重放，支撑崩溃恢复                           |
 | **事务**       | 单层 begin / commit / rollback（默认 READ_COMMITTED）       |
 | **聚合管道**   | match / group / sort / limit / project                      |
-| **JSONPath**   | 安全子集（如 `$.field`）                                    |
+| **JSONPath**   | 字段、比较和存在过滤（如 `$[?(@.age>18)].name`）。脚本和 `..` 抛 `JSONPATH_UNSUPPORTED` |
 | **备份**       | 全量 / 增量；可选 AES-256-GCM                               |
 | **时间旅行**   | 按时间点查询、差异对比、回滚                                |
 | **可观测**     | health、metrics、慢查询记录、QueryAdvisor                   |
@@ -430,12 +430,40 @@ const result = await db.aggregate("orders", [
 
 ### JSONPath（安全子集）
 
+3.0.0 在字段读取之外支持比较和存在判断。同一条路径复用解释树。默认解释执行，不用 `new Function`。
+
 ```ts
 const names = await db.jsonPath("users", "$.name");
-const ages = await db.jsonPath("users", "$[*].age");
+const adults = await db.jsonPath("users", "$[?(@.age>18)].name");
 ```
 
-不支持脚本表达式与 `..` 递归，以避免注入风险。
+`$.name()` 和 `$..name` 抛 `JSONPATH_UNSUPPORTED`，不会执行脚本或递归下降。
+
+查询可以在扫描中超时或取消。超时是 `QUERY_TIMEOUT`，`AbortSignal` 是 `QUERY_CANCELLED`。都不会返回半截成功结果。
+
+```ts
+await db.query({ collection: "users", filter: { age: { $gt: 18 } } }, { timeout: 30 });
+```
+
+`explain` 给出 `selectivity`、`indexWeight`、`chunked`、`earlyStop` 和五段 `stages`（`parse`、`optimize`、`indexScan`、`dataLoad`、`execute`）。没有统计时 `indexChoice` 为 `rules`，退回 2.5 的选索引规则。
+
+```bash
+jsonsqlite explain '{"collection":"users","filter":{"age":{"$gt":18}},"limit":10}' -p ./data --json
+jsonsqlite query '{"collection":"users"}' --timeout 30 -p ./data --json
+```
+
+`queryChunkSize` 默认 `0`。设为正数后按块过滤再排序分页，结果与关闭时一致。
+
+SQL 只增加单字段 `GROUP BY` 的 `COUNT` / `SUM` / `AVG` / `MIN` / `MAX`。`HAVING` 抛 `SQL_UNSUPPORTED`，消息里有 `HAVING`。
+
+```ts
+await db.run("SELECT city, SUM(amount) AS total FROM orders GROUP BY city");
+await db.run("SELECT * FROM users WHERE name = ?", ["ann"]);
+```
+
+`compileFilters` 默认 `false`。打开后也拒绝把用户字符串编译进函数体。
+
+本版没有 B+Tree、新的列存编码、复制、Redis、GraphQL、集群、完整 SQL，也不实现 `READ_UNCOMMITTED`。
 
 ---
 
@@ -811,7 +839,7 @@ pnpm --filter @jsonsqlite/bench start
 | [devDocs/releases/v2.3.0/开发计划.md](./devDocs/releases/v2.3.0/开发计划.md) | v2.3 存储与查询增强（非 LTS，已发布） |
 | [devDocs/releases/v2.4.0/开发计划.md](./devDocs/releases/v2.4.0/开发计划.md) | v2.4 多写者 opt-in（非 LTS，已发布） |
 | [devDocs/releases/v2.5.0/开发计划.md](./devDocs/releases/v2.5.0/开发计划.md) | **LTS-3** `2.5.x`（已发布） |
-| [devDocs/releases/v3.0.0/开发计划.md](./devDocs/releases/v3.0.0/开发计划.md) | v3.0 查询引擎补齐（非 LTS，规划） |
+| [devDocs/releases/v3.0.0/开发计划.md](./devDocs/releases/v3.0.0/开发计划.md) | v3.0 查询引擎补齐（非 LTS，已发布） |
 | [devDocs/releases/v3.6.0/开发计划.md](./devDocs/releases/v3.6.0/开发计划.md) | **LTS-4** `3.6.x` 设计完工冻结（规划）。3.1–3.5 见路线图 |
 | [devDocs/releases/v1.5.5/开发计划.md](./devDocs/releases/v1.5.5/开发计划.md) | v1.5.5 **CLI LTS 化**（命令扩展 / 交互与脚本契约） |
 | [devDocs/releases/v1.5.0/开发计划.md](./devDocs/releases/v1.5.0/开发计划.md) | v1.5.0 生产就绪（rekey / vacuum / 压测） |

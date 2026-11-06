@@ -45,4 +45,6 @@ export interface Index {
     maxLat: number;
     maxLon: number;
   }): string[];
+  /** Distinct keys and indexed documents. Missing stats fall back to rule choice. */
+  stats?(): { keys: number; docs: number };
 }

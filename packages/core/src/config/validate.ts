@@ -55,6 +55,9 @@ export const V23_CONFIG_KEYS = [
 /** Opt-in in 2.4. Default remains single. Omitted keys do not enable multi-writer. */
 export const V24_CONFIG_KEYS = ['writers'] as const;
 
+/** Opt-in in 3.0. Default off. Omitting it keeps interpreted filters. */
+export const V30_CONFIG_KEYS = ['compileFilters'] as const;
+
 /**
  * Design §9 / later-plan keys that must not appear in a 2.2 config.
  * They are refused by name. They are not stripped and not applied.
@@ -77,7 +80,12 @@ export const DANGEROUS_CONFIG_KEYS = [
   'wasm',
 ] as const;
 
-const frozen = new Set<string>([...FROZEN_CONFIG_KEYS, ...V23_CONFIG_KEYS, ...V24_CONFIG_KEYS]);
+const frozen = new Set<string>([
+  ...FROZEN_CONFIG_KEYS,
+  ...V23_CONFIG_KEYS,
+  ...V24_CONFIG_KEYS,
+  ...V30_CONFIG_KEYS,
+]);
 const dangerous = new Set<string>(DANGEROUS_CONFIG_KEYS);
 
 /**
@@ -108,7 +116,7 @@ export function validateConfig(input: unknown): ResolvedOptions {
     if (unknown.length > 0) {
       const names = unknown.map((k) => `"${k}"`).join(', ');
       parts.push(
-        `Unknown config key(s) ${names}: not in the 2.2 frozen set or the 2.3/2.4 opt-in set. Refused and not applied`,
+        `Unknown config key(s) ${names}: not in the 2.2 frozen set or the 2.3/2.4/3.0 opt-in set. Refused and not applied`,
       );
     }
     throw new JSONSQLiteError(ErrorCode.INVALID_CONFIG, parts.join('; '), {

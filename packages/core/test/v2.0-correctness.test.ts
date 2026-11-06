@@ -65,15 +65,20 @@ afterEach(async () => {
 
 describe('v2.0.0 compatibility', () => {
   it('FT-V20-VER-01 version is 2.x and not LTS', () => {
-    expect(getVersion().startsWith('2.')).toBe(true);
-    expect(FORMAT_VERSION).toBe(2);
     const info = getCompatibilityInfo();
-    expect(info.version.startsWith('2.')).toBe(true);
+    expect(FORMAT_VERSION).toBe(2);
     // 2.0 and 2.1 are not LTS. 2.2 is LTS-2; that line is asserted in FT-V22.
-    if (info.version.startsWith('2.0.') || info.version.startsWith('2.1.')) {
+    // 3.0 is also not LTS; the 2.x string checks apply only on the 2.x line.
+    if (getVersion().startsWith('2.')) {
+      expect(info.version.startsWith('2.')).toBe(true);
+      expect(info.cliSurface.startsWith('2.')).toBe(true);
+      if (info.version.startsWith('2.0.') || info.version.startsWith('2.1.')) {
+        expect(info.lts).toBe(false);
+      }
+    } else {
+      expect(info.version.startsWith('3.')).toBe(true);
       expect(info.lts).toBe(false);
     }
-    expect(info.cliSurface.startsWith('2.')).toBe(true);
     expect(info.writers).toBe('single');
     expect(info.features).toEqual(
       expect.arrayContaining(['single-writer', 'repeatable-read', 'paged-storage', 'backup-chain']),

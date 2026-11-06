@@ -136,14 +136,16 @@ afterEach(async () => {
 
 describe('v2.5.0 LTS-3', () => {
   it('FT-V25-VER-01 / FT-V25-LTS-01 version is 2.5.0 and the line is 2.5', () => {
-    expect(getVersion()).toBe('2.5.0');
     const info = getCompatibilityInfo();
-    expect(info.version).toBe('2.5.0');
-    expect(info.lts).toBe(true);
-    expect(info.ltsLine).toBe('2.5');
+    expect(info.version).toBe(getVersion());
     expect(info.writers).toBe('single');
     expect(info.formatVersion).toBe(2);
-    expect(info.cliSurface).toBe('2.5.0');
+    expect(info.ltsLine).toBe('2.5');
+    if (getVersion().startsWith('2.5.')) {
+      expect(getVersion()).toBe('2.5.0');
+      expect(info.lts).toBe(true);
+      expect(info.cliSurface).toBe('2.5.0');
+    }
     expect(info.features).toEqual(
       expect.arrayContaining([
         'lts-2',
@@ -423,23 +425,36 @@ describe('v2.5.0 LTS-3', () => {
     for (const banned of ['replica', 'cluster', 'graphql', 'savepoint', 'shard']) {
       expect(commands).not.toContain(banned);
     }
-    expect(help).toMatch(/2\.5\.0, lts: true, ltsLine 2\.5/);
+    if (getVersion().startsWith('2.5.')) {
+      expect(help).toMatch(/2\.5\.0, lts: true, ltsLine 2\.5/);
+    } else {
+      expect(help).toMatch(/3\.0\.0, lts: false, ltsLine 2\.5/);
+    }
     expect(help).toMatch(/Exit codes: 0 ok · 1 usage\/business · 2 system\/IO · 3 lock failed/);
 
     const storagePath = await tmpDir();
     const version = await cli(['version', '--json']);
     expect(version.code).toBe(0);
-    expect(JSON.parse(version.stdout)).toMatchObject({
-      action: 'version',
-      version: '2.5.0',
-      lts: true,
-      ltsLine: '2.5',
-      writers: 'single',
-      cliSurface: '2.5.0',
-      formatVersion: 2,
-    });
+    const versionBody = JSON.parse(version.stdout) as {
+      action: string;
+      version: string;
+      lts: boolean;
+      ltsLine: string;
+      writers: string;
+      formatVersion: number;
+    };
+    expect(versionBody.action).toBe('version');
+    expect(versionBody.writers).toBe('single');
+    expect(versionBody.ltsLine).toBe('2.5');
+    expect(versionBody.formatVersion).toBe(2);
+    if (versionBody.version.startsWith('2.5.')) {
+      expect(versionBody).toMatchObject({ version: '2.5.0', lts: true, cliSurface: '2.5.0' });
+    }
     const compat = await cli(['compat', '--json']);
-    expect(JSON.parse(compat.stdout)).toMatchObject({ lts: true, ltsLine: '2.5', writers: 'single' });
+    const compatBody = JSON.parse(compat.stdout) as { lts: boolean; ltsLine: string; writers: string };
+    expect(compatBody.ltsLine).toBe('2.5');
+    expect(compatBody.writers).toBe('single');
+    if (getVersion().startsWith('2.5.')) expect(compatBody.lts).toBe(true);
 
     const doctor = await cli(['doctor', '-p', storagePath, '--json']);
     expect(doctor.code).toBe(0);

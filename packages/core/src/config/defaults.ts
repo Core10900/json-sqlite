@@ -90,6 +90,11 @@ const optionsSchema = z.object({
    * multi is opt-in same-machine writers. Not an LTS contract until 2.5.
    */
   writers: z.enum(['single', 'multi']).default('single'),
+  /**
+   * Compile whitelist filter operators with `new Function`. Default off.
+   * User strings are never interpolated into the function body.
+   */
+  compileFilters: z.boolean().default(false),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;

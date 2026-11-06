@@ -20,15 +20,26 @@ export interface JoinClause {
   onRight: string;
 }
 
+export type SqlAggFn = 'count' | 'sum' | 'avg' | 'min' | 'max';
+
+export interface SqlAggregate {
+  fn: SqlAggFn;
+  /** Omitted for COUNT(*). */
+  field?: string;
+  alias: string;
+}
+
 export interface SelectStmt {
   kind: 'select';
   table: string;
   alias?: string;
   join?: JoinClause;
   columns: '*' | string[];
-  /** When set, SELECT COUNT(*) shortcut (no JOIN). */
+  /** When set, SELECT COUNT(*) shortcut (no JOIN, no GROUP BY). */
   aggregate?: 'count';
-  /** Single-column GROUP BY (v1.8, COUNT(*) only, no JOIN). */
+  /** Aggregates in the select list. Single-field GROUP BY may use any of them. */
+  aggregates?: SqlAggregate[];
+  /** Single-column GROUP BY. Multiple columns are rejected. */
   groupBy?: string;
   filter?: FilterCondition;
   orderBy?: OrderBySpec;

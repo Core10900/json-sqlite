@@ -11,7 +11,7 @@ import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import { ResultCache } from '../cache/ResultCache.js';
 import { IndexManager } from '../index/IndexManager.js';
 import type { IndexType } from '../index/types.js';
-import { planAndExecute, planIndexIds } from '../query/Planner.js';
+import { chooseIndex, FULL_SCAN_WEIGHT, planIndexIds } from '../query/Planner.js';
 import {
   executeAggregate,
   type AggregateStage,
@@ -38,7 +38,11 @@ import {
   getPath,
   matchFilter,
   normalizeOrderBy,
+  projectionIsPushed,
 } from '../query/JsonQuery.js';
+import { checkpoint, createExecContext } from '../query/checkpoint.js';
+import { compileWhitelistFilter } from '../query/compile.js';
+import { bindStatement, foldQuery, foldStatement } from '../query/optimize.js';
 import { TransactionManager } from '../transaction/TransactionManager.js';
 import {
   BackupManager,
@@ -129,6 +133,14 @@ export class JSONSQLite extends EventEmitter {
     chunked: false,
     chunks: 0,
     columnFiles: 0,
+  };
+  private profileInfo: QueryProfile = {
+    parseMs: 0,
+    optimizeMs: 0,
+    indexScanMs: 0,
+    dataLoadMs: 0,
+    executeMs: 0,
+    memoryDelta: 0,
   };
   private tokenizerState: {
     available: boolean;
@@ -730,17 +742,20 @@ export class JSONSQLite extends EventEmitter {
    * Execute a SQL subset statement.
    * Compiles to JsonQuery / CRUD / DDL — see docs for supported syntax.
    */
-  async run(sql: string): Promise<SqlResult> {
+  async run(sql: string, params?: readonly unknown[]): Promise<SqlResult> {
     this.assertReady();
-    const stmt = parseSql(sql);
+    const stmt = foldStatement(bindStatement(parseSql(sql), params ?? []));
     return this.executeSql(stmt);
   }
 
   private async executeSql(stmt: SqlStatement): Promise<SqlResult> {
     switch (stmt.kind) {
       case 'select': {
-        if (stmt.groupBy) {
-          return this.executeGroupByCount(stmt);
+        if (
+          stmt.groupBy ||
+          (stmt.aggregates && stmt.aggregates.length > 0 && stmt.aggregate !== 'count')
+        ) {
+          return this.executeGroupBy(stmt);
         }
         if (stmt.aggregate === 'count') {
           if (stmt.join) {
@@ -1100,130 +1115,190 @@ export class JSONSQLite extends EventEmitter {
 
   async query(query: JsonQuery, opts?: QueryReadOptions): Promise<Document[]> {
     this.assertReady();
+    const mem0 = process.memoryUsage().heapUsed;
     const start = Date.now();
     await this.plugins?.invokeQuery(query.collection);
-    if (opts?.txId !== undefined && this.tx!.isSnapshot(opts.txId)) {
-      const snapDocs = this.tx!.snapshotDocs(opts.txId, query.collection);
-      const planned = planAndExecute(snapDocs, query, [], () => []);
-      this.planInfo = {
-        source: 'document',
-        chunked: false,
-        chunks: 1,
-        columnFiles: 0,
+
+    const parseStart = performance.now();
+    const normalized = foldQuery(query);
+    const parseMs = performance.now() - parseStart;
+    const timeoutMs = opts?.timeout ?? this.options.queryTimeout;
+    const predicate =
+      this.options.compileFilters &&
+      normalized.filter &&
+      Object.keys(normalized.filter).length > 0
+        ? (compileWhitelistFilter(normalized.filter) ?? undefined)
+        : undefined;
+    const ctx = createExecContext({
+      signal: opts?.signal,
+      timeoutMs,
+      predicate,
+    });
+
+    const remember = (
+      docs: Document[],
+      info: QueryPlanInfo,
+      stages: { optimizeMs: number; indexScanMs: number; dataLoadMs: number; executeMs: number },
+    ): Document[] => {
+      checkpoint(ctx);
+      this.profileInfo = {
+        parseMs,
+        optimizeMs: stages.optimizeMs,
+        indexScanMs: stages.indexScanMs,
+        dataLoadMs: stages.dataLoadMs,
+        executeMs: stages.executeMs,
+        memoryDelta: process.memoryUsage().heapUsed - mem0,
       };
-      return planned.docs;
+      this.planInfo = {
+        ...info,
+        selectivity: info.selectivity,
+        indexWeight: info.indexWeight,
+        indexChoice: info.indexChoice,
+        earlyStop: ctx.earlyStop,
+        projectionPushed: ctx.projectionPushed || projectionIsPushed(normalized),
+        scanned: ctx.scanned,
+      };
+      return docs;
+    };
+
+    if (opts?.txId !== undefined && this.tx!.isSnapshot(opts.txId)) {
+      const snapDocs = this.tx!.snapshotDocs(opts.txId, normalized.collection);
+      const execStart = performance.now();
+      const docs = executeJsonQuery(snapDocs, normalized, ctx);
+      return remember(
+        docs,
+        { source: 'document', chunked: false, chunks: 1, columnFiles: 0 },
+        { optimizeMs: 0, indexScanMs: 0, dataLoadMs: 0, executeMs: performance.now() - execStart },
+      );
     }
+
     const chunkKey = opts?.chunkSize ?? this.options.queryChunkSize;
-    const cacheKey = `${query.collection}::${JSON.stringify(query)}::chunk${chunkKey}::col${opts?.column === false ? 0 : 1}`;
+    const cacheKey = `${normalized.collection}::${JSON.stringify(normalized)}::chunk${chunkKey}::col${opts?.column === false ? 0 : 1}`;
     const cached = this.cache!.get(cacheKey);
     if (cached) {
-      this.planInfo = {
-        source: 'cache',
-        chunked: false,
-        chunks: 1,
-        columnFiles: 0,
-        usedIndex: 'cache',
-      };
+      const docs = remember(
+        cached.map((d) => ({ ...d })),
+        { source: 'cache', chunked: false, chunks: 1, columnFiles: 0, usedIndex: 'cache' },
+        { optimizeMs: 0, indexScanMs: 0, dataLoadMs: 0, executeMs: 0 },
+      );
       this.monitor.recordQuery({
         ts: Date.now(),
-        collection: query.collection,
+        collection: normalized.collection,
         durationMs: Date.now() - start,
-        resultCount: cached.length,
+        resultCount: docs.length,
         usedIndex: 'cache',
       });
-      return cached.map((d) => ({ ...d }));
+      return docs;
     }
     if (this.l2) {
       const l2hit = this.l2.get(cacheKey);
       if (l2hit) {
         this.cache!.set(cacheKey, l2hit);
-        this.planInfo = {
-          source: 'l2',
-          chunked: false,
-          chunks: 1,
-          columnFiles: 0,
-          usedIndex: 'l2',
-        };
+        const docs = remember(
+          l2hit.map((d) => ({ ...d })),
+          { source: 'l2', chunked: false, chunks: 1, columnFiles: 0, usedIndex: 'l2' },
+          { optimizeMs: 0, indexScanMs: 0, dataLoadMs: 0, executeMs: 0 },
+        );
         this.monitor.recordQuery({
           ts: Date.now(),
-          collection: query.collection,
+          collection: normalized.collection,
           durationMs: Date.now() - start,
-          resultCount: l2hit.length,
+          resultCount: docs.length,
           usedIndex: 'l2',
         });
-        return l2hit.map((d) => ({ ...d }));
+        return docs;
       }
     }
 
-    await this.store!.ensureLoaded(query.collection);
-    const indexes = this.indexes!.findForCollection(query.collection);
-    const indexed = planIndexIds(query, indexes);
+    await this.store!.ensureLoaded(normalized.collection);
+    const indexes = this.indexes!.findForCollection(normalized.collection);
+    const optStart = performance.now();
+    chooseIndex(normalized.filter, indexes);
+    const optimizeMs = performance.now() - optStart;
+    const indexStart = performance.now();
+    const indexed = planIndexIds(normalized, indexes);
+    const indexScanMs = performance.now() - indexStart;
+
     let plannedDocs: Document[];
-    let usedIndex: { type: string; field: string } | undefined;
+    let usedIndex = indexed?.usedIndex;
     let chunked = false;
     let chunks = 1;
     let columnFiles = 0;
+    let dataLoadMs = 0;
+    let executeMs = 0;
+    const selectivity = indexed?.selectivity ?? 1;
+    const indexWeight = indexed?.indexWeight ?? FULL_SCAN_WEIGHT;
+    const indexChoice = indexed?.indexChoice ?? 'rules';
+
     const columnar =
-      indexed || opts?.column === false ? null : await this.tryColumnQuery(query);
+      indexed || opts?.column === false ? null : await this.tryColumnQuery(normalized);
     if (columnar) {
       plannedDocs = columnar;
       columnFiles = this.columns?.lastFileReads ?? 0;
     } else if (indexed) {
+      const loadStart = performance.now();
       const resolved: Document[] = [];
       for (const id of indexed.ids) {
-        const doc = await this.store!.getById(query.collection, id);
+        checkpoint(ctx);
+        const doc = await this.store!.getById(normalized.collection, id);
         if (doc) resolved.push({ ...doc });
       }
-      plannedDocs = executeJsonQuery(resolved, {
-        filter: query.filter,
-        projection: query.projection,
-        orderBy: query.orderBy,
-        limit: query.limit,
-        offset: query.offset,
-      });
-      usedIndex = indexed.usedIndex;
+      dataLoadMs = performance.now() - loadStart;
+      const execStart = performance.now();
+      plannedDocs = executeJsonQuery(resolved, normalized, ctx);
+      executeMs = performance.now() - execStart;
     } else {
-      const all = await this.store!.readAll(query.collection);
+      const loadStart = performance.now();
+      const all = await this.store!.readAll(normalized.collection);
+      dataLoadMs = performance.now() - loadStart;
       const chunkSize = opts?.chunkSize ?? this.options.queryChunkSize;
+      const execStart = performance.now();
       if (chunkSize > 0) {
-        const executed = executeChunked(all, query, chunkSize);
+        const executed = executeChunked(all, normalized, chunkSize, ctx);
         plannedDocs = executed.docs;
         chunked = executed.chunked;
         chunks = executed.chunks;
       } else {
-        const planned = planAndExecute(all, query, [], () => []);
-        plannedDocs = planned.docs;
+        plannedDocs = executeJsonQuery(all, normalized, ctx);
       }
+      executeMs = performance.now() - execStart;
     }
 
-    this.noteSerializableDocs(query.collection, plannedDocs);
-    this.planInfo = {
-      source: columnar ? 'column' : 'document',
-      chunked,
-      chunks,
-      columnFiles,
-      usedIndex: usedIndex ? `${usedIndex.type}:${usedIndex.field}` : undefined,
-    };
-    this.cache!.set(cacheKey, plannedDocs);
-    this.l2?.set(cacheKey, plannedDocs);
+    checkpoint(ctx);
+    this.noteSerializableDocs(normalized.collection, plannedDocs);
+    const docs = remember(
+      plannedDocs,
+      {
+        source: columnar ? 'column' : 'document',
+        chunked,
+        chunks,
+        columnFiles,
+        usedIndex: usedIndex ? `${usedIndex.type}:${usedIndex.field}` : undefined,
+        selectivity,
+        indexWeight,
+        indexChoice,
+      },
+      { optimizeMs, indexScanMs, dataLoadMs, executeMs },
+    );
+    this.cache!.set(cacheKey, docs);
+    this.l2?.set(cacheKey, docs);
     if (this.options.tiering) {
-      for (const doc of plannedDocs) {
-        this.store!.noteAccess(query.collection, doc._id);
+      for (const doc of docs) {
+        this.store!.noteAccess(normalized.collection, doc._id);
       }
     }
     const durationMs = Date.now() - start;
-    this.checkQueryTimeout(durationMs);
     this.monitor.recordQuery({
       ts: Date.now(),
-      collection: query.collection,
+      collection: normalized.collection,
       durationMs,
-      resultCount: plannedDocs.length,
+      resultCount: docs.length,
       usedIndex: usedIndex ? `${usedIndex.type}:${usedIndex.field}` : undefined,
     });
     if (this.autoTune?.enabled && durationMs > this.monitor.slowQueryThreshold) {
-      void this.autoTune.tick(query).catch(() => undefined);
+      void this.autoTune.tick(normalized).catch(() => undefined);
     }
-    return plannedDocs;
+    return docs;
   }
 
   /** Export all documents in a collection (plain array). */
@@ -1780,7 +1855,54 @@ export class JSONSQLite extends EventEmitter {
 
   advise(query: JsonQuery) {
     this.assertReady();
-    return adviseQuery(query, this.indexes!.list());
+    const normalized = foldQuery(query);
+    const indexes = this.indexes!.findForCollection(normalized.collection);
+    const choice = chooseIndex(normalized.filter, indexes);
+    return adviseQuery(normalized, this.indexes!.list(), undefined, {
+      selectivity: choice?.selectivity ?? 1,
+      indexWeight: choice?.indexWeight ?? FULL_SCAN_WEIGHT,
+    });
+  }
+
+  /**
+   * Plan only. Does not scan documents.
+   * `earlyStop` is the strategy (limit and no sort), not a measured stop.
+   */
+  explain(query: JsonQuery): QueryExplain {
+    this.assertReady();
+    const normalized = foldQuery(query);
+    const indexes = this.indexes!.findForCollection(normalized.collection);
+    const choice = chooseIndex(normalized.filter, indexes);
+    const selectivity = choice?.selectivity ?? 1;
+    const indexWeight = choice?.indexWeight ?? FULL_SCAN_WEIGHT;
+    const advice = adviseQuery(normalized, this.indexes!.list(), undefined, {
+      selectivity,
+      indexWeight,
+    });
+    return {
+      collection: normalized.collection,
+      usedIndex: choice
+        ? {
+            collection: choice.index.meta.collection,
+            field: choice.index.meta.field,
+            type: choice.index.meta.type,
+          }
+        : undefined,
+      selectivity,
+      indexWeight,
+      indexChoice: choice?.indexChoice ?? 'rules',
+      chunked: this.options.queryChunkSize > 0,
+      earlyStop: normalized.limit !== undefined && !normalized.orderBy,
+      projectionPushed: projectionIsPushed(normalized),
+      stages: ['parse', 'optimize', 'indexScan', 'dataLoad', 'execute'],
+      advice,
+    };
+  }
+
+  /** Timings from the last `query`. Fields stay present even when a stage was 0ms. */
+  lastProfile(): QueryProfile {
+    this.assertReady();
+    return { ...this.profileInfo };
   }
 
   profileQuery(usedIndex?: string, planMs = 0, executeMs = 0) {
@@ -2056,16 +2178,6 @@ export class JSONSQLite extends EventEmitter {
     return () => this.off('dataChanged', handler);
   }
 
-  private checkQueryTimeout(durationMs: number): void {
-    const limit = this.options.queryTimeout;
-    if (limit > 0 && durationMs > limit) {
-      throw new JSONSQLiteError(
-        ErrorCode.QUERY_TIMEOUT,
-        `Query exceeded queryTimeout ${limit}ms (took ${durationMs}ms)`,
-      );
-    }
-  }
-
   /** Resume incomplete DDL after crash (files vs catalog). */
   private async recoverDdlJournal(): Promise<void> {
     const entry = await this.ddlJournal!.read();
@@ -2119,17 +2231,18 @@ export class JSONSQLite extends EventEmitter {
     }
   }
 
-  private async executeGroupByCount(stmt: SelectStmt): Promise<SqlResult> {
+  private async executeGroupBy(stmt: SelectStmt): Promise<SqlResult> {
     if (stmt.join) {
       throw new JSONSQLiteError(
         ErrorCode.SQL_UNSUPPORTED,
         '[SQL_UNSUPPORTED] GROUP BY does not support JOIN',
       );
     }
-    if (stmt.aggregate !== 'count' || !stmt.groupBy) {
+    const aggregates = stmt.aggregates ?? [];
+    if (aggregates.length === 0) {
       throw new JSONSQLiteError(
         ErrorCode.SQL_UNSUPPORTED,
-        '[SQL_UNSUPPORTED] GROUP BY requires COUNT(*) in this version',
+        '[SQL_UNSUPPORTED] GROUP BY requires an aggregate function (COUNT, SUM, AVG, MIN, or MAX)',
       );
     }
     await this.store!.ensureLoaded(stmt.table);
@@ -2138,22 +2251,27 @@ export class JSONSQLite extends EventEmitter {
       docs = docs.filter((d) => matchFilter(d, stmt.filter!));
     }
     const field = stmt.groupBy;
-    const groups = new Map<string, { key: unknown; count: number }>();
+    const groups = new Map<string, { key: unknown; items: Document[] }>();
     for (const doc of docs) {
-      const key = getPath(doc, field);
+      const key = field ? getPath(doc, field) : null;
       const sk = JSON.stringify(key ?? null);
       const existing = groups.get(sk);
-      if (existing) existing.count += 1;
-      else groups.set(sk, { key, count: 1 });
+      if (existing) existing.items.push(doc);
+      else groups.set(sk, { key, items: [doc] });
     }
-    let rows: Document[] = [...groups.values()].map((g, i) => ({
-      _id: `g:${i}`,
-      _version: 0,
-      _createdAt: 0,
-      _updatedAt: 0,
-      [field]: g.key,
-      count: g.count,
-    }));
+    let rows: Document[] = [...groups.values()].map((group, i) => {
+      const row: Document = {
+        _id: `g:${i}`,
+        _version: 0,
+        _createdAt: 0,
+        _updatedAt: 0,
+      };
+      if (field) row[field] = group.key;
+      for (const agg of aggregates) {
+        row[agg.alias] = aggregateValue(group.items, agg.fn, agg.field);
+      }
+      return row;
+    });
     if (stmt.orderBy) {
       const specs = normalizeOrderBy(stmt.orderBy);
       rows = [...rows].sort((a, b) => compareByOrder(a, b, specs));
@@ -2166,7 +2284,10 @@ export class JSONSQLite extends EventEmitter {
         stmt.limit === undefined ? undefined : offset + stmt.limit,
       );
     }
-    const columns = stmt.columns === '*' ? [field, 'count'] : stmt.columns;
+    const columns =
+      stmt.columns === '*'
+        ? [...(field ? [field] : []), ...aggregates.map((agg) => agg.alias)]
+        : stmt.columns;
     return {
       type: 'rows',
       rows,
@@ -2391,12 +2512,65 @@ export class JSONSQLite extends EventEmitter {
   }
 }
 
+function aggregateValue(
+  items: Document[],
+  fn: 'count' | 'sum' | 'avg' | 'min' | 'max',
+  field?: string,
+): number {
+  if (fn === 'count') {
+    if (!field) return items.length;
+    return items.filter((doc) => {
+      const value = getPath(doc, field);
+      return value !== undefined && value !== null;
+    }).length;
+  }
+  const values = items.map((doc) => (field ? getPath(doc, field) : undefined));
+  if (fn === 'sum') {
+    return values.reduce<number>((sum, value) => sum + (typeof value === 'number' ? value : 0), 0);
+  }
+  const nums = values.filter((value): value is number => typeof value === 'number');
+  if (fn === 'avg') {
+    return nums.length ? nums.reduce((sum, value) => sum + value, 0) / nums.length : 0;
+  }
+  if (nums.length === 0) return fn === 'min' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+  return fn === 'min' ? Math.min(...nums) : Math.max(...nums);
+}
+
+export interface QueryProfile {
+  parseMs: number;
+  optimizeMs: number;
+  indexScanMs: number;
+  dataLoadMs: number;
+  executeMs: number;
+  memoryDelta: number;
+}
+
+export interface QueryExplain {
+  collection: string;
+  usedIndex?: { collection: string; field: string; type: string };
+  selectivity: number;
+  indexWeight: number;
+  indexChoice: 'cost' | 'rules';
+  chunked: boolean;
+  /** True when the plan can stop at offset + limit (no sort, no full aggregate). */
+  earlyStop: boolean;
+  projectionPushed: boolean;
+  stages: Array<'parse' | 'optimize' | 'indexScan' | 'dataLoad' | 'execute'>;
+  advice: ReturnType<typeof adviseQuery>;
+}
+
 export interface QueryPlanInfo {
   source: 'cache' | 'l2' | 'column' | 'document';
   chunked: boolean;
   chunks: number;
   columnFiles: number;
   usedIndex?: string;
+  selectivity?: number;
+  indexWeight?: number;
+  indexChoice?: 'cost' | 'rules';
+  earlyStop?: boolean;
+  projectionPushed?: boolean;
+  scanned?: number;
 }
 
 const COLUMN_SYSTEM = new Set(['_id', '_version', '_createdAt', '_updatedAt']);

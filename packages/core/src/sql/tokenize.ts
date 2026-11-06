@@ -60,7 +60,12 @@ const KEYWORDS = new Set([
   'OUTER',
   'ON',
   'COUNT',
+  'SUM',
+  'AVG',
+  'MIN',
+  'MAX',
   'GROUP',
+  'HAVING',
 ]);
 
 export function tokenize(sql: string): Token[] {
@@ -131,7 +136,7 @@ export function tokenize(sql: string): Token[] {
       i += 1;
       continue;
     }
-    if ('(),.*;'.includes(ch)) {
+    if ('(),.*?;'.includes(ch)) {
       tokens.push({ kind: 'punct', value: ch, raw: ch });
       i += 1;
       continue;

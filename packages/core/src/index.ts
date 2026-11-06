@@ -92,7 +92,7 @@ export { compressSmart, decompressSmart, selectAlgorithm } from './storage/smart
 export type { SmartAlgorithm } from './storage/smartCompress.js';
 export { createBigramTokenizer, bigramTokenize } from './tokenize/chinese.js';
 export type { ChineseTokenizer } from './tokenize/chinese.js';
-export type { QueryPlanInfo } from './engine/JSONSQLite.js';
+export type { QueryExplain, QueryPlanInfo, QueryProfile } from './engine/JSONSQLite.js';
 export type { ColumnStoreStatus } from './storage/columnStore.js';
 export type { TierSummary } from './storage/tiers.js';
 
