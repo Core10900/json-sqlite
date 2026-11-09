@@ -1,8 +1,8 @@
 # JSONSQLite
 
-**当前包：3.0.0**（**非 LTS**，查询引擎补齐，默认单写者） · **生产 pin：2.2.x**（`lts` / `lts-2`） · **`latest`：3.0.0** · **多写者 pin：`lts-3` = 2.5** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**当前包：3.1.0**（**非 LTS**，索引与存储算法，新存储默认关闭） · **生产 pin：2.2.x**（`lts` / `lts-2`） · **`latest`：3.1.0** · **多写者 pin：`lts-3` = 2.5** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
-3.0.0 相对 2.5 是 MINOR。不传新参数时，原来的 JSON 过滤得到原来的文档。默认仍是单写者，页格式不变。需要多写者才装 `lts-3`（2.5）；单写者生产仍 pin `lts`（2.2）。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
+3.1.0 相对 3.0 是 MINOR。不写新配置时，打开 2.5 / 3.0 库的结果与 3.0 一致。默认仍是单写者，页格式不变。B+Tree、列编码、hybrid、front-coding 和外部冷目录都要显式打开。需要多写者才装 `lts-3`（2.5）；单写者生产仍 pin `lts`（2.2）。`lts` / `lts-2` 是 2.2，`lts-3` 是 2.5，不带 tag 的安装得到 `latest`（3.1.0）。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
 
 ```bash
 npm install @webofcat/jsonsqlite@lts

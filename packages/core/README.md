@@ -1,13 +1,13 @@
 # @webofcat/jsonsqlite
 
-**版本：3.0.0** · **非 LTS** · 默认单写者 · Node.js ≥ 20 · 作者：hanlin
+**版本：3.1.0** · **非 LTS** · 默认单写者 · Node.js ≥ 20 · 作者：hanlin
 
-这一版补齐查询引擎。相对 2.5 是 **MINOR**：文档页格式不变（`formatVersion` 仍是 2），默认仍是单写者。不传新参数时，2.5 的过滤、排序和点查得到原来的文档。
+这一版补索引和存储算法。相对 3.0 是 **MINOR**。不写新配置时，打开 2.5 / 3.0 库的读写结果与 3.0 一致。文档页格式不变（`formatVersion` 仍是 2）。B+Tree、列存、hybrid、智能压缩、分层和外部冷目录都默认关闭。
 
-生产 pin 仍是 **LTS-2（2.2）**。需要同一台机器多写者时用 **LTS-3（2.5，`lts-3`）**。本包不是长期支持线。
+生产 pin 仍是 **LTS-2（2.2）**。需要同一台机器多写者时用 **LTS-3（2.5，`lts-3`）**。本包不是长期支持线。不带 tag 的安装得到 `latest`，这一版是 3.1.0。
 
 ```bash
-# 不带 tag：latest，这一版是 3.0.0。默认仍是单写者
+# 不带 tag：latest，这一版是 3.1.0。新存储默认关闭
 npm install @webofcat/jsonsqlite
 
 # 单写者生产
@@ -18,17 +18,133 @@ npm install @webofcat/jsonsqlite@lts-2
 npm install @webofcat/jsonsqlite@lts-3
 ```
 
-`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.0.0。
+`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.1.0。
 
 ```ts
 import { getCompatibilityInfo, open } from '@webofcat/jsonsqlite';
 
 const info = getCompatibilityInfo();
-// version: '3.0.0'
+// version: '3.1.0'
 // lts: false
 // ltsLine: '2.5'   // 最新的 LTS 线（LTS-3），不是本包版本
 // writers: 'single'
 ```
+
+## 3.1 索引与存储
+
+下面的开关不写进配置时，行为与 3.0 相同。2.5 库可以直接打开。索引分段如果和当前进程不兼容，会在 `open` 时重建索引，文档页不迁移。
+
+### B+Tree
+
+有序索引的内存结构是 B+Tree。配置键 `bTreeOrder` 是一个节点最多放多少个键，默认 **128**。它不会自己建索引。建树用：
+
+```bash
+jsonsqlite index create nums n --type tree -p ./data
+jsonsqlite index compact nums -p ./data
+```
+
+范围查询走树时，`explain` 的 `access` 是 `index`，`structure` 是 `btree`。`index compact` 合并分段之后，范围里的 `_id` 不变；关掉再打开，范围结果仍相同。节点访问次数在 `db.indexAccess(collection, field).nodeVisits`，点查随键数量按树高增长，不是把每个键扫一遍。
+
+```ts
+await db.createIndex('nums', 'n', 'tree');
+db.explain({ collection: 'nums', filter: { n: { $gte: 1, $lte: 10 } } });
+// access: 'index'，structure: 'btree'
+```
+
+### Geo
+
+```bash
+jsonsqlite index create places loc --type geo -p ./data
+```
+
+网格只检查和包围盒相交的格子。有索引时不会先读出全部点再过滤，查询也只按命中的 `_id` 取文档。
+
+```ts
+const box = { minLat: 30, minLon: 120, maxLat: 32, maxLon: 122 };
+await db.query({ collection: 'places', filter: { loc: { $geoWithin: box } } });
+```
+
+没建索引时结果仍然正确，`explain` 的 `access` 是 `scan`。
+
+### 分词
+
+不传 `tokenizerModule` 时，`open` 不会 `import` 外部包。`tokenizerStatus().reason` 是 `not-configured`。
+
+模块在加载或切词时抛错，`open` 仍然成功。之后带 `$contains` 的分词查询抛 `TOKENIZER_FAILED`。同一库上的 `findById` 仍然成功。缺包时 `reason` 是 `module-not-found`，等值查询可用，这和 2.3 一样。
+
+### 列存与 hybrid
+
+按表打开。`columnCollections` 把表收成列文件。`hybridCollections` 加上 `hybridFields`（写成 `表.字段`）时，列出的热字段进列文件，其余字段留在文档页。
+
+写入仍先落 WAL，列文件是事后重建的投影。`projection: ['name']` 读取行键文件和 `name` 这一列，文件数是投影字段数加行键。数值列是差分加变长整数（文件头 `JSQC2|num`），字符串列是字典（`JSQC2|dict`）。
+
+列文件校验和不符，或还没就绪时，查询退回文档页。退回不是错误，`lastPlan().source` 是 `document`。
+
+```ts
+const db = await open({
+  storagePath: './data',
+  hybridCollections: ['docs'],
+  hybridFields: ['docs.name'],
+});
+await db.flushColumnStore('docs');
+await db.query({ collection: 'docs', projection: ['name', 'meta'] });
+// meta 不在列里，从文档页补上。结果与纯文档模式的同一投影一致
+```
+
+### storage advise
+
+`storageAdvise` 默认 **false**。打开之后 `db.storageAdvise(table)` 或下面的命令只打印建议，`applied` 恒为 `false`，表的存储模式不变。本版没有「会自动切换」的命令。
+
+```bash
+jsonsqlite storage advise docs -p ./data --json
+```
+
+输入是字段基数、嵌套深度，以及 Monitor 记下的过滤字段直方图（字段名和次数，不记文档内容）。输出是 `document`、`columnar`、`hybrid`、`compressed` 之一。`compressed` 表示超过 `compressionThreshold` 的大文档适合走压缩块，读出来仍和 document 模式一致。调用方要自己执行 `enableColumnStore` 或 `enableHybrid` 才会换存储。
+
+### 压缩
+
+在 2.3 的 `delta`、`dict`、`rle`、`gzip` 上增加 `front`。front-coding 用于有共享前缀的字符串数组：记下和上一串相同的前缀长度，再写下后缀。
+
+`compressionSampleWindow` 默认 64。采样时，如果类型启发式已经选出 `delta` / `dict` / `rle`，就沿用它。启发式落到 `gzip` 的字符串数组，才用这个窗口比较 front-coding 和 gzip 的体积，较小的那个写入块头。
+
+块头是 `JSQB1|<algorithm>|<payload>`。算法名字段叫 `algorithm`，可以用 `readSmartHeader` 读出来。再次打开时按块头里的 `algorithm` 解压，不会重新采样。
+
+和加密叠在一起时，顺序是先压缩、再 `encryptLine`。解压是先解密、再按块头解压。块对不上时错误码是 `DATA_CORRUPT`，这种块不会被当成已提交的数据留下。
+
+### 分层
+
+`storageTiers` 仍默认关闭。打开后，温层用 deflate（块头 `JSQL1|deflate`），冷层用 gzip；当前运行时如果有 zstd，冷层用 zstd。块头是 `JSQC1|gzip` 或 `JSQC1|zstd`。迁移在后台或 `migrateTiersOnce()` 里做，不在写入调用里完成。
+
+`coldExternalDir` 把冷副本写到数据库目录外面。这个目录不可写时，`tierSummary().externalFailures` 增加，热文档按 `_id` 仍可读：
+
+```ts
+const db = await open({
+  storagePath: './data',
+  storageTiers: true,
+  coldExternalDir: './cold-copy',
+  coldAfter: 0,
+  warmAfter: 0,
+});
+await db.insert('docs', { _id: 'hot', name: 'H' });
+await db.findById('docs', 'hot');
+await db.migrateTiersOnce();
+await db.findById('docs', 'hot');
+// name 仍是 'H'
+```
+
+### 热 key 与预取
+
+热 key 在 L1 里被提升到 LRU 的热端。次数在 `db.getMetrics().l1.promotions`。预取计数在 `db.prefetchStats()`，字段是 `hits` 和 `fallbacks`。预取下一页失败时退回按需读当前页，退回不是错误，原来的点查仍然成功。本版没有 L3 Redis。
+
+### 停用词
+
+配置键是 `stopWords`。不写这个键时，倒排索引用现有的中英停用词：`的`、`了`、`是`、`在`、`和`、`有`、`the`、`a`、`an`、`and`、`or`、`to`。
+
+空数组 `[]` 表示不丢弃任何词。改表用 `db.setStopWords(words)`，它会重建倒排索引，之后的查询用新表。
+
+### 这一版明确不做
+
+Redis、复制、S3 实际上传、可用的向量检索、GraphQL、集群。`vector` 仍是 stub，`availableIn` 是 `3.3`。`s3` 仍是 stub，`availableIn` 是 `3.4`，`putCold` 只计数，不上传对象。
 
 下面用同一批文档说明旧过滤没有改结果：
 
@@ -642,7 +758,7 @@ jsonsqlite plugin info vector --json
 jsonsqlite plugin info s3 --json
 ```
 
-`plugin info vector` 的 `stub` 为 true，`availableIn` 为 `"3.3"`。`s3` 的 `availableIn` 为 `"3.1"`。
+`plugin info vector` 的 `stub` 为 true，`availableIn` 为 `"3.3"`。`s3` 的 `availableIn` 为 `"3.4"`。3.1 不会实际上传对象。
 
 ---
 
@@ -755,17 +871,17 @@ jsonsqlite index compact places -p ./data --json
 
 这些命令在非 TTY 下不提问。`plugin list` / `plugin info` 不打开数据库，也不安装远程插件。
 
-`config validate --file` 接受 `config.example.json` 里的 2.2 字段，也接受已经落地的可选字段：`writers`（`single` 或 `multi`，默认 `single`），以及 2.3 的 `columnStore`、`columnCollections`、`storageTiers`、`coldAfter`、`warmAfter`、`smartCompression`、`indexDeltaSegments`、`cacheCompression`、`cacheCompressionThreshold`、`prefetchPages`、`queryChunkSize`、`chineseTokenizer`、`tokenizerModule`。不写这些键就不会打开对应能力。`cluster`、`replica`、`raft`、`l3`、`redis`、`cache`（嵌套对象；冻结字段是 `cacheSize`）、`savepoint`（这是库 API，不是配置键）、`graphql`、`wasm` 会拒绝且不生效，退出码 1，`INVALID_CONFIG`。
+`config validate --file` 接受 `config.example.json` 里的 2.2 字段，也接受已经落地的可选字段：`writers`（`single` 或 `multi`，默认 `single`），2.3 的 `columnStore`、`columnCollections`、`storageTiers`、`coldAfter`、`warmAfter`、`smartCompression`、`indexDeltaSegments`、`cacheCompression`、`cacheCompressionThreshold`、`prefetchPages`、`queryChunkSize`、`chineseTokenizer`、`tokenizerModule`，以及 3.1 的 `bTreeOrder`（默认 128）、`storageAdvise`（默认 false）、`hybridCollections`、`hybridFields`、`coldExternalDir`、`compressionSampleWindow`（默认 64）、`stopWords`。不写这些键就不会打开对应能力，存储格式保持 3.0。`cluster`、`replica`、`raft`、`l3`、`redis`、`cache`（嵌套对象；冻结字段是 `cacheSize`）、`savepoint`（这是库 API，不是配置键）、`graphql`、`wasm` 会拒绝且不生效，退出码 1，`INVALID_CONFIG`。
 
 ---
 
 ## 这一版没有的东西
 
-- 新存储格式。`formatVersion` 仍是 2。
-- 复制、集群、自动选主。
+- 文档页格式升级。`formatVersion` 仍是 2。新存储不写配置时不会打开。
+- 复制、集群、自动选主、Redis。
 - GraphQL、Raft、WASM。
 - 可用的向量检索。`vectorSearch` 和 `createVectorStub()` 只证明钩子能被调用，命中列表为空。可用实现在 3.3。
-- 可用的 S3 上传。`createS3Stub()` 只计数，不传对象。可用实现在 3.1。
+- 可用的 S3 上传。`createS3Stub()` 只计数，不传对象。可用实现在 3.4。
 
 需要多写者才升级；否则留在 LTS-2。
 

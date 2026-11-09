@@ -265,6 +265,7 @@ unsubscribe();
 | `SQL_UNSUPPORTED` | SQL 能力外 |
 | `SCHEMA_VIOLATION` | `schemaMode: strict` 校验失败 |
 | `QUERY_TIMEOUT` | 查询超时 |
+| `TOKENIZER_FAILED` | 配置的分词模块失败。点查和其他非分词查询仍可用（3.1） |
 | `ENCRYPTION` | 加密/密钥错误 |
 | `INTERNAL` | 内部错误 |
 

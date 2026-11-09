@@ -9,6 +9,7 @@ import {
   DANGEROUS_CONFIG_KEYS,
   FROZEN_CONFIG_KEYS,
   V30_CONFIG_KEYS,
+  V31_CONFIG_KEYS,
   validateConfig,
   validateConfigFile,
 } from '../src/config/validate.js';
@@ -125,7 +126,11 @@ describe('v2.2.0 LTS-2', () => {
     expect(resolved.tiering).toBe(false);
 
     const example = JSON.parse(await fs.readFile(exampleFile, 'utf8')) as Record<string, unknown>;
-    const frozen = new Set<string>([...FROZEN_CONFIG_KEYS, ...V30_CONFIG_KEYS]);
+    const frozen = new Set<string>([
+      ...FROZEN_CONFIG_KEYS,
+      ...V30_CONFIG_KEYS,
+      ...V31_CONFIG_KEYS,
+    ]);
     const dangerous = new Set<string>(DANGEROUS_CONFIG_KEYS);
     for (const key of Object.keys(example)) {
       expect(frozen.has(key)).toBe(true);

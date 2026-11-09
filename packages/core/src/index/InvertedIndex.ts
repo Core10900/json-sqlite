@@ -1,7 +1,25 @@
 import type { Document } from '../types/index.js';
 import type { Index, IndexMeta, IndexSnapshot } from './types.js';
 
-const STOP = new Set(['的', '了', '是', '在', '和', '有', 'the', 'a', 'an', 'and', 'or', 'to']);
+import { ErrorCode, JSONSQLiteError } from '../errors.js';
+
+/** Default inverted-index stop words. An empty configured list drops nothing. */
+export const DEFAULT_STOP_WORDS = [
+  '的',
+  '了',
+  '是',
+  '在',
+  '和',
+  '有',
+  'the',
+  'a',
+  'an',
+  'and',
+  'or',
+  'to',
+];
+
+const DEFAULT_STOP = new Set(DEFAULT_STOP_WORDS);
 
 function fieldValue(doc: Document, field: string): unknown {
   if (!field.includes('.')) return doc[field];
@@ -11,29 +29,44 @@ function fieldValue(doc: Document, field: string): unknown {
   }, doc);
 }
 
-export function tokenize(text: string): string[] {
+export function tokenize(text: string, stop: ReadonlySet<string> = DEFAULT_STOP): string[] {
   return text
     .toLowerCase()
     .split(/[\s,，。.!！?？;；、：:]+/)
     .map((t) => t.trim())
-    .filter((t) => t.length > 0 && !STOP.has(t));
+    .filter((t) => t.length > 0 && !stop.has(t));
 }
 
 export class InvertedIndex implements Index {
   private map = new Map<string, Set<string>>();
   private docFreq = new Map<string, number>();
   private totalDocs = 0;
+  private stop: Set<string>;
 
   constructor(
     readonly meta: IndexMeta,
     private readonly tokenizeFn: (text: string) => string[] = tokenize,
-  ) {}
+    stop?: Set<string>,
+  ) {
+    this.stop = stop ?? new Set(DEFAULT_STOP_WORDS);
+  }
+
+  /** Replace the stop list. The caller rebuilds postings afterwards. */
+  setStopWords(stop: Set<string>): void {
+    this.stop = stop;
+  }
 
   private tokens(text: string): string[] {
     try {
-      return this.tokenizeFn(text);
-    } catch {
-      return tokenize(text);
+      if (this.tokenizeFn === tokenize) return tokenize(text, this.stop);
+      return this.tokenizeFn(text).filter((token) => !this.stop.has(token));
+    } catch (err) {
+      if (err instanceof JSONSQLiteError) throw err;
+      throw new JSONSQLiteError(
+        ErrorCode.TOKENIZER_FAILED,
+        'Tokenizer failed',
+        { cause: err instanceof Error ? err.message : String(err) },
+      );
     }
   }
 

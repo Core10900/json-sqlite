@@ -4,7 +4,7 @@ import { ErrorCode, JSONSQLiteError } from '../errors.js';
 /** Block header magic. The algorithm name follows, then the payload. */
 export const SMART_MAGIC = 'JSQB1';
 
-export type SmartAlgorithm = 'delta' | 'dict' | 'rle' | 'gzip';
+export type SmartAlgorithm = 'delta' | 'dict' | 'rle' | 'gzip' | 'front';
 
 export function isSmartBlock(text: string): boolean {
   return text.startsWith(`${SMART_MAGIC}|`);
@@ -47,10 +47,52 @@ export function selectAlgorithm(value: unknown): SmartAlgorithm {
   return 'gzip';
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+/** Front-coding for a string array: shared prefix length plus the new suffix. */
+function encodeFront(values: string[]): string {
+  if (values.some((item) => item.includes('\n'))) {
+    throw new Error('front-coding does not accept newlines');
+  }
+  let prev = '';
+  const lines: string[] = [];
+  for (const cur of values) {
+    let prefix = 0;
+    const max = Math.min(prev.length, cur.length);
+    while (prefix < max && prev[prefix] === cur[prefix]) prefix += 1;
+    lines.push(`${prefix}:${cur.slice(prefix)}`);
+    prev = cur;
+  }
+  return lines.join('\n');
+}
+
+function decodeFront(payload: string): string[] {
+  if (payload === '') return [];
+  const out: string[] = [];
+  let prev = '';
+  for (const line of payload.split('\n')) {
+    const sep = line.indexOf(':');
+    if (sep < 0) throw new Error('front-coding line is missing a prefix length');
+    const prefix = Number(line.slice(0, sep));
+    if (!Number.isInteger(prefix) || prefix < 0 || prefix > prev.length) {
+      throw new Error('front-coding prefix length is out of range');
+    }
+    const cur = prev.slice(0, prefix) + line.slice(sep + 1);
+    out.push(cur);
+    prev = cur;
+  }
+  return out;
+}
+
 function encodeBlock(algorithm: SmartAlgorithm, value: unknown, original: string): string {
   let payload: string;
   if (algorithm === 'gzip') {
     payload = gzipSync(Buffer.from(original, 'utf8')).toString('base64');
+  } else if (algorithm === 'front') {
+    if (!isStringArray(value)) throw new Error('front-coding requires a string array');
+    payload = encodeFront(value);
   } else if (algorithm === 'delta') {
     const nums = value as number[];
     const diffs: number[] = [];
@@ -154,6 +196,8 @@ export function decompressSmart(text: string): string {
         return JSON.stringify(decodeRle(payload));
       case 'gzip':
         return gunzipSync(Buffer.from(payload, 'base64')).toString('utf8');
+      case 'front':
+        return JSON.stringify(decodeFront(payload));
       default:
         throw new JSONSQLiteError(
           ErrorCode.DATA_CORRUPT,
@@ -174,12 +218,46 @@ export function decompressSmart(text: string): string {
   }
 }
 
+/** Header fields: magic `JSQB1`, then `algorithm`, then the payload. */
+export function readSmartHeader(text: string): { magic: string; algorithm: string } {
+  if (!isSmartBlock(text)) {
+    throw new JSONSQLiteError(ErrorCode.DATA_CORRUPT, 'Not a smart compression block');
+  }
+  const rest = text.slice(SMART_MAGIC.length + 1);
+  const sep = rest.indexOf('|');
+  if (sep < 0) {
+    throw new JSONSQLiteError(
+      ErrorCode.DATA_CORRUPT,
+      'Smart compression block header is truncated',
+    );
+  }
+  return { magic: SMART_MAGIC, algorithm: rest.slice(0, sep) };
+}
+
+function encodedSize(
+  algorithm: SmartAlgorithm,
+  value: unknown,
+  json: string,
+): number | null {
+  try {
+    const text = encodeBlock(algorithm, value, json);
+    if (decompressSmart(text) !== json) return null;
+    return Buffer.byteLength(text);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Compress a JSON string. The block header records the algorithm.
- * If the preferred algorithm does not round-trip, gzip is tried next.
+ * Compress a JSON string. A sample window compares candidate sizes, including
+ * front-coding for string arrays, and the winning name is written to the
+ * `algorithm` header field. Reopen reads that field and does not re-sample.
  * If nothing round-trips, throws DATA_CORRUPT and the caller must not persist the block.
  */
-export function compressSmart(json: string): { text: string; algorithm: SmartAlgorithm } {
+export function compressSmart(
+  json: string,
+  sampleWindow = 64,
+): { text: string; algorithm: SmartAlgorithm } {
   let value: unknown;
   try {
     value = JSON.parse(json);
@@ -187,8 +265,22 @@ export function compressSmart(json: string): { text: string; algorithm: SmartAlg
     value = json;
   }
   const preferred = selectAlgorithm(value);
-  const order: SmartAlgorithm[] =
-    preferred === 'gzip' ? ['gzip'] : [preferred, 'gzip'];
+  const window = Math.max(1, sampleWindow);
+  const sample = Array.isArray(value) ? value.slice(0, window) : value;
+  const sampleJson = JSON.stringify(sample);
+  // Delta, dict, and RLE stay when selectAlgorithm already picked them.
+  // The sample window compares front-coding with gzip for the remaining strings.
+  let best: SmartAlgorithm = preferred;
+  if (preferred === 'gzip' && isStringArray(value)) {
+    const gzipSize = encodedSize('gzip', sample, sampleJson) ?? Number.POSITIVE_INFINITY;
+    const frontSize = encodedSize('front', sample, sampleJson);
+    if (frontSize !== null && frontSize < gzipSize) best = 'front';
+  }
+
+  const order: SmartAlgorithm[] = [];
+  for (const algorithm of [best, preferred, 'gzip' as const]) {
+    if (!order.includes(algorithm)) order.push(algorithm);
+  }
   let lastCause = 'mismatch';
   for (const algorithm of order) {
     try {

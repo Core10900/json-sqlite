@@ -68,6 +68,7 @@ export class DocumentStore {
   private readonly prefetched = new Set<string>();
   private compression = false;
   private compressionThreshold = 1024;
+  private compressionSampleWindow = 64;
   private tiering = false;
   private tierColdAfter = 0;
   private pageSize = 32;
@@ -112,9 +113,11 @@ export class DocumentStore {
     maxResidentDocs: number;
     smartCompression?: boolean;
     prefetchPages?: boolean;
+    compressionSampleWindow?: number;
   }): void {
     this.compression = opts.compression;
     this.compressionThreshold = opts.compressionThreshold;
+    this.compressionSampleWindow = opts.compressionSampleWindow ?? this.compressionSampleWindow;
     this.tiering = opts.tiering;
     this.tierColdAfter = opts.tierColdAfter;
     this.pageSize = opts.pageSize;
@@ -976,7 +979,7 @@ export class DocumentStore {
   private encodeStored(json: string): string {
     let payload = json;
     if (this.smartCompression) {
-      const smart = compressSmart(json);
+      const smart = compressSmart(json, this.compressionSampleWindow);
       payload = smart.text.length < json.length ? smart.text : json;
     } else if (this.compression) {
       payload = compressLine(payload, this.compressionThreshold);

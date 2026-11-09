@@ -26,6 +26,7 @@ export class Monitor {
   writesTotal = 0;
   errorsTotal = 0;
   slowQueryThreshold = 100;
+  private readonly filterCounts = new Map<string, Map<string, number>>();
   collectionsLoaded = 0;
   loadMs = 0;
   openLoadMs = 0;
@@ -34,6 +35,26 @@ export class Monitor {
     this.queriesTotal += 1;
     this.queries.push(metric);
     if (this.queries.length > this.max) this.queries.shift();
+  }
+
+  /**
+   * Count filter field names for storage advice. The values are hit counts.
+   * Document contents are not stored.
+   */
+  recordFilterFields(collection: string, fields: string[]): void {
+    let counts = this.filterCounts.get(collection);
+    if (!counts) {
+      counts = new Map();
+      this.filterCounts.set(collection, counts);
+    }
+    for (const field of fields) {
+      if (!field || field.startsWith('$')) continue;
+      counts.set(field, (counts.get(field) ?? 0) + 1);
+    }
+  }
+
+  filterHistogram(collection: string): Record<string, number> {
+    return Object.fromEntries(this.filterCounts.get(collection) ?? []);
   }
 
   recordWrite(): void {

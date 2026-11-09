@@ -10,6 +10,8 @@ import {
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import { ResultCache } from '../cache/ResultCache.js';
 import { IndexManager } from '../index/IndexManager.js';
+import { GeoIndex } from '../index/GeoIndex.js';
+import { TreeIndex } from '../index/TreeIndex.js';
 import type { IndexType } from '../index/types.js';
 import { chooseIndex, FULL_SCAN_WEIGHT, planIndexIds } from '../query/Planner.js';
 import {
@@ -76,6 +78,7 @@ import { repairDatabase, type RepairOptions, type RepairResult } from '../ops/re
 import { generateId } from '../utils/id.js';
 import { collectionDir, walFile } from '../utils/path.js';
 import { ColumnStore, type ColumnStoreStatus } from '../storage/columnStore.js';
+import { adviseStorage, type StorageAdvice, type StorageMode } from '../storage/advise.js';
 import { TierService, type TierSummary } from '../storage/tiers.js';
 import {
   assertPluginManifest,
@@ -97,6 +100,7 @@ import type {
   Document,
   DoctorReport,
   FieldDef,
+  FilterCondition,
   ImportCollectionOptions,
   IsolationLevel,
   JsonQuery,
@@ -255,7 +259,11 @@ export class JSONSQLite extends EventEmitter {
         sync,
         this.options.persistIndexes,
         this.options.indexDeltaSegments,
+        this.options.bTreeOrder,
       );
+      if (this.options.stopWords !== undefined) {
+        this.indexes.setStopWords(this.options.stopWords);
+      }
       this.store = new DocumentStore(
         root,
         this.catalog,
@@ -284,6 +292,7 @@ export class JSONSQLite extends EventEmitter {
         maxResidentDocs: this.options.maxResidentDocs,
         smartCompression: this.options.smartCompression,
         prefetchPages: this.options.prefetchPages,
+        compressionSampleWindow: this.options.compressionSampleWindow,
       });
       this.columns = new ColumnStore(root, sync);
       this.plugins = new PluginRegistry(root, sync);
@@ -293,6 +302,7 @@ export class JSONSQLite extends EventEmitter {
         this.encKey,
         this.options.coldAfter,
         this.options.warmAfter,
+        this.options.coldExternalDir ?? null,
       );
       this.tiers.setHookSource(() =>
         this.plugins!.storageHooks().map((plugin) => ({
@@ -334,6 +344,18 @@ export class JSONSQLite extends EventEmitter {
         if (loaded.tokenize) {
           this.indexes.setTokenizer(loaded.tokenize);
           this.tokenizerState = { available: true, name: loaded.name, reason: null };
+        } else if (loaded.failed) {
+          this.indexes.setTokenizer(() => {
+            throw new JSONSQLiteError(
+              ErrorCode.TOKENIZER_FAILED,
+              'Tokenizer module failed',
+            );
+          });
+          this.tokenizerState = {
+            available: false,
+            name: null,
+            reason: loaded.reason,
+          };
         } else if (this.options.chineseTokenizer !== 'bigram') {
           this.tokenizerState = {
             available: false,
@@ -393,6 +415,13 @@ export class JSONSQLite extends EventEmitter {
       await this.columns.loadEnabled();
       if (this.options.columnCollections.length > 0) {
         for (const name of this.options.columnCollections) this.columns.enable(name);
+      }
+      for (const name of this.options.hybridCollections) {
+        const prefix = `${name}.`;
+        const fields = this.options.hybridFields
+          .filter((field) => field.startsWith(prefix))
+          .map((field) => field.slice(prefix.length));
+        this.columns.enableHybrid(name, fields);
       }
       for (const name of this.columns.enabledNames()) {
         if (!this.catalog.has(name)) continue;
@@ -1121,6 +1150,11 @@ export class JSONSQLite extends EventEmitter {
 
     const parseStart = performance.now();
     const normalized = foldQuery(query);
+    this.monitor.recordFilterFields(
+      normalized.collection,
+      filterFieldNames(normalized.filter),
+    );
+    this.assertTokenizerForFilter(normalized.filter);
     const parseMs = performance.now() - parseStart;
     const timeoutMs = opts?.timeout ?? this.options.queryTimeout;
     const predicate =
@@ -1894,6 +1928,8 @@ export class JSONSQLite extends EventEmitter {
       chunked: this.options.queryChunkSize > 0,
       earlyStop: normalized.limit !== undefined && !normalized.orderBy,
       projectionPushed: projectionIsPushed(normalized),
+      access: choice ? 'index' : 'scan',
+      structure: explainStructure(choice?.index.meta.type),
       stages: ['parse', 'optimize', 'indexScan', 'dataLoad', 'execute'],
       advice,
     };
@@ -1975,6 +2011,7 @@ export class JSONSQLite extends EventEmitter {
       },
       indexes: this.indexes!.diagnostics(),
       cacheCompression: this.cache!.compressionStats(),
+      l1: this.cache!.stats,
       prefetch: this.store!.prefetchSnapshot(),
       storageTiers: this.options.storageTiers
         ? this.tiers!.summary()
@@ -1986,6 +2023,8 @@ export class JSONSQLite extends EventEmitter {
             coldReads: 0,
             warmReads: 0,
             migrating: false,
+            externalFailures: 0,
+            coldAlgorithm: 'gzip',
           },
     };
   }
@@ -2302,6 +2341,128 @@ export class JSONSQLite extends EventEmitter {
     this.l2?.invalidateCollection(collection);
   }
 
+  /**
+   * Suggest a storage mode. Requires `storageAdvise: true`.
+   * The table's mode is not written.
+   */
+  async storageAdvise(collection: string): Promise<StorageAdvice> {
+    this.assertReady();
+    if (!this.options.storageAdvise) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        'storageAdvise is off. The command only prints a suggestion when storageAdvise is true, and it does not change the table.',
+      );
+    }
+    await this.store!.ensureLoaded(collection);
+    const before = this.columns!.mode(collection);
+    const advice = adviseStorage({
+      collection,
+      docs: await this.store!.readAll(collection),
+      currentMode: before,
+      filterHistogram: this.monitor.filterHistogram(collection),
+      compressionThreshold: this.options.compressionThreshold,
+    });
+    if (this.columns!.mode(collection) !== before) {
+      throw new JSONSQLiteError(
+        ErrorCode.INTERNAL,
+        'storageAdvise changed the storage mode',
+      );
+    }
+    return advice;
+  }
+
+  storageMode(collection: string): StorageMode {
+    this.assertReady();
+    return this.columns!.mode(collection);
+  }
+
+  /**
+   * Store `fields` in column files and leave every other field on the
+   * document pages. Writes still commit through the WAL first.
+   */
+  async enableHybrid(collection: string, fields: string[]): Promise<void> {
+    this.assertReady();
+    if (fields.length === 0) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        'enableHybrid requires at least one hot field',
+      );
+    }
+    await this.store!.ensureLoaded(collection);
+    this.columns!.enableHybrid(collection, fields);
+    await this.columns!.persistEnabled();
+    this.scheduleColumnRebuild(collection);
+  }
+
+  /**
+   * Replace inverted-index stop words and rebuild those indexes.
+   * An empty list keeps every token.
+   */
+  async setStopWords(words: string[]): Promise<void> {
+    this.assertReady();
+    this.indexes!.setStopWords(words);
+    const collections = new Set(
+      this.indexes!
+        .list()
+        .filter((meta) => meta.type === 'inverted')
+        .map((meta) => meta.collection),
+    );
+    for (const name of collections) {
+      await this.store!.ensureLoaded(name);
+      this.indexes!.rebuildCollection(name, await this.store!.readAll(name));
+      await this.persistIndexState(name);
+      this.touchCaches(name);
+    }
+  }
+
+  /**
+   * Node visits for a B+Tree, or points examined by a geo grid.
+   * `nodeVisits` is the last tree lookup. `examined` is the last geo lookup.
+   */
+  indexAccess(
+    collection: string,
+    field: string,
+  ): {
+    structure: 'btree' | 'grid' | 'other';
+    order?: number;
+    nodeVisits: number;
+    examined: number;
+    cellVisits: number;
+  } | null {
+    this.assertReady();
+    const idx = this.indexes!.get(collection, field);
+    if (!idx) return null;
+    if (idx instanceof TreeIndex) {
+      return {
+        structure: 'btree',
+        order: idx.order,
+        nodeVisits: idx.nodeVisits,
+        examined: 0,
+        cellVisits: 0,
+      };
+    }
+    if (idx instanceof GeoIndex) {
+      return {
+        structure: 'grid',
+        nodeVisits: 0,
+        examined: idx.examined,
+        cellVisits: idx.cellVisits,
+      };
+    }
+    return {
+      structure: 'other',
+      nodeVisits: 0,
+      examined: 0,
+      cellVisits: 0,
+    };
+  }
+
+  resetIndexAccess(collection: string, field: string): void {
+    this.assertReady();
+    const idx = this.indexes!.get(collection, field);
+    if (idx instanceof TreeIndex || idx instanceof GeoIndex) idx.resetAccess();
+  }
+
   /** Last query's read path. Column and chunk flags stay false when those features are off. */
   lastPlan(): QueryPlanInfo {
     this.assertReady();
@@ -2448,6 +2609,8 @@ export class JSONSQLite extends EventEmitter {
         coldReads: 0,
         warmReads: 0,
         migrating: false,
+        externalFailures: 0,
+        coldAlgorithm: 'gzip',
       };
     }
     return this.tiers.summary();
@@ -2500,6 +2663,21 @@ export class JSONSQLite extends EventEmitter {
       collection,
       this.store!.indexStats(collection),
     );
+  }
+
+  private assertTokenizerForFilter(filter: FilterCondition | undefined): void {
+    if (!this.options.tokenizerModule || !filterHasContains(filter)) return;
+    if (
+      this.tokenizerState.reason === 'module-threw' ||
+      this.tokenizerState.reason === 'no-tokenize-export'
+    ) {
+      throw new JSONSQLiteError(
+        ErrorCode.TOKENIZER_FAILED,
+        'Tokenizer module failed; tokenized queries are unavailable',
+      );
+    }
+    if (this.tokenizerState.reason === 'module-not-found') return;
+    this.indexes!.probeTokenizer(' ');
   }
 
   private assertReady(): void {
@@ -2555,6 +2733,10 @@ export interface QueryExplain {
   /** True when the plan can stop at offset + limit (no sort, no full aggregate). */
   earlyStop: boolean;
   projectionPushed: boolean;
+  /** `scan` when no index is chosen, including `$geoWithin` without a geo index. */
+  access: 'scan' | 'index';
+  /** `btree` or `grid` when that structure answers the plan. */
+  structure?: 'btree' | 'grid';
   stages: Array<'parse' | 'optimize' | 'indexScan' | 'dataLoad' | 'execute'>;
   advice: ReturnType<typeof adviseQuery>;
 }
@@ -2574,6 +2756,39 @@ export interface QueryPlanInfo {
 }
 
 const COLUMN_SYSTEM = new Set(['_id', '_version', '_createdAt', '_updatedAt']);
+
+function explainStructure(type: string | undefined): 'btree' | 'grid' | undefined {
+  if (type === 'tree') return 'btree';
+  if (type === 'geo') return 'grid';
+  return undefined;
+}
+
+function filterHasContains(filter: FilterCondition | undefined): boolean {
+  if (!filter) return false;
+  for (const [key, value] of Object.entries(filter)) {
+    if ((key === '$and' || key === '$or') && Array.isArray(value)) {
+      if (value.some((item) => filterHasContains(item as FilterCondition))) return true;
+      continue;
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value) && '$contains' in value) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function filterFieldNames(filter: FilterCondition | undefined): string[] {
+  if (!filter) return [];
+  const names: string[] = [];
+  for (const [key, value] of Object.entries(filter)) {
+    if ((key === '$and' || key === '$or') && Array.isArray(value)) {
+      for (const item of value) names.push(...filterFieldNames(item as FilterCondition));
+      continue;
+    }
+    if (!key.startsWith('$')) names.push(key);
+  }
+  return names;
+}
 
 function neededColumnFields(query: JsonQuery): string[] | null {
   const fields = new Set<string>();

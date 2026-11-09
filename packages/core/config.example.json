@@ -23,5 +23,10 @@
   "alerts": {
     "rules": []
   },
-  "compileFilters": false
+  "compileFilters": false,
+  "bTreeOrder": 128,
+  "storageAdvise": false,
+  "hybridCollections": [],
+  "hybridFields": [],
+  "compressionSampleWindow": 64
 }

@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.1.0 — 2026-11-09 · 非 LTS
+
+**非 LTS。** 相对 3.0 为 MINOR。不写新配置时，打开 2.5 / 3.0 库的读写结果与 3.0 一致。文档页不迁移。新存储默认关闭。
+
+`latest` 指向 3.1.0。`lts` / `lts-2` 仍是 2.2。`lts-3` 仍是 2.5。生产 pin 仍是 `lts`（2.2）。
+
+### Added
+- 有序索引用 B+Tree。`bTreeOrder` 默认 128。`explain` 的 `structure` 为 `btree`。`index compact` 之后范围结果不变，重新打开仍可用
+- Geo 索引改为网格。有索引时不先读出包围盒外的文档。无索引时 `explain` 的 `access` 为 `scan`
+- 分词模块抛错时 `open` 仍成功。分词查询返回 `TOKENIZER_FAILED`，点查可用。不传模块时 `open` 不加载外部包
+- 列编码：数值差分加变长整数，字符串字典。投影只读请求的列。校验不符时退回文档页，退回不是查询错误
+- hybrid：`hybridCollections` 与 `hybridFields` 把热字段放进列文件，其余字段留在文档页。结果与文档模式一致
+- `storage advise` 只给出 `document` / `columnar` / `hybrid` / `compressed` 建议，不改表。输入是基数、嵌套深度和过滤字段直方图
+- 压缩增加 front-coding。采样窗口在 gzip 与 front-coding 之间选较小者，算法名写在块头字段 `algorithm`。先压缩再加密，失败为 `DATA_CORRUPT`
+- 温层 deflate，冷层 gzip 或 zstd。`coldExternalDir` 不可用时热文档仍可按 `_id` 读取
+- L1 热 key 提升计数 `getMetrics().l1.promotions`。预取失败退回按需读页
+- 倒排停用词 `stopWords` 可配置。不配置时保持原中英词表。空数组保留全部词。修改后重建倒排索引
+
+### Not in this release
+Redis、复制、S3 实际上传、可用向量检索、GraphQL、集群。S3 stub 的 `availableIn` 改为 3.4。
+
 ## 3.0.0 — 2026-11-06 · 非 LTS
 
 **非 LTS。** 相对 2.5 为 MINOR。默认仍是单写者，文档页格式不变。不传新参数时，已有 JSON 过滤和 SQL 子集的结果保持不变。

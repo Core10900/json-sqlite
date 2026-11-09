@@ -1,8 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { deflateSync, gzipSync, gunzipSync, inflateSync } from 'node:zlib';
+import zlib from 'node:zlib';
 import type { Document, SyncMode } from '../types/index.js';
 import { writeFileAtomic } from '../utils/fsDurable.js';
 import { decryptLine, encryptLine } from '../crypto/aes.js';
+
+const WARM_PREFIX = 'JSQL1|deflate|';
+const COLD_GZIP = 'JSQC1|gzip|';
+const COLD_ZSTD = 'JSQC1|zstd|';
 
 export interface TierSummary {
   enabled: boolean;
@@ -12,6 +18,9 @@ export interface TierSummary {
   coldReads: number;
   warmReads: number;
   migrating: boolean;
+  /** Cold copies that could not be written to `coldExternalDir`. */
+  externalFailures: number;
+  coldAlgorithm: 'gzip' | 'zstd';
 }
 
 export interface TierColdHook {
@@ -36,6 +45,7 @@ export class TierService {
   private totalDocs = 0;
   coldReads = 0;
   warmReads = 0;
+  externalFailures = 0;
   private hookSource: () => TierColdHook[] = () => [];
 
   constructor(
@@ -44,6 +54,7 @@ export class TierService {
     private readonly encKey: Buffer | null,
     private readonly coldAfter: number,
     private readonly warmAfter: number,
+    private readonly coldExternalDir: string | null = null,
   ) {}
 
   setHookSource(source: () => TierColdHook[]): void {
@@ -63,6 +74,8 @@ export class TierService {
       coldReads: this.coldReads,
       warmReads: this.warmReads,
       migrating: this.migrating,
+      externalFailures: this.externalFailures,
+      coldAlgorithm: coldAlgorithmName(),
     };
   }
 
@@ -172,6 +185,13 @@ export class TierService {
         }
         await this.writeTierFile(name, 'warm', warm);
         await this.writeTierFile(name, 'cold', cold);
+        if (this.coldExternalDir) {
+          try {
+            await this.writeExternalCold(name, cold);
+          } catch {
+            this.externalFailures += 1;
+          }
+        }
         this.warm.set(name, warm);
         this.cold.set(name, cold);
       }
@@ -185,15 +205,35 @@ export class TierService {
     return path.join(this.root, 'collections', name, 'tiers', `${tier}.jsonl`);
   }
 
-  private encode(doc: Document): string {
+  private encode(doc: Document, tier: 'warm' | 'cold'): string {
     const json = JSON.stringify(doc);
-    if (!this.encKey) return json;
-    return encryptLine(json, this.encKey);
+    const buf = Buffer.from(json, 'utf8');
+    let payload: string;
+    if (tier === 'warm') {
+      payload = WARM_PREFIX + deflateSync(buf, { level: 1 }).toString('base64');
+    } else {
+      const cold = compressCold(buf);
+      const prefix = cold.algorithm === 'zstd' ? COLD_ZSTD : COLD_GZIP;
+      payload = prefix + cold.payload;
+    }
+    if (!this.encKey) return payload;
+    return encryptLine(payload, this.encKey);
   }
 
   private decode(line: string): Document {
-    const json = this.encKey ? decryptLine(line, this.encKey) : line;
+    const text = this.encKey ? decryptLine(line, this.encKey) : line;
+    const json = decodeTierPayload(text);
     return JSON.parse(json) as Document;
+  }
+
+  private async writeExternalCold(
+    name: string,
+    docs: Map<string, Document>,
+  ): Promise<void> {
+    if (!this.coldExternalDir) return;
+    const file = path.join(this.coldExternalDir, name, 'cold.jsonl');
+    const body = [...docs.values()].map((doc) => this.encode(doc, 'cold')).join('\n');
+    await writeFileAtomic(file, body ? `${body}\n` : '', this.syncMode);
   }
 
   private async writeTierFile(
@@ -203,7 +243,7 @@ export class TierService {
   ): Promise<void> {
     const file = this.tierFile(name, tier);
     await fs.mkdir(path.dirname(file), { recursive: true });
-    const body = [...docs.values()].map((doc) => this.encode(doc)).join('\n');
+    const body = [...docs.values()].map((doc) => this.encode(doc, tier)).join('\n');
     await writeFileAtomic(file, body ? `${body}\n` : '', this.syncMode);
   }
 
@@ -224,4 +264,34 @@ export class TierService {
     }
     return map;
   }
+}
+
+function coldAlgorithmName(): 'gzip' | 'zstd' {
+  const zstd = (zlib as { zstdCompressSync?: (buf: Buffer) => Buffer }).zstdCompressSync;
+  return typeof zstd === 'function' ? 'zstd' : 'gzip';
+}
+
+function compressCold(buf: Buffer): { algorithm: 'gzip' | 'zstd'; payload: string } {
+  const zstd = (zlib as { zstdCompressSync?: (b: Buffer) => Buffer }).zstdCompressSync;
+  if (typeof zstd === 'function') {
+    return { algorithm: 'zstd', payload: zstd(buf).toString('base64') };
+  }
+  return { algorithm: 'gzip', payload: gzipSync(buf).toString('base64') };
+}
+
+function decodeTierPayload(text: string): string {
+  if (text.startsWith(WARM_PREFIX)) {
+    return inflateSync(Buffer.from(text.slice(WARM_PREFIX.length), 'base64')).toString('utf8');
+  }
+  if (text.startsWith(COLD_GZIP)) {
+    return gunzipSync(Buffer.from(text.slice(COLD_GZIP.length), 'base64')).toString('utf8');
+  }
+  if (text.startsWith(COLD_ZSTD)) {
+    const zstd = (zlib as { zstdDecompressSync?: (buf: Buffer) => Buffer }).zstdDecompressSync;
+    if (typeof zstd !== 'function') {
+      throw new Error('cold block uses zstd but this runtime cannot decompress it');
+    }
+    return zstd(Buffer.from(text.slice(COLD_ZSTD.length), 'base64')).toString('utf8');
+  }
+  return text;
 }

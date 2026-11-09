@@ -26,6 +26,7 @@ Commands:
   run / sql                  SQL execute / interactive REPL
   query [--timeout ms]       JSON query. --timeout overrides queryTimeout (exit 1 on QUERY_TIMEOUT)
   index list|create|drop|rebuild|compact   index management
+  storage advise <table>     print a storage suggestion; does not change the table
   plugin list|info           built-in plugin catalog (no remote install)
   stats                      database / table statistics
   explain                    index, selectivity, chunked, earlyStop, profile stages
@@ -33,7 +34,7 @@ Commands:
   aggregate                  aggregation pipeline (unwind/lookup)
   admin serve                start Admin HTTP + SSE
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version (3.0.0, lts: false, ltsLine 2.5)
+  compat / version [--json]  compatibility / version (3.1.0, lts: false, ltsLine 2.5)
   config validate --file <f> check a file against the frozen 2.2 config keys
   backup / vacuum [--compress] / rekey    ops
   backup --type full|incremental|differential
@@ -106,6 +107,21 @@ jsonsqlite index create <table> --type composite --fields a,b
 jsonsqlite index drop <table> <field>
 jsonsqlite index rebuild [table]
 jsonsqlite index compact [table]
+--type tree builds a B+Tree (order from bTreeOrder, default 128).
+--type geo builds a grid index. explain shows structure btree or grid.
+`;
+}
+
+export function helpStorage(): string {
+  return `jsonsqlite storage advise <table>
+
+Print a storage suggestion for one table. Requires the process to opt in;
+this command opens with storageAdvise enabled for the suggestion only.
+It does not change currentMode. Suggestions are document, columnar, hybrid,
+or compressed. compressed means a large document would use a compressed block
+and still read like document mode.
+The inputs are field cardinality, nesting depth, and the in-process filter
+field histogram (field names and counts, not document text).
 `;
 }
 
@@ -114,7 +130,7 @@ export function helpPlugin(): string {
 jsonsqlite plugin info <name>
 
 Lists the built-in catalog. vector and s3 are callable stubs.
-A usable vector index is planned for 3.3. A usable S3 storage plugin is planned for 3.1.
+A usable vector index is planned for 3.3. A usable S3 upload is planned for 3.4.
 This command does not install plugins from a registry.
 `;
 }
@@ -199,7 +215,7 @@ export function helpCompat(): string {
   return `jsonsqlite compat [--json]
 jsonsqlite version [--json]
 Print getCompatibilityInfo() / version.
-On 3.0.0: lts is false. ltsLine stays "2.5" (latest LTS line, LTS-3), not this package version.
+On 3.1.0: lts is false. ltsLine stays "2.5" (latest LTS line, LTS-3), not this package version.
 writers is "single". Default open stays single-writer. Pin 2.2 unless you need multi-writer (lts-3 / 2.5).
 This release is not LTS. The lts tag stays on 2.2. PATCH on 3.0.x adds no subcommands.
 `;
@@ -216,6 +232,9 @@ graphql, wasm, l3, redis, cache) are named in the error.
 2.4 opt-in key writers is single or multi (default single). Omitting it stays single.
 2.3 opt-in keys (columnStore, storageTiers, smartCompression, and the rest
 listed in config validation) are accepted and default off.
+3.1 opt-in keys (bTreeOrder, storageAdvise, hybridCollections, hybridFields,
+coldExternalDir, compressionSampleWindow, stopWords) are accepted.
+Omitting them keeps the 3.0 read path. storage advise does not switch modes.
 The frozen cache field is cacheSize, not cache / cache.l3.
 `;
 }
@@ -238,6 +257,9 @@ export function helpFor(path: string[]): string | null {
       return helpDelete();
     case 'index':
       return helpIndex();
+    case 'storage':
+    case 'storage advise':
+      return helpStorage();
     case 'plugin':
     case 'plugin list':
     case 'plugin info':

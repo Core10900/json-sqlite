@@ -94,10 +94,10 @@ export function builtinPluginCatalog(): BuiltinPluginInfo[] {
       name: 's3',
       version: '0.0.1',
       stub: true,
-      availableIn: '3.1',
+      availableIn: '3.4',
       registered: false,
       summary:
-        '可调用的 S3 冷存储 stub。putCold 会记一次调用，不会上传对象。可用实现在 3.1。',
+        '可调用的 S3 冷存储 stub。putCold 会记一次调用，不会上传对象。可用实现在 3.4，3.1 不会实际上传。',
     },
   ];
 }
@@ -142,7 +142,7 @@ export function createS3Stub(): EnginePlugin & { calls: number } {
     name: 's3',
     version: '0.0.1',
     stub: true,
-    availableIn: '3.1',
+    availableIn: '3.4',
     calls: 0,
     putCold(_collection: string, _doc: Document): void {
       stub.calls += 1;

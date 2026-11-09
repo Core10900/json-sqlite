@@ -253,6 +253,32 @@ export interface JSONSQLiteOptions {
    * Opening this does not accept caller-supplied source strings.
    */
   compileFilters?: boolean;
+  /**
+   * Maximum keys in one B+Tree node. Default 128.
+   * Does not create a tree index by itself.
+   */
+  bTreeOrder?: number;
+  /**
+   * Allow `storageAdvise` to return a suggestion. Default false.
+   * A suggestion never changes the table's storage mode.
+   */
+  storageAdvise?: boolean;
+  /** Tables stored as hybrid: listed hot fields in columns, other fields on document pages. */
+  hybridCollections?: string[];
+  /** Hot fields written as `table.field`. Used with `hybridCollections`. */
+  hybridFields?: string[];
+  /**
+   * External directory for cold-tier copies. Requires `storageTiers`.
+   * If this directory cannot be written, hot point reads still succeed.
+   */
+  coldExternalDir?: string;
+  /** Sample size used when smart compression picks an algorithm. Default 64. */
+  compressionSampleWindow?: number;
+  /**
+   * Stop words for the inverted index. Omit for the built-in list.
+   * `[]` keeps every token. Applied on open and on `setStopWords`.
+   */
+  stopWords?: string[];
 }
 
 /** Optional read scope. `txId` selects a REPEATABLE_READ snapshot. */

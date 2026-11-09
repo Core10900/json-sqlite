@@ -428,7 +428,7 @@ describe('v2.5.0 LTS-3', () => {
     if (getVersion().startsWith('2.5.')) {
       expect(help).toMatch(/2\.5\.0, lts: true, ltsLine 2\.5/);
     } else {
-      expect(help).toMatch(/3\.0\.0, lts: false, ltsLine 2\.5/);
+      expect(help).toMatch(/3\.\d+\.\d+, lts: false, ltsLine 2\.5/);
     }
     expect(help).toMatch(/Exit codes: 0 ok · 1 usage\/business · 2 system\/IO · 3 lock failed/);
 

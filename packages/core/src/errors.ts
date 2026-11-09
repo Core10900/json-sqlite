@@ -34,6 +34,8 @@ export enum ErrorCode {
   QUERY_CANCELLED = 'QUERY_CANCELLED',
   SCHEMA_VIOLATION = 'SCHEMA_VIOLATION',
   QUERY_TIMEOUT = 'QUERY_TIMEOUT',
+  /** A configured tokenizer module failed. Point reads stay available. */
+  TOKENIZER_FAILED = 'TOKENIZER_FAILED',
   ENCRYPTION = 'ENCRYPTION',
   INTERNAL = 'INTERNAL',
 }

@@ -88,9 +88,11 @@ export type {
   PluginKind,
   PluginManifest,
 } from './plugins/registry.js';
-export { compressSmart, decompressSmart, selectAlgorithm } from './storage/smartCompress.js';
+export { compressSmart, decompressSmart, readSmartHeader, selectAlgorithm } from './storage/smartCompress.js';
 export type { SmartAlgorithm } from './storage/smartCompress.js';
+export type { StorageAdvice, StorageMode } from './storage/advise.js';
 export { createBigramTokenizer, bigramTokenize } from './tokenize/chinese.js';
+export { tokenize, DEFAULT_STOP_WORDS } from './index/InvertedIndex.js';
 export type { ChineseTokenizer } from './tokenize/chinese.js';
 export type { QueryExplain, QueryPlanInfo, QueryProfile } from './engine/JSONSQLite.js';
 export type { ColumnStoreStatus } from './storage/columnStore.js';

@@ -95,6 +95,33 @@ const optionsSchema = z.object({
    * User strings are never interpolated into the function body.
    */
   compileFilters: z.boolean().default(false),
+  /**
+   * Maximum keys in one B+Tree node. Default 128. Tree indexes stay off
+   * until `index create --type tree`. This only sets the node width.
+   */
+  bTreeOrder: z.number().int().min(3).max(4096).default(128),
+  /**
+   * When true, `storageAdvise` may print a suggestion. It never changes
+   * a table's storage mode. Default false.
+   */
+  storageAdvise: z.boolean().default(false),
+  /** Tables whose hot fields are columnar and whose other fields stay on document pages. */
+  hybridCollections: z.array(z.string()).default([]),
+  /** Hot fields as `table.field`. Ignored until the table is in `hybridCollections`. */
+  hybridFields: z.array(z.string()).default([]),
+  /**
+   * Directory for cold-tier copies when `storageTiers` is on.
+   * Omitted means cold copies stay inside the database directory.
+   * An unreadable directory does not hide hot documents.
+   */
+  coldExternalDir: z.string().min(1).optional(),
+  /** Bytes or elements sampled before picking a smart-compression algorithm. Default 64. */
+  compressionSampleWindow: z.number().int().positive().default(64),
+  /**
+   * Inverted-index stop words. Omit to keep the built-in Chinese and English list.
+   * An empty array keeps every token. Changing this rebuilds inverted indexes.
+   */
+  stopWords: z.array(z.string()).optional(),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;

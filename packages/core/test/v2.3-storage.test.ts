@@ -528,7 +528,7 @@ describe('v2.3.0 CLI', () => {
     const names = listed.plugins.map((plugin) => plugin.name).sort();
     expect(names).toEqual(['s3', 'vector']);
     expect(listed.plugins.find((plugin) => plugin.name === 'vector')?.availableIn).toBe('3.3');
-    expect(listed.plugins.find((plugin) => plugin.name === 's3')?.availableIn).toBe('3.1');
+    expect(listed.plugins.find((plugin) => plugin.name === 's3')?.availableIn).toBe('3.4');
 
     const info = await cli(['plugin', 'info', 'vector', '--json']);
     expect(info.code).toBe(0);

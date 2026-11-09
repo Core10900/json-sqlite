@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { create, getCompatibilityInfo, init } from '../lifecycle.js';
+import { open } from '../engine/JSONSQLite.js';
 import { rekeyDatabase, resolveRekeyKeys } from '../ops/rekey.js';
 import { migrateDatabase } from '../ops/migrate.js';
 import { diagnoseWalDirectory } from '../storage/Wal.js';
@@ -39,7 +40,7 @@ import {
   helpDelete,
   helpAdmin as helpAdminText,
 } from './help.js';
-import { fail, printData, printSuccess, requireTty } from './output.js';
+import { fail, failFromError, printData, printSuccess, requireTty } from './output.js';
 import { formatDocsPage, formatSchema, formatSqlResult, formatTables } from './format.js';
 import { ask, confirmAlter, confirmDropTable, withPrompt } from './prompt.js';
 
@@ -125,6 +126,8 @@ export async function dispatch(argv: string[]): Promise<void> {
       return cmdCount(ctx, rest);
     case 'index':
       return cmdIndex(ctx, rest);
+    case 'storage':
+      return cmdStorage(ctx, rest);
     case 'plugin':
       return cmdPlugin(ctx, rest);
     case 'stats':
@@ -915,6 +918,45 @@ async function cmdIndex(ctx: CliContext, rest: string[]): Promise<void> {
   });
 }
 
+async function cmdStorage(ctx: CliContext, rest: string[]): Promise<void> {
+  if (hasFlag(rest, '--help', '-h') || !rest[0]) {
+    console.log(helpFor(['storage']) ?? '');
+    if (!rest[0]) setExit(ExitCode.USAGE);
+    return;
+  }
+  const sub = rest[0]!;
+  const args = rest.slice(1);
+  if (sub !== 'advise') {
+    fail(ctx.out, `Unknown storage subcommand: ${sub}`, 'USAGE', ExitCode.USAGE);
+  }
+  const table = positional(args);
+  if (!table) fail(ctx.out, '用法: jsonsqlite storage advise <table>', 'USAGE');
+  let db: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    db = await open({
+      storagePath: ctx.storagePath,
+      storageAdvise: true,
+      ...(ctx.globals.writers ? { writers: ctx.globals.writers } : {}),
+    });
+    const advice = await db.storageAdvise(table);
+    const human = [
+      `collection: ${advice.collection}`,
+      `suggestion: ${advice.suggestion}`,
+      `currentMode: ${advice.currentMode}`,
+      `applied: ${advice.applied}`,
+      `nestingDepth: ${advice.nestingDepth}`,
+      `maxBytes: ${advice.maxBytes}`,
+      `cardinality: ${JSON.stringify(advice.cardinality)}`,
+      `filterHistogram: ${JSON.stringify(advice.filterHistogram)}`,
+    ].join('\n');
+    printData(ctx.out, human, { action: 'storage.advise', advice });
+  } catch (err) {
+    failFromError(ctx.out, err);
+  } finally {
+    await db?.close().catch(() => undefined);
+  }
+}
+
 async function cmdPlugin(ctx: CliContext, rest: string[]): Promise<void> {
   if (hasFlag(rest, '--help', '-h') || !rest[0]) {
     console.log(helpPlugin());
@@ -1027,6 +1069,8 @@ async function cmdExplain(ctx: CliContext, rest: string[]): Promise<void> {
     const human = [
       `collection: ${query.collection}`,
       `index: ${plan.usedIndex ? `${plan.usedIndex.field}(${plan.usedIndex.type})` : '(none)'}`,
+      `access: ${plan.access}`,
+      `structure: ${plan.structure ?? '(none)'}`,
       `selectivity: ${plan.selectivity}`,
       `indexWeight: ${plan.indexWeight}`,
       `indexChoice: ${plan.indexChoice}`,
@@ -1044,6 +1088,8 @@ async function cmdExplain(ctx: CliContext, rest: string[]): Promise<void> {
       indexes,
       advice: plan.advice,
       selectivity: plan.selectivity,
+      access: plan.access,
+      structure: plan.structure ?? null,
       indexWeight: plan.indexWeight,
       indexChoice: plan.indexChoice,
       chunked: plan.chunked,

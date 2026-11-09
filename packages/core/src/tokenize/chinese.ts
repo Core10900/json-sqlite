@@ -34,6 +34,32 @@ export function bigramTokenize(text: string): string[] {
   return out;
 }
 
+function isMissingModuleError(err: unknown): boolean {
+  const chunks: string[] = [];
+  const pending: unknown[] = [err];
+  const seen = new Set<unknown>();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current == null || seen.has(current)) continue;
+    seen.add(current);
+    if (typeof current === 'string') {
+      chunks.push(current);
+      continue;
+    }
+    if (typeof current !== 'object') continue;
+    const record = current as { code?: unknown; message?: unknown; cause?: unknown; errors?: unknown };
+    if (record.code === 'ERR_MODULE_NOT_FOUND' || record.code === 'MODULE_NOT_FOUND') return true;
+    if (typeof record.code === 'string') chunks.push(record.code);
+    if (typeof record.message === 'string') chunks.push(record.message);
+    if (current instanceof Error && current.stack) chunks.push(current.stack);
+    if (record.cause) pending.push(record.cause);
+    if (Array.isArray(record.errors)) pending.push(...record.errors);
+  }
+  return /cannot find (module|package)|failed to (resolve|load url|load)|does the file exist|ERR_MODULE_NOT_FOUND|module not found/i.test(
+    chunks.join('\n'),
+  );
+}
+
 export function createBigramTokenizer(): ChineseTokenizer {
   return {
     name: 'bigram',
@@ -47,19 +73,34 @@ export interface LoadedTokenizer {
   name: string | null;
   reason: string | null;
   tokenize: ((text: string) => string[]) | null;
+  /** True when the module itself threw. A missing package is not a failure. */
+  failed: boolean;
 }
 
 /**
  * Load an optional tokenizer module by its package name. A missing
  * module resolves to available:false. It does not throw.
  */
-export async function tryLoadTokenizerModule(spec: string): Promise<LoadedTokenizer> {
+async function importSpecifier(spec: string): Promise<Record<string, unknown>> {
   try {
+    // Keep the specifier out of the bundler's static import graph.
     const importer = new Function(
       'specifier',
       'return import(specifier)',
     ) as (specifier: string) => Promise<Record<string, unknown>>;
-    const mod = await importer(spec);
+    return await importer(spec);
+  } catch (err) {
+    // Vitest evaluates `new Function` inside a VM that cannot import.
+    // A direct import is rewritten by the test runner and works there.
+    // Node never takes this branch.
+    if ((err as { code?: string }).code !== 'ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING') throw err;
+    return import(spec);
+  }
+}
+
+export async function tryLoadTokenizerModule(spec: string): Promise<LoadedTokenizer> {
+  try {
+    const mod = await importSpecifier(spec);
     const candidate =
       (typeof mod.tokenize === 'function' && mod.tokenize) ||
       (mod.default &&
@@ -74,6 +115,7 @@ export async function tryLoadTokenizerModule(spec: string): Promise<LoadedTokeni
         name: null,
         reason: 'no-tokenize-export',
         tokenize: null,
+        failed: true,
       };
     }
     return {
@@ -81,15 +123,18 @@ export async function tryLoadTokenizerModule(spec: string): Promise<LoadedTokeni
       name: spec,
       reason: null,
       tokenize: candidate as (text: string) => string[],
+      failed: false,
     };
-  } catch {
-    // Missing package, bundler resolution failure, or a throw inside the
-    // module. Open must continue; tokenization stays unavailable.
+  } catch (err) {
+    const missing = isMissingModuleError(err);
+    // A missing package is not a failure. A module that throws is.
+    // Open must continue either way.
     return {
       available: false,
       name: null,
-      reason: 'module-not-found',
+      reason: missing ? 'module-not-found' : 'module-threw',
       tokenize: null,
+      failed: !missing,
     };
   }
 }

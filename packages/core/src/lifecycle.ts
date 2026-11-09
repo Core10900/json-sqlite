@@ -23,7 +23,7 @@ export interface CompatibilityInfo {
    * On 3.0.0 this is not the package version. Single-writer users still pin 2.2.
    */
   ltsLine: '2.5';
-  /** CLI surface. 3.0.0 keeps the 2.5 commands and adds query --timeout plus explain fields. */
+  /** CLI surface. 3.1.0 keeps the 3.0 commands and adds storage advise. */
   cliSurface: string;
   /** Default open mode. Multi-writer is opt-in and is not this field. */
   writers: 'single';
@@ -60,7 +60,7 @@ export function getCompatibilityInfo(): CompatibilityInfo {
     formatVersion: FORMAT_VERSION,
     lts: false,
     ltsLine: '2.5',
-    cliSurface: '3.0.0',
+    cliSurface: '3.1.0',
     writers: 'single',
     features: [
       'encryption',
@@ -123,6 +123,14 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'query-profile',
       'sql-group-agg',
       'compile-filters',
+      'btree',
+      'geo-grid',
+      'column-encoding',
+      'hybrid-storage',
+      'storage-advise',
+      'front-coding',
+      'tier-compression',
+      'stop-words',
     ],
   };
 }

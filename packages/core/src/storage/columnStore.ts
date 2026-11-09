@@ -4,6 +4,8 @@ import path from 'node:path';
 import type { SyncMode } from '../types/index.js';
 import type { Document } from '../types/index.js';
 import { writeFileAtomic } from '../utils/fsDurable.js';
+import type { StorageMode } from './advise.js';
+import { decodeColumn, encodeColumn } from './columnCodec.js';
 
 const SYSTEM = new Set(['_id', '_version', '_createdAt', '_updatedAt']);
 
@@ -14,7 +16,11 @@ export interface ColumnManifest {
   docCount: number;
   revisionSum: number;
   checksum: string;
+  /** Per-file sha256 of the bytes that were written. Absent on 2.3 manifests. */
+  files?: Record<string, string>;
 }
+
+export type { StorageMode };
 
 export interface ColumnStoreStatus {
   enabled: boolean;
@@ -50,6 +56,8 @@ export class ColumnStore {
   private readonly ready = new Map<string, ColumnManifest>();
   private readonly jobs = new Map<string, Promise<void>>();
   private readonly generation = new Map<string, number>();
+  private readonly hybridFields = new Map<string, string[]>();
+  private readonly modes = new Map<string, StorageMode>();
   fileReads = 0;
   lastFileReads = 0;
 
@@ -68,6 +76,28 @@ export class ColumnStore {
 
   enable(name: string): void {
     this.enabled.add(name);
+    if (!this.modes.has(name) || this.modes.get(name) === 'document') {
+      this.modes.set(name, 'columnar');
+    }
+  }
+
+  /**
+   * Hot fields are written as columns. Other fields stay on the document
+   * pages. The mode is recorded only; this does not run from a suggestion.
+   */
+  enableHybrid(name: string, fields: string[]): void {
+    this.enabled.add(name);
+    this.hybridFields.set(name, [...fields]);
+    this.modes.set(name, 'hybrid');
+  }
+
+  mode(name: string): StorageMode {
+    return this.modes.get(name) ?? 'document';
+  }
+
+  hybridFieldList(name: string): string[] | null {
+    const fields = this.hybridFields.get(name);
+    return fields ? [...fields] : null;
   }
 
   status(name: string): ColumnStoreStatus {
@@ -90,9 +120,13 @@ export class ColumnStore {
   }
 
   async persistEnabled(): Promise<void> {
+    const hybrid: Record<string, string[]> = {};
+    for (const [name, fields] of this.hybridFields) hybrid[name] = fields;
+    const modes: Record<string, StorageMode> = {};
+    for (const [name, mode] of this.modes) modes[name] = mode;
     await writeFileAtomic(
       this.enabledFile(),
-      JSON.stringify({ collections: [...this.enabled] }, null, 2),
+      JSON.stringify({ collections: [...this.enabled], hybrid, modes }, null, 2),
       this.syncMode,
     );
   }
@@ -100,8 +134,18 @@ export class ColumnStore {
   async loadEnabled(): Promise<void> {
     try {
       const raw = await fs.readFile(this.enabledFile(), 'utf8');
-      const parsed = JSON.parse(raw) as { collections?: string[] };
+      const parsed = JSON.parse(raw) as {
+        collections?: string[];
+        hybrid?: Record<string, string[]>;
+        modes?: Record<string, StorageMode>;
+      };
       for (const name of parsed.collections ?? []) this.enabled.add(name);
+      for (const [name, fields] of Object.entries(parsed.hybrid ?? {})) {
+        this.hybridFields.set(name, [...fields]);
+      }
+      for (const [name, mode] of Object.entries(parsed.modes ?? {})) {
+        this.modes.set(name, mode);
+      }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
@@ -170,11 +214,19 @@ export class ColumnStore {
     }
     try {
       const rowRaw = await this.readFileCounted(this.rowKeyFile(name));
+      if (!this.hashMatches(manifest, 'rowkey', rowRaw)) {
+        this.ready.delete(name);
+        return null;
+      }
       const keys = JSON.parse(rowRaw) as RowKey[];
       const columns = new Map<string, unknown[]>();
       for (const field of userFields) {
         const raw = await this.readFileCounted(this.fieldFile(name, field));
-        columns.set(field, JSON.parse(raw) as unknown[]);
+        if (!this.hashMatches(manifest, field, raw)) {
+          this.ready.delete(name);
+          return null;
+        }
+        columns.set(field, decodeColumn(raw));
       }
       this.lastFileReads = 1 + userFields.length;
       const docs: Document[] = keys.map((key, i) => {
@@ -213,26 +265,24 @@ export class ColumnStore {
       });
       const docs = await load();
       if (this.generation.get(name) !== token) return;
-      const fields = collectFields(docs);
+      const hybrid = this.hybridFields.get(name);
+      const fields = hybrid ? [...hybrid] : collectFields(docs);
       const keys: RowKey[] = docs.map((doc) => ({
         _id: doc._id,
         _version: doc._version,
         _createdAt: doc._createdAt,
         _updatedAt: doc._updatedAt,
       }));
+      const files: Record<string, string> = {};
       await fs.mkdir(this.dir(name), { recursive: true });
-      await writeFileAtomic(
-        this.rowKeyFile(name),
-        JSON.stringify(keys),
-        this.syncMode,
-      );
+      const rowBody = JSON.stringify(keys);
+      files.rowkey = sha256(rowBody);
+      await writeFileAtomic(this.rowKeyFile(name), rowBody, this.syncMode);
       for (const field of fields) {
         const values = docs.map((doc) => doc[field]);
-        await writeFileAtomic(
-          this.fieldFile(name, field),
-          JSON.stringify(values),
-          this.syncMode,
-        );
+        const body = encodeColumn(values);
+        files[field] = sha256(body);
+        await writeFileAtomic(this.fieldFile(name, field), body, this.syncMode);
       }
       if (this.generation.get(name) !== token) return;
       const checksum = await this.checksumFiles(name, fields);
@@ -245,6 +295,7 @@ export class ColumnStore {
         docCount: docs.length,
         revisionSum,
         checksum: checksum ?? '',
+        files,
       };
       await this.writeManifest(name, manifest);
       if (this.generation.get(name) !== token) return;
@@ -254,6 +305,12 @@ export class ColumnStore {
     } finally {
       if (this.generation.get(name) === token) this.building.delete(name);
     }
+  }
+
+  private hashMatches(manifest: ColumnManifest, name: string, body: string): boolean {
+    const expected = manifest.files?.[name];
+    if (!expected) return true;
+    return sha256(body) === expected;
   }
 
   private async readFileCounted(file: string): Promise<string> {
@@ -315,6 +372,10 @@ export class ColumnStore {
   private fieldFile(name: string, field: string): string {
     return path.join(this.dir(name), `${encodeURIComponent(field)}.json`);
   }
+}
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
 }
 
 function collectFields(docs: Document[]): string[] {

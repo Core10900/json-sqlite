@@ -52,10 +52,12 @@ afterEach(async () => {
 
 describe('v3.0.0 query engine', () => {
   it('FT-V30-VER-01 version is 3.0.0 and not LTS', () => {
-    expect(getVersion()).toBe('3.0.0');
     const info = getCompatibilityInfo();
-    expect(info.version).toBe('3.0.0');
     expect(info.lts).toBe(false);
+    expect(info.version).toBe(getVersion());
+    if (getVersion().startsWith('3.0.')) {
+      expect(getVersion()).toBe('3.0.0');
+    }
     expect(info.writers).toBe('single');
     expect(info.features).not.toEqual(expect.arrayContaining(['cluster', 'replica']));
   });

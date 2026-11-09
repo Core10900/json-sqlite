@@ -52,17 +52,52 @@ export class IndexManager {
   private buildCount = 0;
 
   private tokenizeFn: ((text: string) => string[]) | null = null;
+  private stopWords: Set<string> | null = null;
+  private customStopWords = false;
 
   constructor(
     private readonly storagePath: string,
     private readonly syncMode: SyncMode = 'normal',
     private readonly persistSegments = true,
     private readonly deltaSegments = false,
+    private readonly bTreeOrder = 128,
   ) {}
 
   /** Inverted indexes built after this call use `fn`. Null restores the default splitter. */
   setTokenizer(fn: ((text: string) => string[]) | null): void {
-    this.tokenizeFn = fn;
+    if (!fn) {
+      this.tokenizeFn = null;
+      return;
+    }
+    this.tokenizeFn = (text: string) => {
+      try {
+        return fn(text);
+      } catch (err) {
+        if (err instanceof JSONSQLiteError) throw err;
+        throw new JSONSQLiteError(
+          ErrorCode.TOKENIZER_FAILED,
+          'Tokenizer failed',
+          { cause: err instanceof Error ? err.message : String(err) },
+        );
+      }
+    };
+  }
+
+  /**
+   * Replace the inverted-index stop list. An empty list keeps every token.
+   * Existing inverted indexes keep the new list; the caller rebuilds them.
+   */
+  setStopWords(words: string[]): void {
+    this.customStopWords = true;
+    this.stopWords = new Set(words.map((word) => word.toLowerCase()));
+    for (const idx of this.indexes.values()) {
+      if (idx.meta.type !== 'inverted') continue;
+      (idx as InvertedIndex).setStopWords(this.stopWords);
+    }
+  }
+
+  probeTokenizer(sample: string): void {
+    if (this.tokenizeFn) this.tokenizeFn(sample);
   }
 
   private key(collection: string, field: string): string {
@@ -117,6 +152,12 @@ export class IndexManager {
     walReplay: boolean,
   ): boolean {
     if (!this.persistSegments || walReplay || this.tokenizeFn) return false;
+    if (
+      this.customStopWords &&
+      this.findForCollection(collection).some((idx) => idx.meta.type === 'inverted')
+    ) {
+      return false;
+    }
     const list = this.findForCollection(collection);
     if (list.length === 0) return true;
     const docCount = stats.docCount;
@@ -464,9 +505,13 @@ export class IndexManager {
       case 'object':
         return new ObjectIndex(meta);
       case 'tree':
-        return new TreeIndex(meta);
+        return new TreeIndex(meta, this.bTreeOrder);
       case 'inverted':
-        return new InvertedIndex(meta, this.tokenizeFn ?? tokenize);
+        return new InvertedIndex(
+          meta,
+          this.tokenizeFn ?? tokenize,
+          this.stopWords ?? undefined,
+        );
       case 'composite':
         return new CompositeIndex(meta);
       case 'geo':

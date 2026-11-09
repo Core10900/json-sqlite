@@ -3,6 +3,8 @@ export class L1Cache<V = unknown> {
   hits = 0;
   misses = 0;
   evictions = 0;
+  /** Hits that moved a key to the hot end of the LRU. */
+  promotions = 0;
 
   constructor(private readonly maxSize = 1000) {}
 
@@ -16,6 +18,7 @@ export class L1Cache<V = unknown> {
     this.map.delete(key);
     this.map.set(key, value);
     this.hits += 1;
+    this.promotions += 1;
     return value;
   }
 
@@ -48,6 +51,7 @@ export class L1Cache<V = unknown> {
       hits: this.hits,
       misses: this.misses,
       evictions: this.evictions,
+      promotions: this.promotions,
       size: this.map.size,
       hitRate: total === 0 ? 0 : this.hits / total,
     };
