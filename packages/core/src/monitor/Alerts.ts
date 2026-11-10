@@ -4,7 +4,8 @@ export type AlertKind =
   | 'cache_hit'
   | 'error_rate'
   | 'corrupt'
-  | 'backup_failed';
+  | 'backup_failed'
+  | 'response_time';
 
 export interface AlertRule {
   kind: AlertKind;
@@ -25,6 +26,8 @@ export interface AlertConfig {
   rules?: AlertRule[];
   /** Optional HTTP endpoint (POST JSON body). */
   webhookUrl?: string | null;
+  /** Fire response_time when observed p99 exceeds this many ms. */
+  responseTimeMs?: number;
 }
 
 /**
@@ -33,6 +36,7 @@ export interface AlertConfig {
 export class AlertManager {
   private readonly rules: AlertRule[];
   private readonly webhookUrl: string | null;
+  private readonly responseTimeMs: number | null;
   private readonly seen = new Set<string>();
   private readonly history: AlertEvent[] = [];
 
@@ -42,6 +46,10 @@ export class AlertManager {
   ) {
     this.rules = config?.rules ?? [];
     this.webhookUrl = config?.webhookUrl ?? null;
+    this.responseTimeMs =
+      config?.responseTimeMs !== undefined && config.responseTimeMs > 0
+        ? config.responseTimeMs
+        : null;
   }
 
   getHistory(): AlertEvent[] {
@@ -53,6 +61,7 @@ export class AlertManager {
     queriesTotal: number;
     writesTotal: number;
     errorsTotal: number;
+    p99?: number;
   }): Promise<AlertEvent[]> {
     const out: AlertEvent[] = [];
     const denom =
@@ -83,6 +92,32 @@ export class AlertManager {
         });
         if (ev) out.push(ev);
       }
+      if (
+        rule.kind === 'response_time' &&
+        this.responseTimeMs !== null &&
+        typeof input.p99 === 'number' &&
+        input.p99 > this.responseTimeMs
+      ) {
+        const ev = await this.fire({
+          kind: 'response_time',
+          message: `p99 ${input.p99}ms above ${this.responseTimeMs}ms`,
+          details: { p99: input.p99, responseTimeMs: this.responseTimeMs },
+        });
+        if (ev) out.push(ev);
+      }
+    }
+    if (
+      this.responseTimeMs !== null &&
+      typeof input.p99 === 'number' &&
+      input.p99 > this.responseTimeMs &&
+      !this.rules.some((r) => r.kind === 'response_time')
+    ) {
+      const ev = await this.fire({
+        kind: 'response_time',
+        message: `p99 ${input.p99}ms above ${this.responseTimeMs}ms`,
+        details: { p99: input.p99, responseTimeMs: this.responseTimeMs },
+      });
+      if (ev) out.push(ev);
     }
     return out;
   }
@@ -99,13 +134,6 @@ export class AlertManager {
     message: string,
     details?: Record<string, unknown>,
   ): Promise<AlertEvent | null> {
-    // Backup failures always alert when any alert config exists, or when a backup_failed rule is set.
-    if (
-      this.rules.length > 0 &&
-      !this.rules.some((r) => r.kind === 'backup_failed')
-    ) {
-      /* still allow explicit backup_failed rules only — but scheduled backup expects alerts */
-    }
     return this.fire({ kind: 'backup_failed', message, details }, true);
   }
 

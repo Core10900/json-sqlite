@@ -1,5 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
+import type { Duplex } from 'node:stream';
+import { createHash } from 'node:crypto';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { JSONSQLite } from '../engine/JSONSQLite.js';
 import { getAdminHtml } from '../admin/dashboard.js';
@@ -11,6 +13,11 @@ export interface HttpServerOptions {
   adminToken?: string | null;
   /** PEM cert and key. Required together with adminToken when host is not loopback. */
   tls?: { cert: string | Buffer; key: string | Buffer } | null;
+}
+
+interface WsClient {
+  socket: Duplex;
+  alive: boolean;
 }
 
 export async function startHttpServer(
@@ -37,16 +44,27 @@ export async function startHttpServer(
   }
 
   const sseClients = new Set<http.ServerResponse>();
+  const wsClients = new Set<WsClient>();
   const unsubData = db.subscribe((event) => {
     broadcast(sseClients, 'dataChanged', event);
+    broadcastWs(wsClients, 'dataChanged', event);
   });
-  const metricsTimer = setInterval(() => {
+  const metricsMs = Math.max(
+    50,
+    Number(db.getOptionsSnapshot().metricsIntervalMs ?? 5000) || 5000,
+  );
+  const pushMetrics = () => {
     try {
-      broadcast(sseClients, 'metrics', db.getMetrics());
+      const metrics = db.getMetrics();
+      broadcast(sseClients, 'metrics', metrics);
+      broadcastWs(wsClients, 'metrics', metrics);
     } catch {
       /* closed */
     }
-  }, 5000);
+  };
+  const metricsTimer = setInterval(pushMetrics, metricsMs);
+  // First tick soon so tests and dashboards do not wait a full interval.
+  setTimeout(pushMetrics, Math.min(metricsMs, 100)).unref?.();
 
   const handler: http.RequestListener = async (req, res) => {
     try {
@@ -88,8 +106,38 @@ export async function startHttpServer(
 
         if (url.pathname === '/admin' || url.pathname === '/admin/') {
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(getAdminHtml());
+          res.end(getAdminHtml('home'));
           return;
+        }
+        if (url.pathname === '/admin/queries') {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(getAdminHtml('queries'));
+          return;
+        }
+        if (url.pathname === '/admin/tables') {
+          return json(res, 200, { tables: await db.listTables() });
+        }
+        if (url.pathname === '/admin/monitor') {
+          return json(res, 200, db.getMetrics());
+        }
+        if (url.pathname === '/admin/backup') {
+          if (req.method === 'POST') {
+            const info = await db.backupFull();
+            return json(res, 200, { backup: info });
+          }
+          return json(res, 200, { backups: await db.listBackups() });
+        }
+        if (url.pathname === '/admin/settings') {
+          return json(res, 200, {
+            settings: {
+              lts: false,
+              writers: 'single',
+              memoryWatermarkBytes: db.getOptionsSnapshot().memoryWatermarkBytes,
+              transactionTimeoutMs: db.getOptionsSnapshot().transactionTimeoutMs,
+              timeTravelRetentionMs: db.getOptionsSnapshot().timeTravelRetentionMs,
+              l3: db.l3Status(),
+            },
+          });
         }
 
         const route = url.pathname.replace(/^\/admin/, '') || '/';
@@ -160,7 +208,20 @@ export async function startHttpServer(
         const body = await readBody(req);
         const q = JSON.parse(body);
         const rows = await db.query(q);
-        return json(res, 200, { rows });
+        const plan = db.explain(q);
+        const profile = db.lastProfile();
+        return json(res, 200, {
+          rows,
+          plan,
+          stages: {
+            parse: profile.parseMs,
+            optimize: profile.optimizeMs,
+            indexScan: profile.indexScanMs,
+            dataLoad: profile.dataLoadMs,
+            execute: profile.executeMs,
+          },
+          usedIndex: plan.usedIndex ?? null,
+        });
       }
 
       json(res, 404, { error: 'not found' });
@@ -176,11 +237,48 @@ export async function startHttpServer(
       )
     : http.createServer(handler);
 
+  server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url ?? '/', `http://${host}:${port}`);
+    if (url.pathname !== '/stream') {
+      socket.destroy();
+      return;
+    }
+    if (!authorize(req, token, url)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    const key = req.headers['sec-websocket-key'];
+    if (typeof key !== 'string') {
+      socket.destroy();
+      return;
+    }
+    const accept = createHash('sha1')
+      .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+      .digest('base64');
+    socket.write(
+      'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' +
+        accept +
+        '\r\n\r\n',
+    );
+    if (head.length) socket.unshift(head);
+    const client: WsClient = { socket, alive: true };
+    wsClients.add(client);
+    socket.on('close', () => wsClients.delete(client));
+    socket.on('error', () => wsClients.delete(client));
+    socket.on('data', () => {
+      /* ignore client frames; this stream is server-push */
+    });
+    sendWs(socket, 'metrics', db.getMetrics());
+  });
+
   server.on('close', () => {
     clearInterval(metricsTimer);
     unsubData();
     for (const c of sseClients) c.end();
     sseClients.clear();
+    for (const c of wsClients) c.socket.destroy();
+    wsClients.clear();
   });
 
   await new Promise<void>((resolve) => {
@@ -207,7 +305,6 @@ function authorize(
   if (!token) return true;
   const auth = req.headers.authorization ?? '';
   if (auth === `Bearer ${token}`) return true;
-  // EventSource cannot set Authorization — allow ?token=
   if (url?.searchParams.get('token') === token) return true;
   return false;
 }
@@ -225,6 +322,42 @@ function broadcast(
       clients.delete(res);
     }
   }
+}
+
+function broadcastWs(
+  clients: Set<WsClient>,
+  event: string,
+  data: unknown,
+): void {
+  for (const client of clients) {
+    try {
+      sendWs(client.socket, event, data);
+    } catch {
+      clients.delete(client);
+    }
+  }
+}
+
+function sendWs(socket: Duplex, event: string, data: unknown): void {
+  const payload = Buffer.from(JSON.stringify({ event, data }), 'utf8');
+  const len = payload.length;
+  let header: Buffer;
+  if (len < 126) {
+    header = Buffer.alloc(2);
+    header[0] = 0x81;
+    header[1] = len;
+  } else if (len < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x81;
+    header[1] = 126;
+    header.writeUInt16BE(len, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(len), 2);
+  }
+  socket.write(Buffer.concat([header, payload]));
 }
 
 function json(

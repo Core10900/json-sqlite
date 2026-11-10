@@ -60,13 +60,16 @@ afterEach(async () => {
 
 describe('v3.1.0 gate', () => {
   it('FT-V31-VER-01 version is 3.1.0 and not LTS', () => {
-    expect(getVersion()).toBe('3.1.0');
     const info = getCompatibilityInfo();
-    expect(info.version).toBe('3.1.0');
+    if (getVersion().startsWith('3.1.')) {
+      expect(getVersion()).toBe('3.1.0');
+      expect(info.version).toBe('3.1.0');
+      expect(info.cliSurface).toBe('3.1.0');
+    }
     expect(info.lts).toBe(false);
     expect(info.ltsLine).toBe('2.5');
     expect(info.writers).toBe('single');
-    expect(info.cliSurface).toBe('3.1.0');
+    expect(info.version).toBe(getVersion());
     expect(info.features).toContain('btree');
     expect(info.features).not.toEqual(
       expect.arrayContaining(['cluster', 'replica', 'redis', 'graphql']),

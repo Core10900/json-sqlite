@@ -21,6 +21,7 @@ export function adviseQuery(
   existingIndexes: IndexMeta[],
   lastDurationMs?: number,
   estimate?: CostEstimate,
+  rejected?: Set<string>,
 ): Advice[] {
   const advice: Advice[] = [];
   const filter = query.filter;
@@ -32,6 +33,7 @@ export function adviseQuery(
   } else {
     for (const field of Object.keys(filter)) {
       if (field === '$and' || field === '$or') continue;
+      if (rejected?.has(`${query.collection}.${field}`)) continue;
       const has = existingIndexes.some(
         (i) => i.collection === query.collection && i.field === field,
       );

@@ -1,9 +1,10 @@
-export function getAdminHtml(): string {
+export function getAdminHtml(page: 'home' | 'queries' = 'home'): string {
+  const title = page === 'queries' ? 'Queries' : 'JSONSQLite Admin';
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <title>JSONSQLite Admin</title>
+  <title>${title}</title>
   <style>
     :root { --bg:#0f1419; --card:#1a2332; --text:#e7ecf3; --accent:#3d9cf0; --muted:#8b9bb4; }
     body { margin:0; font-family: ui-sans-serif, system-ui, sans-serif; background:var(--bg); color:var(--text); }
@@ -28,7 +29,15 @@ export function getAdminHtml(): string {
 </head>
 <body>
   <header>
-    <h1>JSONSQLite Admin</h1>
+    <h1>${title}</h1>
+    <nav style="display:flex;gap:1rem;font-size:.85rem">
+      <a href="/admin" style="color:var(--accent)">home</a>
+      <a href="/admin/queries" style="color:var(--accent)">queries</a>
+      <a href="/admin/tables" style="color:var(--accent)">tables</a>
+      <a href="/admin/monitor" style="color:var(--accent)">monitor</a>
+      <a href="/admin/backup" style="color:var(--accent)">backup</a>
+      <a href="/admin/settings" style="color:var(--accent)">settings</a>
+    </nav>
     <span class="live" id="live">SSE: connecting…</span>
   </header>
   <main>
@@ -69,6 +78,8 @@ export function getAdminHtml(): string {
       <textarea id="q">{"collection":"users","filter":{},"limit":20}</textarea>
       <button id="run">Run</button>
       <pre id="out">{}</pre>
+      <h2>Plan stages</h2>
+      <pre id="stages">{}</pre>
     </div>
   </main>
   <script>
@@ -99,7 +110,13 @@ export function getAdminHtml(): string {
     document.getElementById('run').onclick = async () => {
       const body = document.getElementById('q').value;
       const res = await fetch('/query', { method:'POST', headers:{ 'Content-Type':'application/json', ...auth() }, body });
-      document.getElementById('out').textContent = JSON.stringify(await res.json(), null, 2);
+      const bodyJson = await res.json();
+      document.getElementById('out').textContent = JSON.stringify(bodyJson, null, 2);
+      if (bodyJson.stages || (bodyJson.plan && bodyJson.plan.profile)) {
+        const stages = bodyJson.stages || bodyJson.plan.profile;
+        const stageEl = document.getElementById('stages');
+        if (stageEl) stageEl.textContent = JSON.stringify(stages, null, 2);
+      }
       refreshMetrics();
       refreshSlow();
     };

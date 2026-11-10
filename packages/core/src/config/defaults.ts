@@ -22,6 +22,8 @@ const optionsSchema = z.object({
   prefetchCollections: z.array(z.string()).default([]),
   autoTune: z.boolean().default(false),
   autoTuneDryRun: z.boolean().default(true),
+  /** Minimum slow-query hits before AutoTune acts. Default 2. */
+  autoTuneMinHits: z.number().int().positive().default(2),
   /** Persist index postings so reopen can skip a full rebuild (default on). */
   persistIndexes: z.boolean().default(true),
   /** Process-local L2 query cache. Default off — same behavior as 1.7. */
@@ -58,6 +60,7 @@ const optionsSchema = z.object({
               'error_rate',
               'corrupt',
               'backup_failed',
+              'response_time',
             ]),
             cacheHitBelow: z.number().min(0).max(1).optional(),
             errorRateAbove: z.number().min(0).max(1).optional(),
@@ -65,6 +68,8 @@ const optionsSchema = z.object({
         )
         .optional(),
       webhookUrl: z.string().min(1).nullable().optional(),
+      /** Compare against recent p99 (ms). Omit or 0 = off. */
+      responseTimeMs: z.number().int().nonnegative().optional(),
     })
     .optional(),
   /** 2.3 column store master switch. Default off. */
@@ -122,6 +127,37 @@ const optionsSchema = z.object({
    * An empty array keeps every token. Changing this rebuilds inverted indexes.
    */
   stopWords: z.array(z.string()).optional(),
+  /**
+   * Changelog / time-travel retention in ms. Default 7 days.
+   * Separate from backup keepDays.
+   */
+  timeTravelRetentionMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .default(7 * 86_400_000),
+  /**
+   * Transaction wall-clock timeout. Default 0 (off).
+   * When > 0, timed-out transactions roll back with TX_TIMEOUT.
+   */
+  transactionTimeoutMs: z.number().int().nonnegative().default(0),
+  /** Emit `metrics` events on this interval (ms). Default 5000. */
+  metricsIntervalMs: z.number().int().positive().default(5000),
+  /**
+   * Heap watermark for /health. Default 0: report only, never degrade.
+   * When > 0 and heapUsed exceeds it, health is degraded.
+   */
+  memoryWatermarkBytes: z.number().int().nonnegative().default(0),
+  /** Delta lines before a checksummed snapshot. Default 1000. */
+  deltaSnapshotThreshold: z.number().int().positive().default(1000),
+  /**
+   * Optional Redis L3. Default false. Missing client → open succeeds, L3 off.
+   */
+  l3: z.boolean().default(false),
+  /**
+   * Alias / marker for Redis. Default false. Missing client does not fail open.
+   */
+  redis: z.boolean().default(false),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;

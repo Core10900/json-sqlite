@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.2.0 — 2026-11-10 · 非 LTS
+
+**非 LTS，也不是设计完工版。** 相对 3.1 为 MINOR。默认不开启 Redis，不缩短已有 changelog，不自动修复数据。设计完工线是 **3.6**。
+
+`latest` 指向 3.2.0。`lts` / `lts-2` 仍是 2.2。`lts-3` 仍是 2.5。生产 pin 仍是 `lts`（2.2）。
+
+本版公布本机包络；未达方案 §1.3 的项见 `devDocs/releases/v3.2.0/性能包络.md`，不宣称设计完工。
+
+### Added
+- PITR：`backup restore --to <timestamp>` / `restoreChain({ to })`。全量后再应用不晚于该时间的增量。checksum 失败为 `BACKUP_CHECKSUM`，目标库不变
+- 时间旅行保留 `timeTravelRetentionMs`（默认 7 天），与备份 `keepDays` 分开。`rollbackToTime` / `rollback --to` 无确认时 `CONFIRM_REQUIRED` 并写审计
+- AutoTune 可建议缓存与压缩；默认关闭。dry-run 不改配置；校验失败回滚。`autoTuneMinHits` 默认 2（即方案里的 `autoIndexThreshold`）
+- 数据质量五项分数；`quality` 不写库。`autoFix` 仅显式调用，open 不跑
+- WebSocket `/stream` 推送变更与指标；SSE 保留。Admin 六个路径与查询台五段耗时
+- 磁盘插件 `plugin load`；`queryLanguage.parse` 只接受 JSON 查询。`exports["./plugin"]`
+- 可选 L3 Redis：`l3` / `redis` 进入配置并移出危险键。缺客户端时 open 成功，L3 关闭
+- Advisor 接受/拒绝写入 Monitor；下一次只调排序，不自动建索引
+- 指标：窗口 QPS、p50/p95/p99、WAL 字节、表文档数/索引数、锁等待（单写者为 0）。`alerts.responseTimeMs` 与 p99 比较。`/health` 含内存与锁数量；`memoryWatermarkBytes` 默认 0 不因此 degraded
+- `transactionTimeoutMs` 默认 0；大于 0 时超时回滚为 `TX_TIMEOUT`
+- `metrics` 事件（`metricsIntervalMs` 默认 5000）。无 `error` 监听器时只计数，不崩进程
+- Delta 最小化变更字段；达 `deltaSnapshotThreshold`（默认 1000）后写带 checksum 的快照，成功后才按保留窗删旧 delta
+- 磁盘满 / 无写权限：`STORAGE_FULL` / `STORAGE_PERMISSION`
+
+### Not in this release
+异步复制、Quorum、自动选主、GraphQL、连接池、多库注册表、可用向量、可用 S3、Raft、WASM、HTTP 文档 REST（3.4）。
+
 ## 3.1.0 — 2026-11-09 · 非 LTS
 
 **非 LTS。** 相对 3.0 为 MINOR。不写新配置时，打开 2.5 / 3.0 库的读写结果与 3.0 一致。文档页不迁移。新存储默认关闭。

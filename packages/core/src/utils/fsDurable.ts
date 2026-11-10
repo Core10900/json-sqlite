@@ -1,10 +1,30 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { open as fsOpen } from 'node:fs/promises';
+import { ErrorCode, JSONSQLiteError } from '../errors.js';
 
 export type SyncMode = 'none' | 'normal' | 'full';
 
 let atomicSeq = 0;
+
+function mapIoError(err: unknown): never {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === 'ENOSPC') {
+    throw new JSONSQLiteError(
+      ErrorCode.STORAGE_FULL,
+      'Disk is full; the write was not committed',
+      { code },
+    );
+  }
+  if (code === 'EACCES' || code === 'EPERM') {
+    throw new JSONSQLiteError(
+      ErrorCode.STORAGE_PERMISSION,
+      'Write path is not writable; the write was not committed',
+      { code },
+    );
+  }
+  throw err;
+}
 
 /** Write file via tmp + rename; optionally fsync file and parent directory. */
 export async function writeFileAtomic(
@@ -12,7 +32,7 @@ export async function writeFileAtomic(
   data: string | Buffer,
   syncMode: SyncMode = 'normal',
 ): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.mkdir(path.dirname(file), { recursive: true }).catch(mapIoError);
   const tmp = `${file}.tmp.${process.pid}.${atomicSeq++}.${Date.now()}`;
   try {
     const handle = await fsOpen(tmp, 'w');
@@ -33,7 +53,7 @@ export async function writeFileAtomic(
     }
   } catch (err) {
     await fs.rm(tmp, { force: true }).catch(() => undefined);
-    throw err;
+    mapIoError(err);
   }
 }
 
@@ -43,10 +63,14 @@ export async function appendFileDurable(
   data: string,
   syncMode: SyncMode = 'normal',
 ): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.appendFile(file, data, 'utf8');
-  if (syncMode !== 'none') {
-    await fsyncPath(file);
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.appendFile(file, data, 'utf8');
+    if (syncMode !== 'none') {
+      await fsyncPath(file);
+    }
+  } catch (err) {
+    mapIoError(err);
   }
 }
 

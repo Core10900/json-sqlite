@@ -198,10 +198,15 @@ const info = getCompatibilityInfo();
 | `restoreBackup(file)` | 恢复 |
 | `queryAtTime(collection, ts, filter?)` | 时间点查询 |
 | `diffBetweenTimes(collection, from, to)` | 区间差异 |
-| `rollbackToTime(collection, ts)` | 回滚集合到时间点 |
-| `health()` | 健康报告 |
-| `getMetrics()` | 运行指标 |
+| `rollbackToTime(collection, ts, opts?)` | 回滚集合到时间点。无 `confirm: true` 时 `CONFIRM_REQUIRED`（3.2） |
+| `restoreChain({ type, file?, collection?, to? })` | 全量或增量恢复；`to` 为 epoch ms 时做 PITR（3.2） |
+| `health()` | 健康报告；含 `memoryBytes` / `lockCount`（3.2） |
+| `getMetrics()` | 运行指标；含窗口 `qps`、`p50`/`p95`/`p99`、`walBytes`、`tables`（3.2） |
 | `loadedCollectionCount()` | 已加载集合数 |
+| `autoFix(collection, requiredFields?)` | 显式修复；open 不会调用（3.2） |
+| `acceptAdvice` / `rejectAdvice` | 写入 Monitor；不自动建索引（3.2） |
+| `l3Status()` | L3 Redis 状态；缺客户端时关闭（3.2） |
+| `on('metrics'\|'error'\|...)` | `metrics` 按 `metricsIntervalMs` 推送；无 `error` 监听器时不崩进程（3.2） |
 
 ---
 
@@ -266,6 +271,11 @@ unsubscribe();
 | `SCHEMA_VIOLATION` | `schemaMode: strict` 校验失败 |
 | `QUERY_TIMEOUT` | 查询超时 |
 | `TOKENIZER_FAILED` | 配置的分词模块失败。点查和其他非分词查询仍可用（3.1） |
+| `STORAGE_FULL` | 磁盘满。本次写入未提交（3.2） |
+| `STORAGE_PERMISSION` | 目标路径无写权限。本次写入未提交（3.2） |
+| `TX_TIMEOUT` | 事务超过 `transactionTimeoutMs`，已回滚（3.2） |
+| `CONFIRM_REQUIRED` | 破坏性操作需要显式确认 / `--yes`（3.2） |
+| `PLUGIN_REJECTED` | 插件名、版本或 `queryLanguage.parse` 契约不通过（3.2） |
 | `ENCRYPTION` | 加密/密钥错误 |
 | `INTERNAL` | 内部错误 |
 
@@ -570,4 +580,45 @@ getCompatibilityInfo();
 | `compileFilters: true` | 默认 false。拒绝把用户字符串编译进函数体 |
 
 单字段 `GROUP BY` 支持 `COUNT` / `SUM` / `AVG` / `MIN` / `MAX`。`HAVING` 抛 `SQL_UNSUPPORTED`。
+
+---
+
+## 3.1 索引与存储（非 LTS）
+
+相对 3.0 为 **MINOR**。新存储默认关闭。`lts` 为 false。生产 pin 仍是 2.2。
+
+| 符号 | 说明 |
+|------|------|
+| `bTreeOrder` | B+Tree 节点键上限，默认 128。`explain.structure` 为 `btree` |
+| `createIndex(..., 'geo')` | 网格裁剪；无索引时 `explain.access` 为 `scan` |
+| `tokenizerModule` / `tokenizerStatus()` | 缺模块或抛错不阻断 open；分词查询 `TOKENIZER_FAILED` |
+| `hybridCollections` / `hybridFields` | 热字段列存，其余留在文档页 |
+| `storageAdvise` / `db.storageAdvise(table)` | 只建议，不切换 |
+| `stopWords` | 倒排停用词；空数组保留全部词 |
+| `getMetrics().l1.promotions` | L1 热 key 提升计数 |
+
+---
+
+## 3.2 单机运维（非 LTS，非设计完工）
+
+相对 3.1 为 **MINOR**。Redis 与 `autoFix` 默认关闭。设计完工线是 **3.6**。`lts` 为 false。生产 pin 仍是 2.2。
+
+| 符号 | 说明 |
+|------|------|
+| `restoreChain({ to })` | PITR。epoch ms。该时间之后的已提交变更不在结果里。checksum 失败 `BACKUP_CHECKSUM`，目标不变 |
+| `timeTravelRetentionMs` | 默认 7 天。与备份 `keepDays` 分开。过期后更早的 `queryAtTime` 返回 `[]` |
+| `rollbackToTime(..., { confirm, caller })` | 无确认 `CONFIRM_REQUIRED` 并审计；确认后也审计 |
+| `autoTune` / `autoTuneMinHits` | 默认关 / 默认 2。可建议 cacheSize 与 compression；失败回滚 |
+| `analyzeQuality` / `autoFix` | 五项分数；建议不写库。`autoFix` 仅显式 |
+| `startServer` → `/stream` | WebSocket 推送 `dataChanged` 与 `metrics`；SSE 保留 |
+| Admin 六路径 | `/admin`、`/queries`、`/tables`、`/monitor`、`/backup`、`/settings`。查询台含五段耗时与 `usedIndex` |
+| `import '@webofcat/jsonsqlite/plugin'` | 插件契约与 `loadPluginFromPath` |
+| `l3` / `redis` | 默认 false。缺客户端 open 成功 |
+| `transactionTimeoutMs` | 默认 0。超时 `TX_TIMEOUT` |
+| `metricsIntervalMs` | 默认 5000。`on('metrics')` |
+| `alerts.responseTimeMs` | 与 p99 比较 |
+| `deltaSnapshotThreshold` | 默认 1000。checksum 失败不删旧 delta |
+| `STORAGE_FULL` / `STORAGE_PERMISSION` | 磁盘满 / 无写权限 |
+
+性能数字见 `devDocs/releases/v3.2.0/性能包络.md`。本版不做复制、Quorum、GraphQL、多库、可用向量、可用 S3、Raft、WASM、HTTP 文档 REST。
 

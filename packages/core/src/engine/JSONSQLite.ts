@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import {
@@ -20,7 +21,12 @@ import {
 } from '../query/Aggregate.js';
 import { selectJsonPath } from '../query/JsonPath.js';
 import { Catalog } from '../storage/Catalog.js';
-import { ChangeLog, type ChangeEntry } from '../storage/ChangeLog.js';
+import {
+  ChangeLog,
+  type ChangeEntry,
+} from '../storage/ChangeLog.js';
+import { L3RedisCache } from '../cache/L3Redis.js';
+import { loadPluginFromPath, isJsonQueryShape } from '../plugins/load.js';
 import { DdlJournal } from '../storage/DdlJournal.js';
 import { DocumentStore } from '../storage/DocumentStore.js';
 import { FileLock } from '../storage/FileLock.js';
@@ -62,7 +68,7 @@ import {
   reconstructAtTime,
 } from '../features/TimeTravel.js';
 import { adviseQuery, profileStages } from '../features/QueryAdvisor.js';
-import { analyzeQuality } from '../features/DataQuality.js';
+import { analyzeQuality, autoFixDocs } from '../features/DataQuality.js';
 import { AutoTune } from '../features/AutoTune.js';
 import { StreamProcessor } from '../features/StreamProcessor.js';
 import { startHttpServer, type HttpServerOptions } from '../api/httpServer.js';
@@ -160,6 +166,12 @@ export class JSONSQLite extends EventEmitter {
   private autoTune: AutoTune | null = null;
   private httpServer: http.Server | null = null;
   private backupTimer: ReturnType<typeof setInterval> | null = null;
+  private metricsTimer: ReturnType<typeof setInterval> | null = null;
+  private l3: L3RedisCache | null = null;
+  private readonly txTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  private readonly timedOutTx = new Set<number>();
+  private lastTxId: number | null = null;
+  private autoFixCalls = 0;
   private ready = false;
   private lastBackupTs = 0;
 
@@ -312,7 +324,12 @@ export class JSONSQLite extends EventEmitter {
         })),
       );
       this.tx = new TransactionManager(this.store, this.options.writers === 'multi');
-      this.changelog = new ChangeLog(root);
+      this.changelog = new ChangeLog(root, {
+        snapshotThreshold: this.options.deltaSnapshotThreshold,
+        retentionMs: this.options.timeTravelRetentionMs,
+      });
+      this.l3 = new L3RedisCache(this.options.l3 === true || this.options.redis === true);
+      await this.l3.init();
       this.cache = new ResultCache(
         this.options.cacheSize,
         this.options.cacheCompression,
@@ -406,10 +423,34 @@ export class JSONSQLite extends EventEmitter {
           createIndex: (c, f, t) => this.createIndex(c, f, t),
           dropIndex: (c, f) => this.dropIndex(c, f),
           getSlowQueries: (th) => this.monitor.getSlowQueries(th),
+          getRejectedIndexes: () => this.monitor.rejectedIndexKeys(),
+          getRuntimeHints: () => ({
+            cacheHitRate: this.cache!.stats.hitRate,
+            cacheSize: this.options.cacheSize,
+            compressionEnabled: this.store!.compressionEnabled(),
+            compressionThreshold: this.options.compressionThreshold,
+          }),
+          applyCacheSize: (size) => {
+            (this.options as { cacheSize: number }).cacheSize = size;
+            this.cache = new ResultCache(
+              size,
+              this.options.cacheCompression,
+              this.options.cacheCompressionThreshold,
+            );
+          },
+          applyCompression: (enabled, threshold) => {
+            (this.options as { compression: boolean }).compression = enabled;
+            if (threshold !== undefined) {
+              (this.options as { compressionThreshold: number }).compressionThreshold =
+                threshold;
+            }
+            this.store!.setCompression(enabled);
+          },
         },
         {
           enabled: this.options.autoTune === true,
           dryRun: this.options.autoTuneDryRun !== false,
+          minHits: this.options.autoTuneMinHits,
         },
       );
       await this.columns.loadEnabled();
@@ -443,11 +484,13 @@ export class JSONSQLite extends EventEmitter {
 
       this.ready = true;
       this.startBackupScheduler();
+      this.startMetricsEmitter();
       this.emit('ready');
       return this;
     } catch (err) {
       this.tiers?.stop();
       this.stopBackupScheduler();
+      this.stopMetricsEmitter();
       await this.lock?.release().catch(() => undefined);
       await this.multi?.leave().catch(() => undefined);
       this.lock = null;
@@ -475,6 +518,9 @@ export class JSONSQLite extends EventEmitter {
   async close(opts?: { flush?: boolean }): Promise<void> {
     if (!this.ready) return;
     this.stopBackupScheduler();
+    this.stopMetricsEmitter();
+    for (const timer of this.txTimers.values()) clearTimeout(timer);
+    this.txTimers.clear();
     this.tiers?.stop();
     if (opts?.flush !== false) await this.columns?.whenAllIdle();
     if (this.tx?.active) await this.tx.rollback();
@@ -539,9 +585,52 @@ export class JSONSQLite extends EventEmitter {
     }
   }
 
+  private startMetricsEmitter(): void {
+    this.stopMetricsEmitter();
+    const ms = this.options.metricsIntervalMs ?? 5000;
+    this.metricsTimer = setInterval(() => {
+      try {
+        if (!this.ready) return;
+        this.emit('metrics', this.getMetrics());
+      } catch {
+        /* closed */
+      }
+    }, ms);
+    this.metricsTimer.unref?.();
+  }
+
+  private stopMetricsEmitter(): void {
+    if (this.metricsTimer) {
+      clearInterval(this.metricsTimer);
+      this.metricsTimer = null;
+    }
+  }
+
   /** True when a backup interval timer is armed (tests). */
   hasBackupScheduler(): boolean {
     return this.backupTimer !== null;
+  }
+
+  private clearTxTimer(txId: number): void {
+    const timer = this.txTimers.get(txId);
+    if (timer) {
+      clearTimeout(timer);
+      this.txTimers.delete(txId);
+    }
+  }
+
+  private noteError(err: unknown): void {
+    this.monitor.recordError();
+    if (this.listenerCount('error') > 0) {
+      this.emit('error', err);
+    }
+  }
+
+  private async maybeDeltaSnapshot(collection: string): Promise<void> {
+    if (!this.changelog?.needsSnapshot(collection)) return;
+    await this.store!.ensureLoaded(collection);
+    const docs = await this.store!.readAll(collection);
+    await this.changelog.writeSnapshot(collection, docs);
   }
 
   private async runScheduledBackup(): Promise<void> {
@@ -980,6 +1069,15 @@ export class JSONSQLite extends EventEmitter {
 
     if (Array.isArray(data)) {
       const out: Document[] = [];
+      const deltaBatch: Array<{
+        ts: number;
+        op: 'insert';
+        collection: string;
+        id: string;
+        before: null;
+        after: Document;
+      }> = [];
+      const ts = Date.now();
       for (const item of data) {
         const doc = await this.store!.insert(collection, item, {
           durable: !inTx,
@@ -987,8 +1085,8 @@ export class JSONSQLite extends EventEmitter {
         if (inTx) this.noteWriteIntent(collection, doc._id, 'insert', 0, doc);
         if (!inTx) {
           this.indexes!.onInsert(collection, doc);
-          await this.changelog!.append({
-            ts: Date.now(),
+          deltaBatch.push({
+            ts,
             op: 'insert',
             collection,
             id: doc._id,
@@ -999,6 +1097,7 @@ export class JSONSQLite extends EventEmitter {
         out.push(doc);
       }
       if (!inTx) {
+        await this.changelog!.appendMany(deltaBatch);
         this.touchCaches(collection);
         this.monitor.recordWrite();
         await this.persistIndexState(collection);
@@ -1477,6 +1576,7 @@ export class JSONSQLite extends EventEmitter {
   ): Promise<number> {
     this.assertReady();
     const id = this.tx!.begin(isolationLevel);
+    this.lastTxId = id;
     if (isolationLevel === 'REPEATABLE_READ') {
       const snap = new Map<string, Map<string, Document>>();
       for (const info of this.catalog!.list()) {
@@ -1488,20 +1588,61 @@ export class JSONSQLite extends EventEmitter {
       }
       this.tx!.captureSnapshot(id, snap);
     }
+    const timeout = this.options.transactionTimeoutMs;
+    if (timeout > 0 && isolationLevel !== 'REPEATABLE_READ') {
+      const timer = setTimeout(() => {
+        void (async () => {
+          try {
+            if (this.tx?.active?.id === id) {
+              this.timedOutTx.add(id);
+              await this.rollbackTransaction(id);
+              this.noteError(
+                new JSONSQLiteError(
+                  ErrorCode.TX_TIMEOUT,
+                  `Transaction ${id} exceeded transactionTimeoutMs=${timeout} and was rolled back`,
+                  { txId: id, timeoutMs: timeout },
+                ),
+              );
+            }
+          } catch {
+            /* already closed */
+          }
+        })();
+      }, timeout);
+      timer.unref?.();
+      this.txTimers.set(id, timer);
+    }
     return id;
+  }
+
+  private assertTxNotTimedOut(txId?: number): void {
+    const id = txId ?? this.tx?.active?.id ?? this.lastTxId ?? undefined;
+    if (id !== undefined && this.timedOutTx.has(id)) {
+      this.timedOutTx.delete(id);
+      throw new JSONSQLiteError(
+        ErrorCode.TX_TIMEOUT,
+        `Transaction ${id} exceeded transactionTimeoutMs and was rolled back`,
+        { txId: id },
+      );
+    }
   }
 
   async commitTransaction(txId?: number): Promise<void> {
     this.assertReady();
+    this.assertTxNotTimedOut(txId);
     if (txId !== undefined && this.tx!.isSnapshot(txId)) {
+      this.clearTxTimer(txId);
       await this.tx!.commit(txId);
       return;
     }
+    const activeId = this.tx!.active?.id;
     if (this.options.writers === 'multi' && this.tx!.active) {
       await this.commitMulti(txId);
+      if (activeId !== undefined) this.clearTxTimer(activeId);
       return;
     }
     const result = await this.tx!.commit(txId);
+    if (activeId !== undefined) this.clearTxTimer(activeId);
     if (result.kind === 'snapshot') return;
     await this.afterWriteCommit(result.touched);
   }
@@ -1663,7 +1804,9 @@ export class JSONSQLite extends EventEmitter {
 
   async rollbackTransaction(txId?: number): Promise<void> {
     this.assertReady();
+    const activeId = txId ?? this.tx!.active?.id;
     await this.tx!.rollback(txId);
+    if (activeId !== undefined) this.clearTxTimer(activeId);
   }
 
   async backupFull(): Promise<BackupInfo> {
@@ -1743,6 +1886,8 @@ export class JSONSQLite extends EventEmitter {
     type: BackupType;
     file?: string;
     collection?: string;
+    /** PITR: apply only changes with ts <= to (epoch ms). */
+    to?: number;
   }): Promise<void> {
     this.assertReady();
     const list = await this.backup!.list();
@@ -1771,7 +1916,11 @@ export class JSONSQLite extends EventEmitter {
     }
     for (const payload of decoded.slice(1)) {
       if (payload.type === 'incremental' || payload.type === 'differential') {
-        applyIncrementalChanges(collections, payload.changes, opts.collection);
+        const changes =
+          opts.to !== undefined
+            ? payload.changes.filter((c) => c.ts <= opts.to!)
+            : payload.changes;
+        applyIncrementalChanges(collections, changes, opts.collection);
       }
     }
     for (const [name, docs] of Object.entries(collections)) {
@@ -1792,7 +1941,13 @@ export class JSONSQLite extends EventEmitter {
   ): Promise<Document[]> {
     this.assertReady();
     await this.store!.ensureLoaded(collection);
+    const retention = this.options.timeTravelRetentionMs;
+    const oldestKept = Date.now() - retention;
     const changes = await this.changelog!.readSince(collection, 0);
+    if (timestamp < oldestKept && changes.every((c) => c.ts > timestamp)) {
+      // Retention pruned the needed history. Documented empty result, not an undeclared throw.
+      return [];
+    }
     const at = reconstructAtTime(
       await this.store!.readAll(collection),
       changes,
@@ -1808,8 +1963,29 @@ export class JSONSQLite extends EventEmitter {
     return diffDocs(a, b);
   }
 
-  async rollbackToTime(collection: string, timestamp: number): Promise<void> {
+  async rollbackToTime(
+    collection: string,
+    timestamp: number,
+    opts?: { confirm?: boolean; caller?: string },
+  ): Promise<void> {
     this.assertReady();
+    if (!opts?.confirm) {
+      await this.audit?.append(
+        'rollbackToTime',
+        `rollback refused without confirm for ${collection} to ${timestamp}`,
+        {
+          collection,
+          timestamp,
+          confirmed: false,
+          caller: opts?.caller ?? 'api',
+        },
+      );
+      throw new JSONSQLiteError(
+        ErrorCode.CONFIRM_REQUIRED,
+        'rollbackToTime requires confirm: true (CLI: --yes)',
+        { collection, timestamp },
+      );
+    }
     const docs = await this.queryAtTime(collection, timestamp);
     await this.store!.replaceAllDurable(collection, docs);
     for (const idx of this.indexes!.findForCollection(collection)) {
@@ -1820,6 +1996,8 @@ export class JSONSQLite extends EventEmitter {
     await this.audit?.append('rollbackToTime', `rollback ${collection} to ${timestamp}`, {
       collection,
       timestamp,
+      confirmed: true,
+      caller: opts.caller ?? 'api',
     });
     this.emit('dataChanged', { op: 'rollback', collection, timestamp });
   }
@@ -1857,6 +2035,7 @@ export class JSONSQLite extends EventEmitter {
         queriesTotal: metrics.queriesTotal,
         writesTotal: metrics.writesTotal,
         errorsTotal: metrics.errorsTotal,
+        p99: metrics.p99,
       })) ?? []
     );
   }
@@ -1892,10 +2071,16 @@ export class JSONSQLite extends EventEmitter {
     const normalized = foldQuery(query);
     const indexes = this.indexes!.findForCollection(normalized.collection);
     const choice = chooseIndex(normalized.filter, indexes);
-    return adviseQuery(normalized, this.indexes!.list(), undefined, {
-      selectivity: choice?.selectivity ?? 1,
-      indexWeight: choice?.indexWeight ?? FULL_SCAN_WEIGHT,
-    });
+    return adviseQuery(
+      normalized,
+      this.indexes!.list(),
+      undefined,
+      {
+        selectivity: choice?.selectivity ?? 1,
+        indexWeight: choice?.indexWeight ?? FULL_SCAN_WEIGHT,
+      },
+      this.monitor.rejectedIndexKeys(),
+    );
   }
 
   /**
@@ -1984,6 +2169,155 @@ export class JSONSQLite extends EventEmitter {
     return analyzeQuality(await this.store!.readAll(collection), requiredFields);
   }
 
+  /**
+   * Explicit data-quality repair. Open and timers never call this.
+   * Returns the in-memory fixed docs; persist with replace when desired.
+   */
+  async autoFix(
+    collection: string,
+    requiredFields: string[] = [],
+  ): Promise<{ fixed: number; skipped: number; actions: string[] }> {
+    this.assertReady();
+    this.autoFixCalls += 1;
+    await this.store!.ensureLoaded(collection);
+    const { docs, result } = autoFixDocs(
+      await this.store!.readAll(collection),
+      requiredFields,
+    );
+    if (result.fixed > 0) {
+      await this.store!.replaceAllDurable(collection, docs);
+      this.touchCaches(collection);
+    }
+    return result;
+  }
+
+  /** Test helper: how many times autoFix ran in this process. */
+  autoFixCallCount(): number {
+    return this.autoFixCalls;
+  }
+
+  acceptAdvice(advice: {
+    collection?: string;
+    field?: string;
+    type?: string;
+    message?: string;
+  }): void {
+    this.assertReady();
+    this.monitor.recordAdviceFeedback({ decision: 'accept', ...advice });
+  }
+
+  rejectAdvice(advice: {
+    collection?: string;
+    field?: string;
+    type?: string;
+    message?: string;
+  }): void {
+    this.assertReady();
+    this.monitor.recordAdviceFeedback({ decision: 'reject', ...advice });
+  }
+
+  async loadPlugin(filePath: string): Promise<PluginManifest> {
+    this.assertReady();
+    const plugin = await loadPluginFromPath(filePath);
+    this.registerPlugin(plugin);
+    return {
+      kind: plugin.kind,
+      name: plugin.name,
+      version: plugin.version,
+      ...(plugin.stub !== undefined ? { stub: plugin.stub } : {}),
+      ...(plugin.availableIn ? { availableIn: plugin.availableIn } : {}),
+    };
+  }
+
+  /**
+   * Run a queryLanguage plugin parse, then the built-in executor.
+   * Non-JSON-query shapes are rejected without executing plugin code further.
+   */
+  async queryFromPlugin(
+    pluginName: string,
+    input: unknown,
+  ): Promise<Document[]> {
+    this.assertReady();
+    const live = this.plugins!.find(pluginName, 'queryLanguage') as
+      | (EnginePlugin & { parse?: (input: unknown) => unknown })
+      | undefined;
+    const parser =
+      live && typeof live.parse === 'function' ? live.parse.bind(live) : null;
+    if (!parser) {
+      throw new JSONSQLiteError(
+        ErrorCode.PLUGIN_REJECTED,
+        `queryLanguage plugin "${pluginName}" is not registered`,
+      );
+    }
+    const parsed = parser(input);
+    if (!isJsonQueryShape(parsed)) {
+      throw new JSONSQLiteError(
+        ErrorCode.PLUGIN_REJECTED,
+        'queryLanguage.parse must return a JSON query object with a collection field',
+      );
+    }
+    return this.query(parsed);
+  }
+
+  l3Status() {
+    this.assertReady();
+    return (
+      this.l3?.status() ?? {
+        enabled: false,
+        available: false,
+        reason: 'disabled',
+        hits: 0,
+        misses: 0,
+      }
+    );
+  }
+
+  getOptionsSnapshot() {
+    this.assertReady();
+    return {
+      cacheSize: this.options.cacheSize,
+      compression: this.options.compression,
+      compressionThreshold: this.options.compressionThreshold,
+      timeTravelRetentionMs: this.options.timeTravelRetentionMs,
+      transactionTimeoutMs: this.options.transactionTimeoutMs,
+      metricsIntervalMs: this.options.metricsIntervalMs,
+      memoryWatermarkBytes: this.options.memoryWatermarkBytes,
+      deltaSnapshotThreshold: this.options.deltaSnapshotThreshold,
+      autoTuneMinHits: this.options.autoTuneMinHits,
+      l3: this.options.l3,
+      redis: this.options.redis,
+    };
+  }
+
+  async forceDeltaSnapshot(collection: string): Promise<boolean> {
+    this.assertReady();
+    await this.store!.ensureLoaded(collection);
+    const result = await this.changelog!.writeSnapshot(
+      collection,
+      await this.store!.readAll(collection),
+    );
+    return result.ok;
+  }
+
+  async writeCorruptDeltaSnapshot(collection: string): Promise<void> {
+    this.assertReady();
+    await this.store!.ensureLoaded(collection);
+    await this.changelog!.writeCorruptSnapshot(
+      collection,
+      await this.store!.readAll(collection),
+    );
+  }
+
+  async deltaCount(collection: string): Promise<number> {
+    this.assertReady();
+    return this.changelog!.count(collection);
+  }
+
+  async readDeltaEntries(collection: string): Promise<ChangeEntry[]> {
+    this.assertReady();
+    return this.changelog!.readSince(collection, 0);
+  }
+
   getMetrics() {
     this.assertReady();
     const base = this.monitor.metrics(
@@ -1991,8 +2325,27 @@ export class JSONSQLite extends EventEmitter {
       this.catalog!.list().length,
     );
     const l2 = this.l2?.stats;
+    const tables: Record<string, { docs: number; indexes: number }> = {};
+    const walBytes: Record<string, number> = {};
+    for (const info of this.catalog!.list()) {
+      const indexes = this.indexes!.list().filter((i) => i.collection === info.name)
+        .length;
+      tables[info.name] = {
+        docs: info.documentCount ?? 0,
+        indexes,
+      };
+      try {
+        walBytes[info.name] = statSync(walFile(this.storagePath, info.name)).size;
+      } catch {
+        walBytes[info.name] = 0;
+      }
+    }
     return {
       ...base,
+      lockWaitMs: this.options.writers === 'multi' ? base.lockWaitMs : 0,
+      tables,
+      walBytes,
+      l3: this.l3Status(),
       l2: l2
         ? { enabled: true as const, ...l2 }
         : {
@@ -2099,11 +2452,23 @@ export class JSONSQLite extends EventEmitter {
     } catch {
       writable = false;
     }
+    const report = await describeLocks(this.storagePath, this.options.writers);
+    const lockCount =
+      'pids' in report.lockHolder
+        ? report.lockHolder.pids.length
+        : report.lockHolder.pid
+          ? 1
+          : 0;
     return this.monitor.health(
       this.ready,
       writable,
       this.cache!.stats.hitRate,
       this.catalog!.list().length,
+      {
+        memoryBytes: process.memoryUsage().heapUsed,
+        lockCount,
+        memoryWatermarkBytes: this.options.memoryWatermarkBytes,
+      },
     );
   }
 
@@ -2631,6 +2996,7 @@ export class JSONSQLite extends EventEmitter {
   private afterMutation(collection: string, ids: string[]): void {
     for (const id of ids) this.tiers?.forget(collection, id);
     this.scheduleColumnRebuild(collection);
+    void this.maybeDeltaSnapshot(collection).catch((err) => this.noteError(err));
   }
 
   private scheduleColumnRebuild(collection: string): void {
@@ -2846,7 +3212,14 @@ function applyIncrementalChanges(
     const list = collections[change.collection] ?? [];
     const map = new Map(list.map((doc) => [doc._id, doc]));
     if (change.op === 'delete') map.delete(change.id);
-    else if (change.after) map.set(change.id, { ...change.after });
+    else if (change.after) {
+      const prev = map.get(change.id);
+      if (change.patch && prev) {
+        map.set(change.id, { ...prev, ...(change.after as object) } as Document);
+      } else {
+        map.set(change.id, { ...(change.after as Document) });
+      }
+    }
     collections[change.collection] = [...map.values()];
   }
 }

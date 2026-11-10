@@ -1,13 +1,13 @@
 # @webofcat/jsonsqlite
 
-**版本：3.1.0** · **非 LTS** · 默认单写者 · Node.js ≥ 20 · 作者：hanlin
+**版本：3.2.0** · **非 LTS** · **不是设计完工版** · 设计完工线 **3.6** · 默认单写者 · Node.js ≥ 20 · 作者：hanlin
 
-这一版补索引和存储算法。相对 3.0 是 **MINOR**。不写新配置时，打开 2.5 / 3.0 库的读写结果与 3.0 一致。文档页格式不变（`formatVersion` 仍是 2）。B+Tree、列存、hybrid、智能压缩、分层和外部冷目录都默认关闭。
+这一版收口单机运维与体验。相对 3.1 是 **MINOR**。Redis、`autoFix` 默认关闭。不缩短已有 changelog。不写新配置时，打开 3.1 库的结果与 3.1 一致。
 
-生产 pin 仍是 **LTS-2（2.2）**。需要同一台机器多写者时用 **LTS-3（2.5，`lts-3`）**。本包不是长期支持线。不带 tag 的安装得到 `latest`，这一版是 3.1.0。
+生产 pin 仍是 **LTS-2（2.2）**。需要同一台机器多写者时用 **LTS-3（2.5，`lts-3`）**。本包不是长期支持线。不带 tag 的安装得到 `latest`，这一版是 3.2.0。
 
 ```bash
-# 不带 tag：latest，这一版是 3.1.0。新存储默认关闭
+# 不带 tag：latest，这一版是 3.2.0
 npm install @webofcat/jsonsqlite
 
 # 单写者生产
@@ -18,19 +18,127 @@ npm install @webofcat/jsonsqlite@lts-2
 npm install @webofcat/jsonsqlite@lts-3
 ```
 
-`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.1.0。
+`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.2.0。
 
 ```ts
 import { getCompatibilityInfo, open } from '@webofcat/jsonsqlite';
 
 const info = getCompatibilityInfo();
-// version: '3.1.0'
+// version: '3.2.0'
 // lts: false
 // ltsLine: '2.5'   // 最新的 LTS 线（LTS-3），不是本包版本
 // writers: 'single'
 ```
 
-## 3.1 索引与存储
+## 3.2 单机运维
+
+### PITR
+
+时间戳单位是 **epoch 毫秒**。全量备份之后，再按序应用不晚于该时间的增量。该时间之后的写入不在恢复结果里。checksum 失败错误码是 `BACKUP_CHECKSUM`，目标目录不变。
+
+```bash
+jsonsqlite backup --type full -p ./data
+jsonsqlite backup --type incremental -p ./data
+jsonsqlite backup restore --to 1730000000000 -p ./data
+```
+
+```ts
+await db.restoreChain({ type: 'incremental', to: Date.now() });
+```
+
+### 时间旅行保留与回滚
+
+`timeTravelRetentionMs` 默认 **7 天**（604800000）。它裁 changelog；备份 `keepDays` 裁备份文件。过期变更被裁掉之后，更早的 `queryAtTime` 返回 **空数组**，不抛未说明的异常。
+
+```ts
+await db.rollbackToTime('docs', ts); // CONFIRM_REQUIRED，数据不变，审计 confirmed:false
+await db.rollbackToTime('docs', ts, { confirm: true, caller: 'ops' });
+// 审计字段：action=rollbackToTime，details.collection / timestamp / caller / confirmed
+```
+
+```bash
+jsonsqlite rollback --to 1730000000000 docs -p ./data          # 拒绝
+jsonsqlite rollback --to 1730000000000 docs --yes -p ./data    # 确认
+```
+
+### AutoTune
+
+默认关闭（`autoTune: false`）。打开后可灰度建议 **cacheSize** 与 **compression**；校验失败回到应用前配置。`autoIndex` 就是 `autoTune`；`autoTuneMinHits` 默认 **2**。
+
+```bash
+jsonsqlite tune --dry-run '{"collection":"users","filter":{"age":{"$gte":18}}}' -p ./data --json
+# entries 里能看到 action: cache | compression | recommend；dry-run 不改配置
+```
+
+### 数据质量
+
+`quality` / `analyzeQuality` 输出五项：completeness、uniqueness、accuracy、consistency、timeliness。建议不写库。
+
+```ts
+await db.analyzeQuality('docs', ['name']);
+await db.autoFix('docs', ['name']); // 仅显式调用；open 不会调用
+```
+
+### WebSocket 与 Admin
+
+```bash
+jsonsqlite admin serve -p ./data --port 3000
+```
+
+路径：`/admin`、`/admin/queries`、`/admin/tables`、`/admin/monitor`、`/admin/backup`、`/admin/settings`。查询台字段：`stages.parse|optimize|indexScan|dataLoad|execute`、`usedIndex`。生产仍要 token；非本机绑定与 2.0 TLS 门禁相同。SSE `/admin/events` 仍可用。
+
+```js
+const ws = new WebSocket('ws://127.0.0.1:3000/stream');
+ws.onmessage = (ev) => JSON.parse(ev.data); // { event: 'dataChanged'|'metrics', data }
+```
+
+`/stream` 上除了窗口结果，还有与 SSE 相同结构的 `metrics` 事件。
+
+### 插件与 Redis
+
+```bash
+jsonsqlite plugin load ./my-plugin.mjs -p ./data   # 校验失败非 0；随后查询仍可用
+```
+
+```ts
+import {
+  PLUGIN_KINDS,
+  PluginRegistry,
+  assertPluginManifest,
+  builtinPluginCatalog,
+  builtinPluginInfo,
+  createS3Stub,
+  createVectorStub,
+  isJsonQueryShape,
+  loadPluginFromPath,
+} from '@webofcat/jsonsqlite/plugin';
+```
+
+`l3` / `redis` 默认 false。未安装客户端时 `open` 成功，`db.l3Status()` 为关闭（`reason: 'module-not-found'`）。`replica` / `cluster` / `graphql` / `wasm` 仍被 `config validate` 拒绝。
+
+### Advisor、指标、事务、Delta
+
+```ts
+db.rejectAdvice({ collection: 'users', field: 'age' }); // 写入 Monitor.adviceFeedback；下次不自动建该索引
+db.on('metrics', (m) => m.p99); // metricsIntervalMs 默认 5000
+// 无 error 监听器时失败只增加 errorsTotal，进程不崩
+```
+
+`getMetrics()` 含窗口 `qps`、`p50`/`p95`/`p99`、`lockWaitMs`（单写者为 0）、`walBytes`、`tables`。`alerts.responseTimeMs` 与 **p99** 比较。`/health` 含 `memoryBytes`、`lockCount`；`memoryWatermarkBytes: 0` 时不因此 degraded。
+
+`transactionTimeoutMs` 默认 0。大于 0 时超时回滚，错误码 `TX_TIMEOUT`；已提交的上一笔仍在。
+
+Delta 只记变更字段（`patch: true`）。达到 `deltaSnapshotThreshold`（默认 1000）后写带 checksum 的快照，成功后才按 7 天窗删旧 delta；checksum 失败不删。磁盘满 / 无权限：`STORAGE_FULL` / `STORAGE_PERMISSION`。
+
+配置保持扁平。示例：`timeTravelRetentionMs`、`transactionTimeoutMs`、`alerts.responseTimeMs`、`autoTuneMinHits`、`metricsIntervalMs`。不接受嵌套 `cache`。`syncMode: 'full'` 即 fsync。
+
+性能数字只引用 [`devDocs/releases/v3.2.0/性能包络.md`](../../devDocs/releases/v3.2.0/性能包络.md)。
+
+### 这一版明确不做
+
+复制、Quorum、GraphQL、多库、可用向量、可用 S3、Raft、WASM、HTTP 文档 REST（在 3.4）。
+
+## 3.1 索引与存储（历史）
 
 下面的开关不写进配置时，行为与 3.0 相同。2.5 库可以直接打开。索引分段如果和当前进程不兼容，会在 `open` 时重建索引，文档页不迁移。
 

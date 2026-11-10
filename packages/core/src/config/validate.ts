@@ -73,14 +73,27 @@ export const V31_CONFIG_KEYS = [
 ] as const;
 
 /**
- * Design §9 / later-plan keys that must not appear in a 2.2 config.
- * They are refused by name. They are not stripped and not applied.
- * `cache` is here because §9 nests Redis L3 under `cache.l3`; the frozen
- * field is `cacheSize`.
+ * Opt-in in 3.2. Default off or equal to the 3.1 path.
+ * `l3` / `redis` are accepted; missing client keeps L3 closed.
  */
-export const DANGEROUS_CONFIG_KEYS = [
+export const V32_CONFIG_KEYS = [
+  'autoTuneMinHits',
+  'timeTravelRetentionMs',
+  'transactionTimeoutMs',
+  'metricsIntervalMs',
+  'memoryWatermarkBytes',
+  'deltaSnapshotThreshold',
   'l3',
   'redis',
+] as const;
+
+/**
+ * Design §9 / later-plan keys that must not appear in a supported config.
+ * They are refused by name. They are not stripped and not applied.
+ * `cache` is here because §9 nests Redis L3 under `cache.l3`; the frozen
+ * field is `cacheSize`. `l3` / `redis` moved to V32_CONFIG_KEYS in 3.2.
+ */
+export const DANGEROUS_CONFIG_KEYS = [
   'cache',
   'cluster',
   'replica',
@@ -100,6 +113,7 @@ const frozen = new Set<string>([
   ...V24_CONFIG_KEYS,
   ...V30_CONFIG_KEYS,
   ...V31_CONFIG_KEYS,
+  ...V32_CONFIG_KEYS,
 ]);
 const dangerous = new Set<string>(DANGEROUS_CONFIG_KEYS);
 
@@ -125,13 +139,13 @@ export function validateConfig(input: unknown): ResolvedOptions {
     if (rejectedDangerous.length > 0) {
       const names = rejectedDangerous.map((k) => `"${k}"`).join(', ');
       parts.push(
-        `Rejected dangerous config key(s) ${names}: not part of the supported contract (no cluster, replica, L3/redis, GraphQL, or WASM). The key is not applied`,
+        `Rejected dangerous config key(s) ${names}: not part of the supported contract (no cluster, replica, GraphQL, or WASM). The key is not applied`,
       );
     }
     if (unknown.length > 0) {
       const names = unknown.map((k) => `"${k}"`).join(', ');
       parts.push(
-        `Unknown config key(s) ${names}: not in the 2.2 frozen set or the 2.3/2.4/3.0/3.1 opt-in set. Refused and not applied`,
+        `Unknown config key(s) ${names}: not in the 2.2 frozen set or the 2.3/2.4/3.0/3.1/3.2 opt-in set. Refused and not applied`,
       );
     }
     throw new JSONSQLiteError(ErrorCode.INVALID_CONFIG, parts.join('; '), {

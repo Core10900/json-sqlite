@@ -42,6 +42,8 @@ export interface EnginePlugin extends PluginManifest {
   decompress?(payload: string): string;
   backup?(ctx: { storagePath: string }): Promise<void> | void;
   search?(ctx: { collection: string; vector: number[] }): unknown;
+  /** queryLanguage only. Must return a JSON query object. */
+  parse?(input: unknown): unknown;
 }
 
 export interface PluginErrorRecord {

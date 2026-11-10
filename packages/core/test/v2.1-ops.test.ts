@@ -174,7 +174,7 @@ describe('v2.1.0 monitor audit recovery', () => {
     await db.insert('users', { _id: 'u', name: 'v1' });
     await db.update('users', 'u', { name: 'v2' });
     const ts = Date.now();
-    await db.rollbackToTime('users', ts - 60_000);
+    await db.rollbackToTime('users', ts - 60_000, { confirm: true, caller: 'test' });
     await db.dropTable('users');
     await db.close();
 

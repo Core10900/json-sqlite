@@ -151,6 +151,8 @@ export interface JSONSQLiteOptions {
   autoTune?: boolean;
   /** When autoTune is on, only record recommendations (default true). */
   autoTuneDryRun?: boolean;
+  /** Minimum slow-query hits before AutoTune acts (default 2). Same as design autoIndexThreshold. */
+  autoTuneMinHits?: number;
   /**
    * Persist index segments (checksummed) so the next open can serve
    * equality/range lookups without rebuilding. Default true. Set false
@@ -199,11 +201,18 @@ export interface JSONSQLiteOptions {
    */
   alerts?: {
     rules?: Array<{
-      kind: 'cache_hit' | 'error_rate' | 'corrupt' | 'backup_failed';
+      kind:
+        | 'cache_hit'
+        | 'error_rate'
+        | 'corrupt'
+        | 'backup_failed'
+        | 'response_time';
       cacheHitBelow?: number;
       errorRateAbove?: number;
     }>;
     webhookUrl?: string | null;
+    /** Fire when recent p99 exceeds this many ms. */
+    responseTimeMs?: number;
   };
   /**
    * Master switch for the 2.3 column store. Default false.
@@ -279,6 +288,27 @@ export interface JSONSQLiteOptions {
    * `[]` keeps every token. Applied on open and on `setStopWords`.
    */
   stopWords?: string[];
+  /**
+   * Changelog retention for time travel (ms). Default 7 days.
+   * Separate from backup `keepDays`.
+   */
+  timeTravelRetentionMs?: number;
+  /**
+   * Transaction timeout (ms). Default 0 (off). Timed-out txs roll back.
+   */
+  transactionTimeoutMs?: number;
+  /** Interval for `metrics` events (ms). Default 5000. */
+  metricsIntervalMs?: number;
+  /**
+   * Heap watermark for /health. Default 0 reports only and never degrades.
+   */
+  memoryWatermarkBytes?: number;
+  /** Delta lines before a checksummed snapshot. Default 1000. */
+  deltaSnapshotThreshold?: number;
+  /** Optional Redis L3. Default false. Missing client keeps L3 closed. */
+  l3?: boolean;
+  /** Redis marker. Default false. Missing client does not fail open. */
+  redis?: boolean;
 }
 
 /** Optional read scope. `txId` selects a REPEATABLE_READ snapshot. */

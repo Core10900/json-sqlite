@@ -23,7 +23,7 @@ export interface CompatibilityInfo {
    * On 3.0.0 this is not the package version. Single-writer users still pin 2.2.
    */
   ltsLine: '2.5';
-  /** CLI surface. 3.1.0 keeps the 3.0 commands and adds storage advise. */
+  /** CLI surface. 3.2.0 adds PITR restore, rollback --yes, quality, plugin load. */
   cliSurface: string;
   /** Default open mode. Multi-writer is opt-in and is not this field. */
   writers: 'single';
@@ -60,7 +60,7 @@ export function getCompatibilityInfo(): CompatibilityInfo {
     formatVersion: FORMAT_VERSION,
     lts: false,
     ltsLine: '2.5',
-    cliSurface: '3.1.0',
+    cliSurface: '3.2.0',
     writers: 'single',
     features: [
       'encryption',
@@ -131,6 +131,16 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'front-coding',
       'tier-compression',
       'stop-words',
+      'pitr',
+      'time-travel-retention',
+      'data-quality',
+      'websocket-stream',
+      'admin-pages',
+      'plugin-load',
+      'l3-optional',
+      'metrics-window',
+      'transaction-timeout',
+      'delta-snapshot',
     ],
   };
 }

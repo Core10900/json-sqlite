@@ -1,5 +1,8 @@
 import type { Document } from '../types/index.js';
-import type { ChangeEntry } from '../storage/ChangeLog.js';
+import {
+  applyPatchDoc,
+  type ChangeEntry,
+} from '../storage/ChangeLog.js';
 import { executeJsonQuery } from '../query/JsonQuery.js';
 import type { JsonQuery } from '../types/index.js';
 
@@ -11,10 +14,6 @@ export function reconstructAtTime(
   const map = new Map<string, Document>();
   for (const d of baseDocs) map.set(d._id, { ...d });
 
-  // If we only have forward changelog from empty/current, rebuild by applying
-  // changes with ts <= timestamp onto empty map when base is "current".
-  // Strategy: start empty, apply all changes up to timestamp in order.
-  // Caller should pass baseDocs = [] when using full changelog from origin.
   if (baseDocs.length === 0) {
     map.clear();
   }
@@ -28,12 +27,19 @@ export function reconstructAtTime(
       applyChange(map, c);
     }
   } else {
-    // Walk backward from current using reverse of changes after timestamp
-    const future = changes
-      .filter((c) => c.ts > timestamp)
-      .sort((a, b) => b.ts - a.ts);
-    for (const c of future) {
-      revertChange(map, c);
+    // Prefer forward rebuild from empty when the log has patch entries.
+    // Otherwise walk backward from current using reverse of later changes.
+    const hasPatch = changes.some((c) => c.patch);
+    if (hasPatch) {
+      map.clear();
+      for (const c of ordered) applyChange(map, c);
+    } else {
+      const future = changes
+        .filter((c) => c.ts > timestamp)
+        .sort((a, b) => b.ts - a.ts);
+      for (const c of future) {
+        revertChange(map, c);
+      }
     }
   }
 
@@ -43,16 +49,33 @@ export function reconstructAtTime(
 function applyChange(map: Map<string, Document>, c: ChangeEntry): void {
   if (c.op === 'delete') {
     map.delete(c.id);
-  } else if (c.after) {
-    map.set(c.id, { ...c.after });
+    return;
   }
+  if (c.op === 'insert') {
+    const doc = applyPatchDoc(null, c);
+    if (doc) map.set(c.id, doc as Document);
+    return;
+  }
+  const prev = map.get(c.id) ?? null;
+  const next = applyPatchDoc(prev, c);
+  if (next) map.set(c.id, next as Document);
+  else map.delete(c.id);
 }
 
 function revertChange(map: Map<string, Document>, c: ChangeEntry): void {
   if (c.op === 'insert') {
     map.delete(c.id);
+  } else if (c.patch) {
+    // Without the prior full document, reverse a field patch by restoring
+    // the before patch values when present.
+    const current = map.get(c.id);
+    if (!current) return;
+    if (c.before && typeof c.before === 'object') {
+      Object.assign(current, c.before);
+      map.set(c.id, current);
+    }
   } else if (c.before && typeof c.before === 'object') {
-    map.set(c.id, { ...c.before });
+    map.set(c.id, { ...(c.before as Document) });
   } else {
     map.delete(c.id);
   }

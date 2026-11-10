@@ -371,4 +371,33 @@ jsonsqlite insert|update|delete|index|sql --help
 
 帮助文本里没有 replica、cluster。
 
+---
+
+## 22. 3.1 索引与存储（非 LTS）
+
+> **3.1.0 非 LTS。** `version` 为 `3.1.0`，`lts` 为 false。默认不打开新存储。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `index create <table> <field> --type tree\|geo` | ✅ | B+Tree / 网格 |
+| `index compact <table>` | ✅ | 合并分段；范围结果不变 |
+| `storage advise <table>` | ✅ | 只打印建议，`applied` 恒为 false |
+
+---
+
+## 23. 3.2 单机运维（非 LTS，非设计完工）
+
+> **3.2.0 非 LTS，不是设计完工版。** `version` 为 `3.2.0`，`lts` 为 false。Redis / autoFix 默认关闭。设计完工线 3.6。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `backup restore --to <timestamp>` | ✅ | PITR。epoch ms。checksum 失败 exit 1，目标不变 |
+| `rollback --to <timestamp> <table> --yes` | ✅ | 无 `--yes` 拒绝，`CONFIRM_REQUIRED` |
+| `quality <table>` | ✅ | 五项分数，不写库 |
+| `plugin load <path>` | ✅ | 校验失败非 0；已打开的库仍可查询 |
+| `tune --dry-run [json-query]` | ✅ | 打印 cache / compression 建议，不改配置 |
+| `admin serve` | ✅ | `/stream` WebSocket；Admin 六个路径；SSE 保留 |
+| `version --json` | ✅ | `3.2.0`，`lts: false` |
+
+帮助文本里没有 replica、cluster、graphql、wasm。
 

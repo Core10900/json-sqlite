@@ -140,6 +140,10 @@ export async function dispatch(argv: string[]): Promise<void> {
       return cmdBackup(ctx, rest);
     case 'tune':
       return cmdTune(ctx, rest);
+    case 'rollback':
+      return cmdRollback(ctx, rest);
+    case 'quality':
+      return cmdQuality(ctx, rest);
     case 'audit':
       return cmdAudit(ctx, rest);
     case 'migrate':
@@ -988,6 +992,22 @@ async function cmdPlugin(ctx: CliContext, rest: string[]): Promise<void> {
     });
     return;
   }
+  if (sub === 'load') {
+    const [file] = positionals(rest.slice(1));
+    if (!file) fail(ctx.out, '用法: jsonsqlite plugin load <path>', 'USAGE');
+    await withDb(ctx, async (db) => {
+      try {
+        const manifest = await db.loadPlugin(file);
+        printSuccess(ctx.out, `✓ plugin loaded ${manifest.name}@${manifest.version}`, {
+          action: 'plugin.load',
+          plugin: manifest,
+        });
+      } catch (err) {
+        failFromError(ctx.out, err);
+      }
+    });
+    return;
+  }
   fail(ctx.out, `Unknown plugin subcommand: ${sub}`, 'USAGE', ExitCode.USAGE, helpPlugin());
 }
 
@@ -1133,17 +1153,30 @@ async function cmdBackup(ctx: CliContext, rest: string[]): Promise<void> {
     }
     const collection = flagAny(rest, ['--collection', '--table']);
     const file = flag(rest, '--file');
+    const toRaw = flag(rest, '--to');
+    let to: number | undefined;
+    if (toRaw !== undefined) {
+      to = Number(toRaw);
+      if (!Number.isFinite(to)) {
+        fail(ctx.out, '--to 必须是 epoch 毫秒时间戳', 'USAGE');
+      }
+    }
     await withDb(ctx, async (db) => {
+      // PITR always walks full + later incrementals, then cuts at --to.
+      const type =
+        to !== undefined && typeRaw === 'full' ? 'incremental' : typeRaw;
       await db.restoreChain({
-        type: typeRaw,
+        type,
         ...(collection ? { collection } : {}),
         ...(file ? { file } : {}),
+        ...(to !== undefined ? { to } : {}),
       });
-      printSuccess(ctx.out, `✓ restore ${typeRaw}${collection ? ` ${collection}` : ''}`, {
+      printSuccess(ctx.out, `✓ restore ${typeRaw}${collection ? ` ${collection}` : ''}${to !== undefined ? ` to ${to}` : ''}`, {
         action: 'backup.restore',
         type: typeRaw,
         collection: collection ?? null,
         file: file ?? null,
+        to: to ?? null,
       });
     });
     return;
@@ -1211,24 +1244,90 @@ async function cmdTune(ctx: CliContext, rest: string[]): Promise<void> {
     : ({ collection: 'users' } as JsonQuery);
   await withDb(ctx, async (db) => {
     const before = await db.listIndexes();
+    const optionsBefore = db.getOptionsSnapshot();
     db.configureAutoTune({ enabled: true, dryRun });
     const entries = await db.runAutoTune(seed);
     const advice = db.advise(seed);
     const after = await db.listIndexes();
+    const optionsAfter = db.getOptionsSnapshot();
     if (dryRun && JSON.stringify(before) !== JSON.stringify(after)) {
       fail(ctx.out, 'tune --dry-run must not change indexes', 'INTERNAL');
     }
+    if (
+      dryRun &&
+      (optionsBefore.cacheSize !== optionsAfter.cacheSize ||
+        optionsBefore.compression !== optionsAfter.compression)
+    ) {
+      fail(ctx.out, 'tune --dry-run must not change cache or compression', 'INTERNAL');
+    }
     printData(
       ctx.out,
-      JSON.stringify({ dryRun, advice, entries, indexes: after }, null, 2),
+      JSON.stringify(
+        {
+          dryRun,
+          advice,
+          entries,
+          indexes: after,
+          cacheSize: optionsAfter.cacheSize,
+          compression: optionsAfter.compression,
+        },
+        null,
+        2,
+      ),
       {
         action: 'tune',
         dryRun,
         advice,
         entries,
         indexes: after,
+        cacheSize: optionsAfter.cacheSize,
+        compression: optionsAfter.compression,
       },
     );
+  });
+}
+
+async function cmdRollback(ctx: CliContext, rest: string[]): Promise<void> {
+  const toRaw = flag(rest, '--to');
+  const collection = flagAny(rest, ['--collection', '--table']) ?? positional(rest);
+  if (!toRaw || !collection) {
+    fail(ctx.out, '用法: jsonsqlite rollback --to <timestamp> <table> --yes', 'USAGE');
+  }
+  const timestamp = Number(toRaw);
+  if (!Number.isFinite(timestamp)) {
+    fail(ctx.out, '--to 必须是 epoch 毫秒时间戳', 'USAGE');
+  }
+  if (!(ctx.globals.yes || hasFlag(rest, '--yes', '-y'))) {
+    fail(ctx.out, 'rollback 需要 --yes 确认，否则不会改数据', 'CONFIRM_REQUIRED');
+  }
+  await withDb(ctx, async (db) => {
+    await db.rollbackToTime(collection, timestamp, {
+      confirm: true,
+      caller: 'cli',
+    });
+    printSuccess(ctx.out, `✓ rollback ${collection} to ${timestamp}`, {
+      action: 'rollback',
+      collection,
+      timestamp,
+    });
+  });
+}
+
+async function cmdQuality(ctx: CliContext, rest: string[]): Promise<void> {
+  const table = positional(rest);
+  if (!table) fail(ctx.out, '用法: jsonsqlite quality <table>', 'USAGE');
+  await withDb(ctx, async (db) => {
+    const before = await db.query({ collection: table });
+    const report = await db.analyzeQuality(table);
+    const after = await db.query({ collection: table });
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      fail(ctx.out, 'quality must not write the database', 'INTERNAL');
+    }
+    printData(ctx.out, JSON.stringify(report, null, 2), {
+      action: 'quality',
+      collection: table,
+      report,
+    });
   });
 }
 

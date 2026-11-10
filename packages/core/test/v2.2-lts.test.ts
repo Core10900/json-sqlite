@@ -10,6 +10,7 @@ import {
   FROZEN_CONFIG_KEYS,
   V30_CONFIG_KEYS,
   V31_CONFIG_KEYS,
+  V32_CONFIG_KEYS,
   validateConfig,
   validateConfigFile,
 } from '../src/config/validate.js';
@@ -130,23 +131,27 @@ describe('v2.2.0 LTS-2', () => {
       ...FROZEN_CONFIG_KEYS,
       ...V30_CONFIG_KEYS,
       ...V31_CONFIG_KEYS,
+      ...V32_CONFIG_KEYS,
     ]);
     const dangerous = new Set<string>(DANGEROUS_CONFIG_KEYS);
     for (const key of Object.keys(example)) {
       expect(frozen.has(key)).toBe(true);
       expect(dangerous.has(key)).toBe(false);
     }
-    const requiredDangerous = ['cluster', 'replica', 'l3', 'redis', 'cache', 'raft'];
+    const requiredDangerous = ['cluster', 'replica', 'cache', 'raft'];
+    if (!getVersion().startsWith('3.2.') && !getVersion().startsWith('3.3.') && !getVersion().startsWith('3.4.') && !getVersion().startsWith('3.5.') && !getVersion().startsWith('3.6.')) {
+      requiredDangerous.push('l3', 'redis');
+    }
     if (getVersion().startsWith('2.2.') || getVersion().startsWith('2.3.')) {
       requiredDangerous.push('writers');
     }
     for (const key of requiredDangerous) {
       expect(dangerous.has(key)).toBe(true);
-      expect(example).not.toHaveProperty(key);
+      if (key !== 'l3' && key !== 'redis') expect(example).not.toHaveProperty(key);
     }
 
     expect(() =>
-      validateConfig({ storagePath: './data', cluster: { nodes: 3 }, l3: { type: 'redis' } }),
+      validateConfig({ storagePath: './data', cluster: { nodes: 3 }, graphql: true }),
     ).toThrow(/Rejected dangerous config key/);
 
     const cliOk = await cli(['config', 'validate', '--file', exampleFile, '--json']);

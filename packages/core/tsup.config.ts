@@ -18,7 +18,7 @@ const shared = {
 export default defineConfig([
   {
     ...shared,
-    entry: { index: 'src/index.ts' },
+    entry: { index: 'src/index.ts', plugin: 'src/plugin.ts' },
     format: ['esm', 'cjs'],
     dts: true,
     clean: true,

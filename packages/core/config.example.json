@@ -10,6 +10,7 @@
   "prefetchCollections": [],
   "autoTune": false,
   "autoTuneDryRun": true,
+  "autoTuneMinHits": 2,
   "persistIndexes": true,
   "l2Cache": false,
   "l2CacheSize": 5000,
@@ -21,12 +22,20 @@
   "maxResidentDocs": 256,
   "backupIntervalMs": 0,
   "alerts": {
-    "rules": []
+    "rules": [],
+    "responseTimeMs": 0
   },
   "compileFilters": false,
   "bTreeOrder": 128,
   "storageAdvise": false,
   "hybridCollections": [],
   "hybridFields": [],
-  "compressionSampleWindow": 64
+  "compressionSampleWindow": 64,
+  "timeTravelRetentionMs": 604800000,
+  "transactionTimeoutMs": 0,
+  "metricsIntervalMs": 5000,
+  "memoryWatermarkBytes": 0,
+  "deltaSnapshotThreshold": 1000,
+  "l3": false,
+  "redis": false
 }

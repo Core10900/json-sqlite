@@ -15,9 +15,19 @@ export interface AutoTuneConfig {
 
 export interface AutoTuneAuditEntry {
   ts: number;
-  action: 'recommend' | 'create' | 'skip' | 'rollback' | 'apply_failed';
+  action:
+    | 'recommend'
+    | 'create'
+    | 'skip'
+    | 'rollback'
+    | 'apply_failed'
+    | 'cache'
+    | 'compression';
   message: string;
-  suggestion?: { collection: string; field: string; type: IndexType };
+  suggestion?:
+    | { collection: string; field: string; type: IndexType }
+    | { kind: 'cacheSize'; value: number }
+    | { kind: 'compression'; enabled: boolean; threshold?: number };
   dryRun: boolean;
 }
 
@@ -38,6 +48,15 @@ export interface AutoTuneDeps {
   ) => Promise<IndexMeta>;
   dropIndex: (collection: string, field: string) => Promise<void>;
   getSlowQueries: (threshold?: number) => QueryMetric[];
+  getRejectedIndexes?: () => Set<string>;
+  getRuntimeHints?: () => {
+    cacheHitRate: number;
+    cacheSize: number;
+    compressionEnabled: boolean;
+    compressionThreshold: number;
+  };
+  applyCacheSize?: (size: number) => void;
+  applyCompression?: (enabled: boolean, threshold?: number) => void;
   /**
    * Optional post-apply check. Throw to trigger rollback of indexes
    * created in this tick.
@@ -105,9 +124,101 @@ export class AutoTune {
     const indexes = this.deps.listIndexes();
     const before = indexes.map((i) => ({ ...i }));
     const advice: Advice[] = [];
+    const rejected = this.deps.getRejectedIndexes?.() ?? new Set<string>();
+    const runtime = this.deps.getRuntimeHints?.();
+    const configBefore = runtime
+      ? {
+          cacheSize: runtime.cacheSize,
+          compressionEnabled: runtime.compressionEnabled,
+          compressionThreshold: runtime.compressionThreshold,
+        }
+      : null;
 
     if (seed) {
-      advice.push(...adviseQuery(seed, indexes));
+      advice.push(
+        ...adviseQuery(seed, indexes).filter((a) => {
+          if (a.type !== 'index' || !a.suggestion) return true;
+          const sug = a.suggestion as { collection: string; field: string };
+          return !rejected.has(`${sug.collection}.${sug.field}`);
+        }),
+      );
+    }
+
+    if (runtime) {
+      if (runtime.cacheHitRate < 0.5) {
+        const next = Math.max(runtime.cacheSize, Math.ceil(runtime.cacheSize * 1.5));
+        const entry: AutoTuneAuditEntry = {
+          ts: Date.now(),
+          action: 'cache',
+          message: `cache hit rate ${runtime.cacheHitRate.toFixed(3)}; suggest cacheSize ${next}`,
+          suggestion: { kind: 'cacheSize', value: next },
+          dryRun: this.config.dryRun,
+        };
+        this.audit.push(entry);
+        created.push(entry);
+        if (!this.config.dryRun && this.deps.applyCacheSize) {
+          try {
+            this.deps.applyCacheSize(next);
+            await this.deps.validateApply?.([]);
+          } catch (err) {
+            this.deps.applyCacheSize(configBefore!.cacheSize);
+            const msg = err instanceof Error ? err.message : String(err);
+            const fail: AutoTuneAuditEntry = {
+              ts: Date.now(),
+              action: 'apply_failed',
+              message: `cacheSize apply failed: ${msg}`,
+              dryRun: false,
+            };
+            this.audit.push(fail);
+            created.push(fail);
+            this.audit.push({
+              ts: Date.now(),
+              action: 'rollback',
+              message: `rolled back cacheSize to ${configBefore!.cacheSize}`,
+              dryRun: false,
+            });
+          }
+        }
+      }
+      if (!runtime.compressionEnabled) {
+        const entry: AutoTuneAuditEntry = {
+          ts: Date.now(),
+          action: 'compression',
+          message: 'suggest enabling compression for large documents',
+          suggestion: {
+            kind: 'compression',
+            enabled: true,
+            threshold: runtime.compressionThreshold,
+          },
+          dryRun: this.config.dryRun,
+        };
+        this.audit.push(entry);
+        created.push(entry);
+        if (!this.config.dryRun && this.deps.applyCompression) {
+          try {
+            this.deps.applyCompression(true, runtime.compressionThreshold);
+            await this.deps.validateApply?.([]);
+          } catch (err) {
+            this.deps.applyCompression(
+              configBefore!.compressionEnabled,
+              configBefore!.compressionThreshold,
+            );
+            const msg = err instanceof Error ? err.message : String(err);
+            this.audit.push({
+              ts: Date.now(),
+              action: 'apply_failed',
+              message: `compression apply failed: ${msg}`,
+              dryRun: false,
+            });
+            this.audit.push({
+              ts: Date.now(),
+              action: 'rollback',
+              message: 'rolled back compression settings',
+              dryRun: false,
+            });
+          }
+        }
+      }
     }
 
     const slow = this.deps.getSlowQueries();

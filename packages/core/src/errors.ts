@@ -36,6 +36,16 @@ export enum ErrorCode {
   QUERY_TIMEOUT = 'QUERY_TIMEOUT',
   /** A configured tokenizer module failed. Point reads stay available. */
   TOKENIZER_FAILED = 'TOKENIZER_FAILED',
+  /** Disk is full. The failed write was not committed. */
+  STORAGE_FULL = 'STORAGE_FULL',
+  /** Target path is not writable. The failed write was not committed. */
+  STORAGE_PERMISSION = 'STORAGE_PERMISSION',
+  /** Transaction exceeded transactionTimeoutMs and was rolled back. */
+  TX_TIMEOUT = 'TX_TIMEOUT',
+  /** A destructive op needs an explicit confirm / --yes. */
+  CONFIRM_REQUIRED = 'CONFIRM_REQUIRED',
+  /** Plugin name/version/parse contract rejected the module. */
+  PLUGIN_REJECTED = 'PLUGIN_REJECTED',
   ENCRYPTION = 'ENCRYPTION',
   INTERNAL = 'INTERNAL',
 }

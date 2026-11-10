@@ -27,20 +27,22 @@ Commands:
   query [--timeout ms]       JSON query. --timeout overrides queryTimeout (exit 1 on QUERY_TIMEOUT)
   index list|create|drop|rebuild|compact   index management
   storage advise <table>     print a storage suggestion; does not change the table
-  plugin list|info           built-in plugin catalog (no remote install)
+  plugin list|info|load      built-in catalog or load a disk plugin entry
+  quality <table>            five quality scores; does not write the library
+  rollback --to <ts> --yes   confirmed time-travel rollback
   stats                      database / table statistics
   explain                    index, selectivity, chunked, earlyStop, profile stages
   advise                     Advisor (aligns with explain fields)
   aggregate                  aggregation pipeline (unwind/lookup)
   admin serve                start Admin HTTP + SSE
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version (3.1.0, lts: false, ltsLine 2.5)
+  compat / version [--json]  compatibility / version (3.2.0, lts: false, ltsLine 2.5)
   config validate --file <f> check a file against the frozen 2.2 config keys
   backup / vacuum [--compress] / rekey    ops
   backup --type full|incremental|differential
   backup prune --keep-days <n> [--max-count <n>]
-  backup restore --type full|incremental|differential [--collection name]
-  tune [--dry-run] [json-query]          AutoTune / Advisor (default dry-run)
+  backup restore --type full|incremental|differential [--collection name] [--to <ts>]
+  tune [--dry-run] [json-query]          AutoTune / Advisor (default dry-run); prints cache/compression tips
   audit list [--action name]             read-only audit log
   migrate --from <db> --to <new> --yes   1.x → 2.x
   doctor [--deep]            health / consistency; JSON includes writers and lockHolder
@@ -128,10 +130,13 @@ field histogram (field names and counts, not document text).
 export function helpPlugin(): string {
   return `jsonsqlite plugin list
 jsonsqlite plugin info <name>
+jsonsqlite plugin load <path>
 
 Lists the built-in catalog. vector and s3 are callable stubs.
 A usable vector index is planned for 3.3. A usable S3 upload is planned for 3.4.
-This command does not install plugins from a registry.
+plugin load reads a disk entry, checks name/version, and registers it.
+Validation failure exits non-zero; the open database can still be queried.
+queryLanguage.parse may only return a JSON query object for the built-in executor.
 `;
 }
 
@@ -145,7 +150,10 @@ Non-TTY: use jsonsqlite run "<sql>"
 export function helpAdmin(): string {
   return `jsonsqlite admin serve [--host 127.0.0.1] [--port 3000] [--token SECRET] [--once]
 
-Start Admin HTTP (dashboard + REST + SSE).
+Start Admin HTTP (dashboard + REST + SSE + WebSocket /stream).
+Paths: /admin, /admin/queries, /admin/tables, /admin/monitor, /admin/backup, /admin/settings.
+/admin/queries shows plan stages (parse/optimize/indexScan/dataLoad/execute) and usedIndex.
+/stream pushes dataChanged and the same metrics events as SSE. SSE stays available.
 Loopback may omit --token (a warning is printed).
 Non-loopback requires both --token and --cert/--key (TLS). Missing either refuses to listen.
 --once starts then exits (smoke / tests).
@@ -184,7 +192,7 @@ Does not add plugin, replica, or cluster commands.
 export function helpBackup(): string {
   return `jsonsqlite backup [--type full|incremental|differential]
 jsonsqlite backup prune --keep-days <n> [--max-count <n>]
-jsonsqlite backup restore --type full|incremental|differential [--collection <name>] [--file <path>]
+jsonsqlite backup restore --type full|incremental|differential [--collection <name>] [--file <path>] [--to <timestamp>]
 
 backup                  default --type full
   --type incremental    changes since last backup
@@ -192,15 +200,17 @@ backup                  default --type full
 backup prune            retention: delete expired / excess backups
 backup restore          apply a full backup, or full + incremental/differential chain
   --collection <name>   restore one collection; other collections stay unchanged
-Checksum mismatch refuses the restore and does not modify the target.
+  --to <timestamp>      PITR cut-off in epoch ms; later incremental changes are skipped
+Checksum mismatch refuses the restore and does not modify the target (BACKUP_CHECKSUM).
 `;
 }
 
 export function helpTune(): string {
   return `jsonsqlite tune [--dry-run] [--apply] ['{"collection":"users","filter":{...}}']
 
-Default is --dry-run: Advisor / AutoTune recommendations only; indexes are not changed.
-Pass --apply to create recommended indexes (still subject to AutoTune rollback on validation failure).
+Default is --dry-run: Advisor / AutoTune recommendations only; indexes, cacheSize, and compression stay unchanged.
+Pass --apply to create recommended indexes or apply cache/compression tips (rolled back on validation failure).
+autoTune is off by default. autoIndex is the same switch as autoTune; autoTuneMinHits defaults to 2.
 `;
 }
 
@@ -215,7 +225,7 @@ export function helpCompat(): string {
   return `jsonsqlite compat [--json]
 jsonsqlite version [--json]
 Print getCompatibilityInfo() / version.
-On 3.1.0: lts is false. ltsLine stays "2.5" (latest LTS line, LTS-3), not this package version.
+On 3.2.0: lts is false. ltsLine stays "2.5" (latest LTS line, LTS-3), not this package version. Not design-complete.
 writers is "single". Default open stays single-writer. Pin 2.2 unless you need multi-writer (lts-3 / 2.5).
 This release is not LTS. The lts tag stays on 2.2. PATCH on 3.0.x adds no subcommands.
 `;
@@ -228,13 +238,16 @@ Check a JSON file against the 2.2 keys plus the 2.3 and 2.4 opt-in keys.
 Does not open a database.
 Unknown keys are refused (exit 1, code INVALID_CONFIG) and are not applied.
 Dangerous keys (cluster, replica, replication, raft, quorum, shard,
-graphql, wasm, l3, redis, cache) are named in the error.
+graphql, wasm, cache) are named in the error. Nested cache objects stay refused.
 2.4 opt-in key writers is single or multi (default single). Omitting it stays single.
 2.3 opt-in keys (columnStore, storageTiers, smartCompression, and the rest
 listed in config validation) are accepted and default off.
 3.1 opt-in keys (bTreeOrder, storageAdvise, hybridCollections, hybridFields,
 coldExternalDir, compressionSampleWindow, stopWords) are accepted.
-Omitting them keeps the 3.0 read path. storage advise does not switch modes.
+3.2 opt-in keys (l3, redis, timeTravelRetentionMs, transactionTimeoutMs,
+metricsIntervalMs, memoryWatermarkBytes, deltaSnapshotThreshold, autoTuneMinHits)
+are accepted and default off or equal to 3.1. Missing Redis client keeps L3 closed.
+Omitting them keeps the 3.1 read path. storage advise does not switch modes.
 The frozen cache field is cacheSize, not cache / cache.l3.
 `;
 }
