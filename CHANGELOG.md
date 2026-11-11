@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.3.0 — 2026-11-11 · 非 LTS
+
+**非 LTS，也不是设计完工版。** 相对 3.2 为 **MAJOR**（复制日志格式）。异步主从复制默认关闭；不开启时打开 2.5 / 3.2 库的行为与 LTS-3 默认单写者一致。设计完工线是 **3.6**。
+
+`latest` 指向 3.3.0。`lts` / `lts-2` 仍是 2.2。`lts-3` 仍是 2.5。生产 pin 仍是 `lts`（2.2）。不新增 `lts-4`。
+
+### Added
+- 异步主从复制雏形（默认关闭）。`replica init --role primary|secondary`、`replica status`、`replica promote --yes`
+- 主库提交只表示本地成功；从库异步拉取 `replication/log.jsonl` 达到最终可见
+- 滞后可观测：`lagEntries`（条数）、`lagMs`（毫秒），出现在 `replica status`、metrics、`doctor`、开启复制后的 `/health`
+- 主宕机**不**自动选主。从库拒绝写入，错误码 `REPLICA_READONLY`；唯一提升命令是 `replica promote`
+- 配置键 `replica` 移出危险键，`config.example.json` 默认 `false`；`config validate` 仍拒绝 `cluster` / `graphql` / `wasm`
+- 复制关闭时 `/health` 不因没有从库而失败
+
+### Not in this release
+Quorum、读写分离、自动选主、自动故障切换、Raft、自动 rebalance、跨机锁、可用 S3、GraphQL、连接池、多库、WASM、可用向量（stub 的 `availableIn` 改为 3.4）。稳定帮助无 `cluster`。
+
 ## 3.2.0 — 2026-11-10 · 非 LTS
 
 **非 LTS，也不是设计完工版。** 相对 3.1 为 MINOR。默认不开启 Redis，不缩短已有 changelog，不自动修复数据。设计完工线是 **3.6**。

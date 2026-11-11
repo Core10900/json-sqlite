@@ -12,6 +12,13 @@ export type {
   CompatibilityInfo,
 } from './lifecycle.js';
 export { JSONSQLiteError, ErrorCode, isRetryableError } from './errors.js';
+export type {
+  ReplicaRole,
+  ReplicaStatus,
+  ReplicaStateFile,
+  ReplicaLogEntry,
+} from './replica/ReplicaManager.js';
+export { REPLICA_LOG_FORMAT } from './replica/ReplicaManager.js';
 export { parseSql } from './sql/parse.js';
 export { rekeyDatabase } from './ops/rekey.js';
 export { migrateDatabase } from './ops/migrate.js';

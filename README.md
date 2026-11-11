@@ -1,8 +1,8 @@
 # JSONSQLite
 
-**当前包：3.2.0**（**非 LTS**，单机运维收口，**不是设计完工版**；设计完工线 3.6） · **生产 pin：2.2.x**（`lts` / `lts-2`） · **`latest`：3.2.0** · **多写者 pin：`lts-3` = 2.5** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**当前包：3.3.0**（**非 LTS**，异步复制雏形，**不是设计完工版**；设计完工线 3.6） · **生产 pin：2.2.x**（`lts` / `lts-2`） · **`latest`：3.3.0** · **多写者 pin：`lts-3` = 2.5** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
-3.2.0 相对 3.1 是 MINOR。Redis 与 autoFix 默认关闭。不写新配置时，打开 3.1 库的结果与 3.1 一致。需要多写者才装 `lts-3`（2.5）；单写者生产仍 pin `lts`（2.2）。`lts` / `lts-2` 是 2.2，`lts-3` 是 2.5，不带 tag 的安装得到 `latest`（3.2.0）。性能数字见 [`devDocs/releases/v3.2.0/性能包络.md`](./devDocs/releases/v3.2.0/性能包络.md)。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
+3.3.0 相对 3.2 是 **MAJOR**（复制日志格式）。复制默认关闭；不开启时打开 2.5 / 3.2 库，行为与 LTS-3 默认单写者一致。主宕机**不**自动选主。需要多写者才装 `lts-3`（2.5）；单写者生产仍 pin `lts`（2.2）。`lts` / `lts-2` 是 2.2，`lts-3` 是 2.5，不带 tag 的安装得到 `latest`（3.3.0）。安装包说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
 
 ```bash
 npm install @webofcat/jsonsqlite@lts

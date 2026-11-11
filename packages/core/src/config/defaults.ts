@@ -158,6 +158,19 @@ const optionsSchema = z.object({
    * Alias / marker for Redis. Default false. Missing client does not fail open.
    */
   redis: z.boolean().default(false),
+  /**
+   * Async replication opt-in (3.3). Default false.
+   * Role still requires `replica init`. Object may set syncIntervalMs (ms).
+   */
+  replica: z
+    .union([
+      z.boolean(),
+      z.object({
+        enabled: z.boolean().optional(),
+        syncIntervalMs: z.number().int().positive().optional(),
+      }),
+    ])
+    .default(false),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;

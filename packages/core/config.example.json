@@ -37,5 +37,6 @@
   "memoryWatermarkBytes": 0,
   "deltaSnapshotThreshold": 1000,
   "l3": false,
-  "redis": false
+  "redis": false,
+  "replica": false
 }

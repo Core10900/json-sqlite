@@ -276,6 +276,7 @@ unsubscribe();
 | `TX_TIMEOUT` | 事务超过 `transactionTimeoutMs`，已回滚（3.2） |
 | `CONFIRM_REQUIRED` | 破坏性操作需要显式确认 / `--yes`（3.2） |
 | `PLUGIN_REJECTED` | 插件名、版本或 `queryLanguage.parse` 契约不通过（3.2） |
+| `REPLICA_READONLY` | 从库只读；在 `replica promote` 之前拒绝写入（3.3） |
 | `ENCRYPTION` | 加密/密钥错误 |
 | `INTERNAL` | 内部错误 |
 

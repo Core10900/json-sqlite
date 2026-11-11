@@ -36,8 +36,9 @@ Commands:
   aggregate                  aggregation pipeline (unwind/lookup)
   admin serve                start Admin HTTP + SSE
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version (3.2.0, lts: false, ltsLine 2.5)
+  compat / version [--json]  compatibility / version (3.3.0, lts: false, ltsLine 2.5)
   config validate --file <f> check a file against the frozen 2.2 config keys
+  replica init|status|promote            async primary/secondary (default off; no auto promote)
   backup / vacuum [--compress] / rekey    ops
   backup --type full|incremental|differential
   backup prune --keep-days <n> [--max-count <n>]
@@ -133,10 +134,23 @@ jsonsqlite plugin info <name>
 jsonsqlite plugin load <path>
 
 Lists the built-in catalog. vector and s3 are callable stubs.
-A usable vector index is planned for 3.3. A usable S3 upload is planned for 3.4.
+A usable vector index is planned for 3.4+. A usable S3 upload is planned for 3.4.
 plugin load reads a disk entry, checks name/version, and registers it.
 Validation failure exits non-zero; the open database can still be queried.
 queryLanguage.parse may only return a JSON query object for the built-in executor.
+`;
+}
+
+export function helpReplica(): string {
+  return `jsonsqlite replica init --role primary|secondary [--primary-path <dir>]
+jsonsqlite replica status [--json]
+jsonsqlite replica promote --yes
+
+Async primary/secondary replication (default off). Not high availability.
+Commit on the primary is local only — secondaries catch up asynchronously.
+lagEntries is counted in log entries; lagMs is milliseconds.
+There is no automatic promote and no cluster command.
+Secondary writes fail with REPLICA_READONLY until replica promote --yes.
 `;
 }
 
@@ -225,19 +239,19 @@ export function helpCompat(): string {
   return `jsonsqlite compat [--json]
 jsonsqlite version [--json]
 Print getCompatibilityInfo() / version.
-On 3.2.0: lts is false. ltsLine stays "2.5" (latest LTS line, LTS-3), not this package version. Not design-complete.
-writers is "single". Default open stays single-writer. Pin 2.2 unless you need multi-writer (lts-3 / 2.5).
-This release is not LTS. The lts tag stays on 2.2. PATCH on 3.0.x adds no subcommands.
+On 3.3.0: lts is false. ltsLine stays "2.5" (latest LTS line, LTS-3), not this package version. Not design-complete.
+writers is "single". Default open stays single-writer. Replication default off.
+Pin 2.2 unless you need multi-writer (lts-3 / 2.5). The lts tag stays on 2.2.
 `;
 }
 
 export function helpConfig(): string {
   return `jsonsqlite config validate --file <path>
 
-Check a JSON file against the 2.2 keys plus the 2.3 and 2.4 opt-in keys.
+Check a JSON file against the 2.2 keys plus later opt-in keys.
 Does not open a database.
 Unknown keys are refused (exit 1, code INVALID_CONFIG) and are not applied.
-Dangerous keys (cluster, replica, replication, raft, quorum, shard,
+Dangerous keys (cluster, replication, raft, quorum, shard,
 graphql, wasm, cache) are named in the error. Nested cache objects stay refused.
 2.4 opt-in key writers is single or multi (default single). Omitting it stays single.
 2.3 opt-in keys (columnStore, storageTiers, smartCompression, and the rest
@@ -247,7 +261,8 @@ coldExternalDir, compressionSampleWindow, stopWords) are accepted.
 3.2 opt-in keys (l3, redis, timeTravelRetentionMs, transactionTimeoutMs,
 metricsIntervalMs, memoryWatermarkBytes, deltaSnapshotThreshold, autoTuneMinHits)
 are accepted and default off or equal to 3.1. Missing Redis client keeps L3 closed.
-Omitting them keeps the 3.1 read path. storage advise does not switch modes.
+3.3 opt-in key replica is accepted (boolean or object) and defaults false.
+Role still requires replica init. cluster / graphql / wasm stay refused.
 The frozen cache field is cacheSize, not cache / cache.l3.
 `;
 }
@@ -294,6 +309,11 @@ export function helpFor(path: string[]): string | null {
     case 'config':
     case 'config validate':
       return helpConfig();
+    case 'replica':
+    case 'replica init':
+    case 'replica status':
+    case 'replica promote':
+      return helpReplica();
     case 'migrate':
       return helpMigrate();
     case 'backup':

@@ -1,13 +1,13 @@
 # @webofcat/jsonsqlite
 
-**版本：3.2.0** · **非 LTS** · **不是设计完工版** · 设计完工线 **3.6** · 默认单写者 · Node.js ≥ 20 · 作者：hanlin
+**版本：3.3.0** · **非 LTS** · **不是设计完工版** · 设计完工线 **3.6** · 默认单写者 · 复制默认关闭 · Node.js ≥ 20 · 作者：hanlin
 
-这一版收口单机运维与体验。相对 3.1 是 **MINOR**。Redis、`autoFix` 默认关闭。不缩短已有 changelog。不写新配置时，打开 3.1 库的结果与 3.1 一致。
+这一版提供**异步复制雏形**。相对 3.2 是 **MAJOR**（复制日志格式）。复制默认关闭；不开启时打开 2.5 / 3.2 库，行为与 LTS-3 默认单写者一致。主宕机**不**自动选主，也没有自动故障切换。
 
-生产 pin 仍是 **LTS-2（2.2）**。需要同一台机器多写者时用 **LTS-3（2.5，`lts-3`）**。本包不是长期支持线。不带 tag 的安装得到 `latest`，这一版是 3.2.0。
+生产 pin 在 3.6 宣布前仍是 **LTS-2（2.2）** / 多写者 **LTS-3（2.5）**。本包不是长期支持线。不带 tag 的安装得到 `latest`，这一版是 3.3.0。
 
 ```bash
-# 不带 tag：latest，这一版是 3.2.0
+# 不带 tag：latest，这一版是 3.3.0（复制默认关闭）
 npm install @webofcat/jsonsqlite
 
 # 单写者生产
@@ -18,17 +18,95 @@ npm install @webofcat/jsonsqlite@lts-2
 npm install @webofcat/jsonsqlite@lts-3
 ```
 
-`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.2.0。
+`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.3.0。
 
 ```ts
 import { getCompatibilityInfo, open } from '@webofcat/jsonsqlite';
 
 const info = getCompatibilityInfo();
-// version: '3.2.0'
+// version: '3.3.0'
 // lts: false
 // ltsLine: '2.5'   // 最新的 LTS 线（LTS-3），不是本包版本
 // writers: 'single'
 ```
+
+## 3.3 异步复制（默认关闭）
+
+拓扑是**一个主、一个或多个从**。主库本地提交成功**不能**当成从库已经收到。从库异步拉取主库的 `replication/log.jsonl`，达到**最终可见**，不是同步确认。
+
+### 关闭 vs 开启
+
+```ts
+// 关闭（默认）：仍是单机，可直接打开 2.5 / 3.2 库
+const db = await open({ storagePath: './data' });
+// 或显式
+const dbOff = await open({ storagePath: './data', replica: false });
+
+// 开启复制选项（仍须 replica init 写出角色；open 不会自动 init）
+const primary = await open({
+  storagePath: './primary',
+  replica: { syncIntervalMs: 100 },
+});
+await primary.replicaInit({ role: 'primary' });
+
+const secondary = await open({
+  storagePath: './secondary',
+  replica: { syncIntervalMs: 100 },
+});
+await secondary.replicaInit({
+  role: 'secondary',
+  primaryPath: './primary',
+});
+```
+
+```bash
+jsonsqlite replica init --role primary -p ./primary
+jsonsqlite replica init --role secondary --primary-path ./primary -p ./secondary
+jsonsqlite replica status -p ./secondary --json
+```
+
+### 滞后字段与单位
+
+`metrics`、`doctor`、`replica status`、开启复制后的 `/health` 使用同一套字段：
+
+| 字段 | 单位 | 含义 |
+|------|------|------|
+| `lagEntries` | **条数** | 主库尖端 LSN − 已应用 LSN |
+| `lagMs` | **毫秒** | 主库尖端时间 − 已应用时间 |
+| `appliedLsn` / `replicatedPrefix` | LSN | 已安全应用的前缀 |
+| `role` | 枚举 | `none` / `primary` / `secondary` |
+
+滞后变大时第一步：看 `replica status`，确认从库进程在跑、`primaryPath` 可读、主库日志在增长。
+
+### 主宕机之后
+
+1. 从库停在已复制前缀，**继续拒绝写入**。
+2. 没有自动选主。错误码：`REPLICA_READONLY`。
+3. 确认旧主不再写入后，执行唯一提升命令：
+
+```bash
+jsonsqlite replica promote --yes -p ./secondary
+```
+
+提升前数据停在 `appliedLsn`；未复制的主库尾部不会自动追回。没有这条命令时从库保持只读前缀。
+
+### 迁移（复制仍关闭）
+
+- **3.2 → 3.3** / **2.5 → 3.3**：不开启复制时直接用 3.3 打开即可；也可用 `migrate --from … --to … --yes` 拷贝到新目录。开启复制是**可选项**，与迁移无关。
+- 分片路由本版**未实现**，稳定帮助中不出现；默认请求不经过路由器。
+
+### `/health` 与配置
+
+- 复制关闭：`/health` 成功，`replica.enabled === false`，**不**因没有从库而失败。
+- 复制打开：含 `role`、`lagEntries`、`lagMs` 等，单位与 `replica status` 相同。
+
+`config.example.json` 中 `"replica": false`。`config validate` 接受它，仍拒绝 `cluster`。
+
+### 路线
+
+Quorum、读写分离、可用冷存储与接入层在 **3.4**。选主在 **3.5**。长期稳定线是 **3.6**。本版不做 Raft、自动 rebalance、跨机锁、GraphQL、WASM。CLI 有 `replica init` / `status` / `promote`，**没有** `cluster`。
+
+详细协议见 [`devDocs/releases/v3.3.0/RFC-异步复制.md`](../../devDocs/releases/v3.3.0/RFC-异步复制.md)。
 
 ## 3.2 单机运维
 
@@ -252,7 +330,7 @@ await db.findById('docs', 'hot');
 
 ### 这一版明确不做
 
-Redis、复制、S3 实际上传、可用的向量检索、GraphQL、集群。`vector` 仍是 stub，`availableIn` 是 `3.3`。`s3` 仍是 stub，`availableIn` 是 `3.4`，`putCold` 只计数，不上传对象。
+Redis（默认关）、S3 实际上传、可用的向量检索、GraphQL、集群。异步复制在 3.3 以默认关闭的形式提供。`vector` 仍是 stub，`availableIn` 是 `3.4`。`s3` 仍是 stub，`availableIn` 是 `3.4`，`putCold` 只计数，不上传对象。
 
 下面用同一批文档说明旧过滤没有改结果：
 
@@ -838,7 +916,7 @@ db.pluginErrors();
 
 钩子抛错被隔离：记入 `pluginErrors()`，不会变成查询失败。上面的 `onQuery` 就是隔离之后的调用方式。
 
-vector 和 S3 **只是可调用的 stub**，不是可用实现。可用的向量检索计划在 **3.3**，可用的 S3 冷存储计划在 **3.1**。
+vector 和 S3 **只是可调用的 stub**，不是可用实现。可用的向量检索计划在 **3.4+**，可用的 S3 冷存储计划在 **3.4**。
 
 ```ts
 import { createS3Stub, createVectorStub } from '@webofcat/jsonsqlite';
@@ -849,7 +927,7 @@ db.registerPlugin(vector);
 db.registerPlugin(s3);
 
 const found = await db.vectorSearch('docs', [0.1, 0.2]);
-// { hits: [], stub: true, availableIn: '3.3', called: true, collection: 'docs' }
+// { hits: [], stub: true, availableIn: '3.4', called: true, collection: 'docs' }
 // vector.calls === 1。hits 永远是空的，不能用来做近邻检索。
 
 await db.migrateTiersOnce();
@@ -866,7 +944,7 @@ jsonsqlite plugin info vector --json
 jsonsqlite plugin info s3 --json
 ```
 
-`plugin info vector` 的 `stub` 为 true，`availableIn` 为 `"3.3"`。`s3` 的 `availableIn` 为 `"3.4"`。3.1 不会实际上传对象。
+`plugin info vector` 的 `stub` 为 true，`availableIn` 为 `"3.4"`。`s3` 的 `availableIn` 为 `"3.4"`。本版不会实际上传对象。
 
 ---
 
@@ -988,7 +1066,7 @@ jsonsqlite index compact places -p ./data --json
 - 文档页格式升级。`formatVersion` 仍是 2。新存储不写配置时不会打开。
 - 复制、集群、自动选主、Redis。
 - GraphQL、Raft、WASM。
-- 可用的向量检索。`vectorSearch` 和 `createVectorStub()` 只证明钩子能被调用，命中列表为空。可用实现在 3.3。
+- 可用的向量检索。`vectorSearch` 和 `createVectorStub()` 只证明钩子能被调用，命中列表为空。可用实现在 3.4+。
 - 可用的 S3 上传。`createS3Stub()` 只计数，不传对象。可用实现在 3.4。
 
 需要多写者才升级；否则留在 LTS-2。

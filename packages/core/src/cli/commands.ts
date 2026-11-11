@@ -164,6 +164,8 @@ export async function dispatch(argv: string[]): Promise<void> {
       return cmdWatch(ctx, rest);
     case 'config':
       return cmdConfig(ctx, rest);
+    case 'replica':
+      return cmdReplica(ctx, rest, globals);
     default:
       fail(
         ctx.out,
@@ -173,6 +175,80 @@ export async function dispatch(argv: string[]): Promise<void> {
         '运行 jsonsqlite help 查看可用命令',
       );
   }
+}
+
+async function cmdReplica(
+  ctx: CliContext,
+  rest: string[],
+  g: GlobalFlags,
+): Promise<void> {
+  const sub = rest.find((a) => !a.startsWith('-'));
+  if (!sub || sub === 'help' || hasFlag(rest, '--help', '-h')) {
+    const text = helpFor(['replica']) ?? helpRoot();
+    console.log(text);
+    return;
+  }
+  if (sub === 'init') {
+    const roleRaw = flag(rest, '--role');
+    if (roleRaw !== 'primary' && roleRaw !== 'secondary') {
+      fail(
+        ctx.out,
+        'Usage: jsonsqlite replica init --role primary|secondary [--primary-path <dir>]',
+        'USAGE',
+        ExitCode.USAGE,
+      );
+    }
+    const primaryPath = flag(rest, '--primary-path') ?? undefined;
+    await withDb(ctx, async (db) => {
+      const status = await db.replicaInit({
+        role: roleRaw,
+        primaryPath,
+      });
+      printSuccess(
+        ctx.out,
+        `✓ replica init role=${status.role}`,
+        { action: 'replica.init', ...status },
+      );
+    });
+    return;
+  }
+  if (sub === 'status') {
+    await withDb(ctx, async (db) => {
+      const status = await db.replicaStatusFresh();
+      printSuccess(
+        ctx.out,
+        `replica role=${status.role} lagEntries=${status.lagEntries} lagMs=${status.lagMs} appliedLsn=${status.appliedLsn} lastLsn=${status.lastLsn}`,
+        { action: 'replica.status', ...status },
+      );
+    });
+    return;
+  }
+  if (sub === 'promote') {
+    if (!(g.yes || hasFlag(rest, '--yes', '-y'))) {
+      fail(
+        ctx.out,
+        'replica promote requires --yes (no automatic promote)',
+        'CONFIRM_REQUIRED',
+        ExitCode.USAGE,
+        'jsonsqlite replica promote --yes -p <secondary>',
+      );
+    }
+    await withDb(ctx, async (db) => {
+      const status = await db.replicaPromote();
+      printSuccess(
+        ctx.out,
+        `✓ replica promoted role=${status.role} appliedLsn=${status.appliedLsn}`,
+        { action: 'replica.promote', ...status },
+      );
+    });
+    return;
+  }
+  fail(
+    ctx.out,
+    'Usage: jsonsqlite replica init|status|promote',
+    'USAGE',
+    ExitCode.USAGE,
+  );
 }
 
 async function cmdConfig(ctx: CliContext, rest: string[]): Promise<void> {

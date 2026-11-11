@@ -422,8 +422,15 @@ describe('v2.5.0 LTS-3', () => {
     const flags = help.slice(0, help.indexOf('Commands:'));
     for (const token of FROZEN_COMMANDS) expect(commands).toContain(token);
     expect(flags).toContain('--writers');
-    for (const banned of ['replica', 'cluster', 'graphql', 'savepoint', 'shard']) {
-      expect(commands).not.toContain(banned);
+    const banned =
+      getVersion().startsWith('3.3.') ||
+      getVersion().startsWith('3.4.') ||
+      getVersion().startsWith('3.5.') ||
+      getVersion().startsWith('3.6.')
+        ? ['cluster', 'graphql', 'shard']
+        : ['replica', 'cluster', 'graphql', 'savepoint', 'shard'];
+    for (const token of banned) {
+      expect(commands).not.toContain(token);
     }
     if (getVersion().startsWith('2.5.')) {
       expect(help).toMatch(/2\.5\.0, lts: true, ltsLine 2\.5/);

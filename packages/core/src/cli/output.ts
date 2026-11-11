@@ -93,7 +93,8 @@ export function mapErrorToExit(err: unknown): ExitCode {
       err.code === ErrorCode.WAL_CORRUPT ||
       err.code === ErrorCode.QUERY_TIMEOUT ||
       err.code === ErrorCode.QUERY_CANCELLED ||
-      err.code === ErrorCode.JSONPATH_UNSUPPORTED
+      err.code === ErrorCode.JSONPATH_UNSUPPORTED ||
+      err.code === ErrorCode.REPLICA_READONLY
     ) {
       return ExitCode.USAGE;
     }

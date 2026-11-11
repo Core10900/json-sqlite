@@ -401,3 +401,19 @@ jsonsqlite insert|update|delete|index|sql --help
 
 帮助文本里没有 replica、cluster、graphql、wasm。
 
+---
+
+## 24. 3.3 异步复制（非 LTS，非设计完工）
+
+> **3.3.0 非 LTS，不是设计完工版。** 相对 3.2 为 MAJOR（复制日志格式）。复制默认关闭。不自动选主。设计完工线 3.6。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `replica init --role primary\|secondary [--primary-path <dir>]` | ✅ | 写出角色；不在 open 时自动执行 |
+| `replica status [--json]` | ✅ | `role`、`lagEntries`（条数）、`lagMs`（毫秒）、`appliedLsn` |
+| `replica promote --yes` | ✅ | 唯一允许从库变可写的命令；无 `--yes` 拒绝 |
+| `version --json` | ✅ | `3.3.0`，`lts: false` |
+| `config validate --file` | ✅ | 接受默认关闭的 `replica`；仍拒绝 `cluster` |
+
+帮助文本有 `replica init|status|promote`，没有 `cluster`，没有自动提升。从库写入错误码 `REPLICA_READONLY`。
+

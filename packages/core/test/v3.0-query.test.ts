@@ -316,7 +316,9 @@ describe('v3.0.0 query engine', () => {
 
   it('FT-V30-CLI-01 explain --json is parseable and FT-V30-CLI-02 help has no replica or cluster', async () => {
     const help = helpRoot();
-    expect(help).not.toMatch(/\breplica\b/);
+    if (getVersion().startsWith('3.0.') || getVersion().startsWith('3.1.') || getVersion().startsWith('3.2.')) {
+      expect(help).not.toMatch(/\breplica\b/);
+    }
     expect(help).not.toMatch(/\bcluster\b/);
     const storagePath = await tmpDir();
     const db = await open({ storagePath });

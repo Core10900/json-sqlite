@@ -57,6 +57,25 @@ export async function runDoctor(
     details: health.checks,
   });
 
+  const replica = await db.replicaStatusFresh();
+  checks.push({
+    id: 'replica',
+    ok: true,
+    message: replica.enabled
+      ? `replica role=${replica.role} lagEntries=${replica.lagEntries} lagMs=${replica.lagMs} appliedLsn=${replica.appliedLsn} lastLsn=${replica.lastLsn}`
+      : 'replica disabled',
+    details: {
+      enabled: replica.enabled,
+      role: replica.role,
+      lagEntries: replica.lagEntries,
+      lagMs: replica.lagMs,
+      appliedLsn: replica.appliedLsn,
+      lastLsn: replica.lastLsn,
+      replicatedPrefix: replica.replicatedPrefix,
+      units: { lagEntries: 'entries', lagMs: 'milliseconds' },
+    },
+  });
+
   // catalog readable
   try {
     await fs.access(catalogFile(root));

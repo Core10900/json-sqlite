@@ -18,6 +18,20 @@ export interface HealthReport {
     memoryBytes: number;
     lockCount: number;
   };
+  /**
+   * Present when replication is initialized.
+   * lagEntries unit: entries. lagMs unit: milliseconds.
+   * Absent / enabled:false when replication is off — not a failure.
+   */
+  replica?: {
+    enabled: boolean;
+    role: 'none' | 'primary' | 'secondary';
+    lagEntries: number;
+    lagMs: number;
+    appliedLsn: number;
+    lastLsn: number;
+    replicatedPrefix: number;
+  };
   timestamp: number;
 }
 

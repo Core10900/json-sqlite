@@ -46,6 +46,11 @@ export enum ErrorCode {
   CONFIRM_REQUIRED = 'CONFIRM_REQUIRED',
   /** Plugin name/version/parse contract rejected the module. */
   PLUGIN_REJECTED = 'PLUGIN_REJECTED',
+  /**
+   * Secondary replica refuses writes until `replica promote`.
+   * Not retryable as a conflict — role must change first.
+   */
+  REPLICA_READONLY = 'REPLICA_READONLY',
   ENCRYPTION = 'ENCRYPTION',
   INTERNAL = 'INTERNAL',
 }

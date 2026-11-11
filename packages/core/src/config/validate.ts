@@ -88,15 +88,21 @@ export const V32_CONFIG_KEYS = [
 ] as const;
 
 /**
+ * Opt-in in 3.3. Default off (`false`).
+ * Role still requires `replica init`; omitting the key keeps single-node 3.2 behavior.
+ */
+export const V33_CONFIG_KEYS = ['replica'] as const;
+
+/**
  * Design §9 / later-plan keys that must not appear in a supported config.
  * They are refused by name. They are not stripped and not applied.
  * `cache` is here because §9 nests Redis L3 under `cache.l3`; the frozen
  * field is `cacheSize`. `l3` / `redis` moved to V32_CONFIG_KEYS in 3.2.
+ * `replica` moved to V33_CONFIG_KEYS in 3.3 (default off).
  */
 export const DANGEROUS_CONFIG_KEYS = [
   'cache',
   'cluster',
-  'replica',
   'replication',
   'raft',
   'quorum',
@@ -114,6 +120,7 @@ const frozen = new Set<string>([
   ...V30_CONFIG_KEYS,
   ...V31_CONFIG_KEYS,
   ...V32_CONFIG_KEYS,
+  ...V33_CONFIG_KEYS,
 ]);
 const dangerous = new Set<string>(DANGEROUS_CONFIG_KEYS);
 
@@ -139,13 +146,13 @@ export function validateConfig(input: unknown): ResolvedOptions {
     if (rejectedDangerous.length > 0) {
       const names = rejectedDangerous.map((k) => `"${k}"`).join(', ');
       parts.push(
-        `Rejected dangerous config key(s) ${names}: not part of the supported contract (no cluster, replica, GraphQL, or WASM). The key is not applied`,
+        `Rejected dangerous config key(s) ${names}: not part of the supported contract (no cluster, GraphQL, or WASM). The key is not applied`,
       );
     }
     if (unknown.length > 0) {
       const names = unknown.map((k) => `"${k}"`).join(', ');
       parts.push(
-        `Unknown config key(s) ${names}: not in the 2.2 frozen set or the 2.3/2.4/3.0/3.1/3.2 opt-in set. Refused and not applied`,
+        `Unknown config key(s) ${names}: not in the 2.2 frozen set or the 2.3/2.4/3.0/3.1/3.2/3.3 opt-in set. Refused and not applied`,
       );
     }
     throw new JSONSQLiteError(ErrorCode.INVALID_CONFIG, parts.join('; '), {

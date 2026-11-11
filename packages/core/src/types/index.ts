@@ -309,6 +309,17 @@ export interface JSONSQLiteOptions {
   l3?: boolean;
   /** Redis marker. Default false. Missing client does not fail open. */
   redis?: boolean;
+  /**
+   * Async replication (3.3). Default false.
+   * Role requires `replica init`. Object may set `syncIntervalMs`.
+   */
+  replica?:
+    | boolean
+    | {
+        enabled?: boolean;
+        /** Secondary pull interval in milliseconds. Default 100. */
+        syncIntervalMs?: number;
+      };
 }
 
 /** Optional read scope. `txId` selects a REPEATABLE_READ snapshot. */

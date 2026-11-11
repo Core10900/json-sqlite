@@ -99,6 +99,10 @@ import {
   tryLoadTokenizerModule,
   type ChineseTokenizer,
 } from '../tokenize/chinese.js';
+import {
+  ReplicaManager,
+  type ReplicaStatus,
+} from '../replica/ReplicaManager.js';
 import type {
   AlterTableSpec,
   CollectionInfo,
@@ -122,6 +126,15 @@ import type {
   VacuumOptions,
   VacuumResult,
 } from '../types/index.js';
+
+function replicaSyncIntervalMs(
+  replica: ResolvedOptions['replica'],
+): number {
+  if (replica && typeof replica === 'object' && replica.syncIntervalMs) {
+    return replica.syncIntervalMs;
+  }
+  return 100;
+}
 
 export class JSONSQLite extends EventEmitter {
   private readonly options: ResolvedOptions;
@@ -174,6 +187,7 @@ export class JSONSQLite extends EventEmitter {
   private autoFixCalls = 0;
   private ready = false;
   private lastBackupTs = 0;
+  private replica: ReplicaManager | null = null;
 
   constructor(options: JSONSQLiteOptions) {
     super();
@@ -482,12 +496,20 @@ export class JSONSQLite extends EventEmitter {
         );
       }
 
+      this.replica = new ReplicaManager(root, {
+        syncIntervalMs: replicaSyncIntervalMs(this.options.replica),
+      });
+      await this.replica.load();
       this.ready = true;
+      if (this.replica.role() === 'secondary') {
+        this.replica.startSync(this.replicaApplyHooks());
+      }
       this.startBackupScheduler();
       this.startMetricsEmitter();
       this.emit('ready');
       return this;
     } catch (err) {
+      this.replica?.stopSync();
       this.tiers?.stop();
       this.stopBackupScheduler();
       this.stopMetricsEmitter();
@@ -510,6 +532,7 @@ export class JSONSQLite extends EventEmitter {
       this.backup = null;
       this.audit = null;
       this.alerts = null;
+      this.replica = null;
       this.ready = false;
       throw err;
     }
@@ -517,6 +540,7 @@ export class JSONSQLite extends EventEmitter {
 
   async close(opts?: { flush?: boolean }): Promise<void> {
     if (!this.ready) return;
+    this.replica?.stopSync();
     this.stopBackupScheduler();
     this.stopMetricsEmitter();
     for (const timer of this.txTimers.values()) clearTimeout(timer);
@@ -557,6 +581,7 @@ export class JSONSQLite extends EventEmitter {
     this.backup = null;
     this.audit = null;
     this.alerts = null;
+    this.replica = null;
     this.lock = null;
     this.multi = null;
     this.autoTune = null;
@@ -657,6 +682,7 @@ export class JSONSQLite extends EventEmitter {
     options?: CreateTableOptions,
   ): Promise<CollectionInfo> {
     this.assertReady();
+    this.replica?.assertWritable();
     return this.catalog!.create(name, options?.fields);
   }
 
@@ -696,6 +722,7 @@ export class JSONSQLite extends EventEmitter {
 
   async dropTable(name: string): Promise<void> {
     this.assertReady();
+    this.replica?.assertWritable();
     if (!this.catalog!.has(name)) {
       throw new JSONSQLiteError(
         ErrorCode.COLLECTION_NOT_FOUND,
@@ -733,6 +760,7 @@ export class JSONSQLite extends EventEmitter {
 
   async alterTable(name: string, spec: AlterTableSpec): Promise<TableInfo> {
     this.assertReady();
+    this.replica?.assertWritable();
     const current = await this.describeTable(name);
     let fields: FieldDef[] = [...(current.fields ?? [])];
 
@@ -1061,6 +1089,7 @@ export class JSONSQLite extends EventEmitter {
     data: Record<string, unknown> | Record<string, unknown>[],
   ): Promise<Document | Document[]> {
     this.assertReady();
+    this.replica?.assertWritable();
     if (this.options.writers === 'multi' && !this.tx!.active) {
       return this.withImplicitTx(() => this.insert(collection, data));
     }
@@ -1069,14 +1098,7 @@ export class JSONSQLite extends EventEmitter {
 
     if (Array.isArray(data)) {
       const out: Document[] = [];
-      const deltaBatch: Array<{
-        ts: number;
-        op: 'insert';
-        collection: string;
-        id: string;
-        before: null;
-        after: Document;
-      }> = [];
+      const deltaBatch: ChangeEntry[] = [];
       const ts = Date.now();
       for (const item of data) {
         const doc = await this.store!.insert(collection, item, {
@@ -1098,6 +1120,7 @@ export class JSONSQLite extends EventEmitter {
       }
       if (!inTx) {
         await this.changelog!.appendMany(deltaBatch);
+        await this.replica?.appendCommitted(deltaBatch);
         this.touchCaches(collection);
         this.monitor.recordWrite();
         await this.persistIndexState(collection);
@@ -1111,14 +1134,16 @@ export class JSONSQLite extends EventEmitter {
     if (inTx) this.noteWriteIntent(collection, doc._id, 'insert', 0, doc);
     if (!inTx) {
       this.indexes!.onInsert(collection, doc);
-      await this.changelog!.append({
+      const entry: ChangeEntry = {
         ts: Date.now(),
         op: 'insert',
         collection,
         id: doc._id,
         before: null,
         after: doc,
-      });
+      };
+      await this.changelog!.append(entry);
+      await this.replica?.appendCommitted([entry]);
       this.touchCaches(collection);
       this.monitor.recordWrite();
       await this.persistIndexState(collection);
@@ -1135,6 +1160,7 @@ export class JSONSQLite extends EventEmitter {
     opts?: { expectedVersion?: number },
   ): Promise<Document> {
     this.assertReady();
+    this.replica?.assertWritable();
     if (this.options.writers === 'multi' && !this.tx!.active) {
       return this.withImplicitTx(() => this.update(collection, id, patch, opts));
     }
@@ -1152,14 +1178,16 @@ export class JSONSQLite extends EventEmitter {
     }
     if (!inTx) {
       this.indexes!.onUpdate(collection, prev, doc);
-      await this.changelog!.append({
+      const entry: ChangeEntry = {
         ts: Date.now(),
         op: 'update',
         collection,
         id,
         before: prev ?? null,
         after: doc,
-      });
+      };
+      await this.changelog!.append(entry);
+      await this.replica?.appendCommitted([entry]);
       this.touchCaches(collection);
       this.monitor.recordWrite();
       await this.persistIndexState(collection);
@@ -1171,6 +1199,7 @@ export class JSONSQLite extends EventEmitter {
 
   async delete(collection: string, id: string): Promise<boolean> {
     this.assertReady();
+    this.replica?.assertWritable();
     if (this.options.writers === 'multi' && !this.tx!.active) {
       return this.withImplicitTx(() => this.delete(collection, id));
     }
@@ -1185,14 +1214,16 @@ export class JSONSQLite extends EventEmitter {
     }
     if (ok && !inTx && prev) {
       this.indexes!.onDelete(collection, prev);
-      await this.changelog!.append({
+      const entry: ChangeEntry = {
         ts: Date.now(),
         op: 'delete',
         collection,
         id,
         before: prev,
         after: null,
-      });
+      };
+      await this.changelog!.append(entry);
+      await this.replica?.appendCommitted([entry]);
       this.touchCaches(collection);
       this.monitor.recordWrite();
       await this.persistIndexState(collection);
@@ -2340,12 +2371,23 @@ export class JSONSQLite extends EventEmitter {
         walBytes[info.name] = 0;
       }
     }
+    // Tip may be slightly stale until replicaStatusFresh / sync; units still match status().
+    const replica = this.replicaStatus();
     return {
       ...base,
       lockWaitMs: this.options.writers === 'multi' ? base.lockWaitMs : 0,
       tables,
       walBytes,
       l3: this.l3Status(),
+      replica: {
+        enabled: replica.enabled,
+        role: replica.role,
+        lagEntries: replica.lagEntries,
+        lagMs: replica.lagMs,
+        appliedLsn: replica.appliedLsn,
+        lastLsn: replica.lastLsn,
+        replicatedPrefix: replica.replicatedPrefix,
+      },
       l2: l2
         ? { enabled: true as const, ...l2 }
         : {
@@ -2459,7 +2501,7 @@ export class JSONSQLite extends EventEmitter {
         : report.lockHolder.pid
           ? 1
           : 0;
-    return this.monitor.health(
+    const base = this.monitor.health(
       this.ready,
       writable,
       this.cache!.stats.hitRate,
@@ -2470,6 +2512,148 @@ export class JSONSQLite extends EventEmitter {
         memoryWatermarkBytes: this.options.memoryWatermarkBytes,
       },
     );
+    const replica = await this.replicaStatusFresh();
+    // Replication off: do not report replica failure. On: expose role + lag units.
+    if (!replica.enabled) {
+      return {
+        ...base,
+        replica: {
+          enabled: false,
+          role: 'none' as const,
+          lagEntries: 0,
+          lagMs: 0,
+          appliedLsn: 0,
+          lastLsn: 0,
+          replicatedPrefix: 0,
+        },
+      };
+    }
+    return {
+      ...base,
+      replica: {
+        enabled: true,
+        role: replica.role,
+        lagEntries: replica.lagEntries,
+        lagMs: replica.lagMs,
+        appliedLsn: replica.appliedLsn,
+        lastLsn: replica.lastLsn,
+        replicatedPrefix: replica.replicatedPrefix,
+      },
+    };
+  }
+
+  /** Current replication status. lagEntries = entries; lagMs = milliseconds. */
+  replicaStatus(): ReplicaStatus {
+    this.assertReady();
+    if (!this.replica) {
+      return {
+        enabled: false,
+        role: 'none',
+        primaryPath: null,
+        appliedLsn: 0,
+        appliedTs: 0,
+        lastLsn: 0,
+        lastTs: 0,
+        lagEntries: 0,
+        lagMs: 0,
+        replicatedPrefix: 0,
+        promotedAt: null,
+        syncIntervalMs: replicaSyncIntervalMs(this.options.replica),
+      };
+    }
+    return this.replica.status();
+  }
+
+  /** Refresh primary tip then return status (secondary). */
+  async replicaStatusFresh(): Promise<ReplicaStatus> {
+    this.assertReady();
+    if (!this.replica) return this.replicaStatus();
+    return this.replica.refreshStatus();
+  }
+
+  /** Write role to meta/replica.json. Not run automatically on open. */
+  async replicaInit(opts: {
+    role: 'primary' | 'secondary';
+    primaryPath?: string;
+  }): Promise<ReplicaStatus> {
+    this.assertReady();
+    if (!this.replica) {
+      this.replica = new ReplicaManager(this.storagePath, {
+        syncIntervalMs: replicaSyncIntervalMs(this.options.replica),
+      });
+    }
+    this.replica.stopSync();
+    const status = await this.replica.init(opts);
+    if (status.role === 'secondary') {
+      this.replica.startSync(this.replicaApplyHooks());
+    }
+    return status;
+  }
+
+  /**
+   * Only command that turns a secondary into a writable primary.
+   * There is no automatic promote.
+   */
+  async replicaPromote(): Promise<ReplicaStatus> {
+    this.assertReady();
+    if (!this.replica) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        'replica promote requires an initialized secondary',
+      );
+    }
+    return this.replica.promote();
+  }
+
+  /** Pull and apply pending primary log entries once (secondary). */
+  async replicaSync(): Promise<{ applied: number; status: ReplicaStatus }> {
+    this.assertReady();
+    if (!this.replica) {
+      return { applied: 0, status: this.replicaStatus() };
+    }
+    const applied = await this.replica.syncOnce(this.replicaApplyHooks());
+    return { applied, status: this.replica.status() };
+  }
+
+  private replicaApplyHooks() {
+    return {
+      ensureCollection: async (name: string) => {
+        if (!this.catalog!.has(name)) {
+          await this.catalog!.create(name);
+        }
+      },
+      getById: async (collection: string, id: string) => {
+        await this.store!.ensureLoaded(collection);
+        return (await this.store!.getById(collection, id)) ?? null;
+      },
+      insert: async (collection: string, data: Record<string, unknown>) => {
+        const doc = (await this.insert(collection, data)) as Document;
+        return doc;
+      },
+      update: async (
+        collection: string,
+        id: string,
+        patch: Record<string, unknown>,
+      ) => this.update(collection, id, patch),
+      delete: async (collection: string, id: string) =>
+        this.delete(collection, id),
+      replaceDoc: async (collection: string, doc: Document) => {
+        await this.store!.ensureLoaded(collection);
+        const existing = await this.store!.getById(collection, doc._id);
+        const {
+          _id: _ignoreId,
+          _version: _ignoreVer,
+          _createdAt: _ignoreCreated,
+          _updatedAt: _ignoreUpdated,
+          ...rest
+        } = doc;
+        if (existing) {
+          await this.update(collection, doc._id, rest);
+        } else {
+          await this.insert(collection, { ...rest, _id: doc._id });
+        }
+      },
+    };
   }
 
   async vacuum(opts?: VacuumOptions): Promise<VacuumResult> {
@@ -2924,7 +3108,7 @@ export class JSONSQLite extends EventEmitter {
     if (!plugin?.search) {
       throw new JSONSQLiteError(
         ErrorCode.INVALID_CONFIG,
-        'vector plugin is not registered. The built-in vector entry is a stub; a usable vector index is planned for 3.3.',
+        'vector plugin is not registered. The built-in vector entry is a stub; a usable vector index is planned for 3.4+.',
       );
     }
     const result = await this.plugins!.isolate(plugin, () =>
@@ -2934,7 +3118,7 @@ export class JSONSQLite extends EventEmitter {
       return {
         hits: [],
         stub: true,
-        availableIn: '3.3',
+        availableIn: '3.4',
         called: false,
         collection,
         error: result.error,

@@ -11,6 +11,7 @@ import {
   V30_CONFIG_KEYS,
   V31_CONFIG_KEYS,
   V32_CONFIG_KEYS,
+  V33_CONFIG_KEYS,
   validateConfig,
   validateConfigFile,
 } from '../src/config/validate.js';
@@ -132,14 +133,29 @@ describe('v2.2.0 LTS-2', () => {
       ...V30_CONFIG_KEYS,
       ...V31_CONFIG_KEYS,
       ...V32_CONFIG_KEYS,
+      ...V33_CONFIG_KEYS,
     ]);
     const dangerous = new Set<string>(DANGEROUS_CONFIG_KEYS);
     for (const key of Object.keys(example)) {
       expect(frozen.has(key)).toBe(true);
       expect(dangerous.has(key)).toBe(false);
     }
-    const requiredDangerous = ['cluster', 'replica', 'cache', 'raft'];
-    if (!getVersion().startsWith('3.2.') && !getVersion().startsWith('3.3.') && !getVersion().startsWith('3.4.') && !getVersion().startsWith('3.5.') && !getVersion().startsWith('3.6.')) {
+    const requiredDangerous = ['cluster', 'cache', 'raft'];
+    if (
+      !getVersion().startsWith('3.3.') &&
+      !getVersion().startsWith('3.4.') &&
+      !getVersion().startsWith('3.5.') &&
+      !getVersion().startsWith('3.6.')
+    ) {
+      requiredDangerous.push('replica');
+    }
+    if (
+      !getVersion().startsWith('3.2.') &&
+      !getVersion().startsWith('3.3.') &&
+      !getVersion().startsWith('3.4.') &&
+      !getVersion().startsWith('3.5.') &&
+      !getVersion().startsWith('3.6.')
+    ) {
       requiredDangerous.push('l3', 'redis');
     }
     if (getVersion().startsWith('2.2.') || getVersion().startsWith('2.3.')) {
@@ -147,7 +163,9 @@ describe('v2.2.0 LTS-2', () => {
     }
     for (const key of requiredDangerous) {
       expect(dangerous.has(key)).toBe(true);
-      if (key !== 'l3' && key !== 'redis') expect(example).not.toHaveProperty(key);
+      if (key !== 'l3' && key !== 'redis' && key !== 'replica') {
+        expect(example).not.toHaveProperty(key);
+      }
     }
 
     expect(() =>
@@ -210,7 +228,12 @@ describe('v2.2.0 LTS-2', () => {
     }
     const banned = getVersion().startsWith('2.2.')
       ? ['plugin', 'replica', 'cluster', 'graphql', 'savepoint']
-      : ['replica', 'cluster', 'graphql', 'savepoint'];
+      : getVersion().startsWith('3.3.') ||
+          getVersion().startsWith('3.4.') ||
+          getVersion().startsWith('3.5.') ||
+          getVersion().startsWith('3.6.')
+        ? ['cluster', 'graphql']
+        : ['replica', 'cluster', 'graphql', 'savepoint'];
     for (const token of banned) {
       expect(commands).not.toContain(token);
     }

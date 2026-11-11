@@ -51,6 +51,8 @@ const VALUE_FLAGS = new Set([
   '--keep-days',
   '--max-count',
   '--action',
+  '--role',
+  '--primary-path',
 ]);
 
 /**

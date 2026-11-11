@@ -86,10 +86,10 @@ export function builtinPluginCatalog(): BuiltinPluginInfo[] {
       name: 'vector',
       version: '0.0.1',
       stub: true,
-      availableIn: '3.3',
+      availableIn: '3.4',
       registered: false,
       summary:
-        '可调用的向量索引 stub。search 会记一次调用并返回空命中。可用实现在 3.3，本版不能做向量检索。',
+        '可调用的向量索引 stub。search 会记一次调用并返回空命中。可用实现在 3.4+，本版不能做向量检索。',
     },
     {
       kind: 'storage',
@@ -111,7 +111,7 @@ export function builtinPluginInfo(name: string): BuiltinPluginInfo | null {
 export interface VectorSearchResult {
   hits: string[];
   stub: true;
-  availableIn: '3.3';
+  availableIn: '3.4';
   called: true;
   collection: string;
 }
@@ -122,14 +122,14 @@ export function createVectorStub(): EnginePlugin & { calls: number } {
     name: 'vector',
     version: '0.0.1',
     stub: true,
-    availableIn: '3.3',
+    availableIn: '3.4',
     calls: 0,
     search(ctx: { collection: string; vector: number[] }): VectorSearchResult {
       stub.calls += 1;
       return {
         hits: [],
         stub: true,
-        availableIn: '3.3',
+        availableIn: '3.4',
         called: true,
         collection: ctx.collection,
       };

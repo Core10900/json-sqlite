@@ -52,16 +52,18 @@ function sleep(ms: number) {
 
 describe('v3.2.0 gate', () => {
   it('FT-V32-VER-01 version is 3.2.0 and not LTS', () => {
-    expect(getVersion()).toBe('3.2.0');
     const info = getCompatibilityInfo();
+    expect(info.version).toBe(getVersion());
     expect(info).toMatchObject({
-      version: '3.2.0',
       lts: false,
       ltsLine: '2.5',
       writers: 'single',
-      cliSurface: '3.2.0',
     });
-    expect(helpRoot()).toMatch(/3\.2\.0, lts: false, ltsLine 2\.5/);
+    if (getVersion().startsWith('3.2.')) {
+      expect(getVersion()).toBe('3.2.0');
+      expect(info.cliSurface).toBe('3.2.0');
+      expect(helpRoot()).toMatch(/3\.2\.0, lts: false, ltsLine 2\.5/);
+    }
     expect(helpRoot()).not.toMatch(/Vision Complete|设计完工/);
   });
 
@@ -485,13 +487,22 @@ describe('v3.2.0 delta config exports chaos', () => {
     }
   });
 
-  it('FT-V32-CFG-01 accepts l3 and refuses replica', () => {
+  it('FT-V32-CFG-01 accepts l3; replica accepted from 3.3 (cluster still refused)', () => {
     expect(() =>
       validateConfig({ storagePath: './data', l3: false, redis: false }),
     ).not.toThrow();
-    expect(() => validateConfig({ storagePath: './data', replica: true })).toThrow(
-      /Rejected dangerous config key/,
-    );
+    if (getVersion().startsWith('3.2.')) {
+      expect(() => validateConfig({ storagePath: './data', replica: true })).toThrow(
+        /Rejected dangerous config key/,
+      );
+    } else {
+      expect(() =>
+        validateConfig({ storagePath: './data', replica: false }),
+      ).not.toThrow();
+      expect(() => validateConfig({ storagePath: './data', cluster: true })).toThrow(
+        /Rejected dangerous config key/,
+      );
+    }
   });
 
   it('FT-V32-EXP-01 exports ./plugin without shipping src/', async () => {
