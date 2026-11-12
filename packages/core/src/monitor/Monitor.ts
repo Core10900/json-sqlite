@@ -31,6 +31,9 @@ export interface HealthReport {
     appliedLsn: number;
     lastLsn: number;
     replicatedPrefix: number;
+    quorum?: number;
+    quorumAcked?: number;
+    replicated?: boolean;
   };
   timestamp: number;
 }

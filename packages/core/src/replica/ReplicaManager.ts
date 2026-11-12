@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { writeFileAtomic } from '../utils/fsDurable.js';
@@ -8,6 +9,9 @@ import type { Document } from '../types/index.js';
 
 /** On-disk replication log format version (MAJOR vs 3.2 when enabled). */
 export const REPLICA_LOG_FORMAT = 1;
+
+/** How long primary waits for secondary quorum acks after append. */
+export const QUORUM_WAIT_MS = 2000;
 
 export type ReplicaRole = 'none' | 'primary' | 'secondary';
 
@@ -36,6 +40,21 @@ export interface ReplicaStatus {
   replicatedPrefix: number;
   promotedAt: number | null;
   syncIntervalMs: number;
+  /**
+   * Configured acknowledgements including primary.
+   * Default 1 = primary-local only (no secondary wait).
+   */
+  quorum: number;
+  /**
+   * Acknowledgements for the tip LSN, including the primary as 1 when tip > 0
+   * (or when role is primary and enabled). Secondaries contribute via ack files.
+   */
+  quorumAcked: number;
+  /**
+   * True when the tip is considered replicated for the configured quorum.
+   * With quorum <= 1 this is true once the primary has the local tip.
+   */
+  replicated: boolean;
 }
 
 export interface ReplicaLogEntry {
@@ -63,6 +82,11 @@ export interface ReplicaApplyHooks {
   replaceDoc: (collection: string, doc: Document) => Promise<void>;
 }
 
+export interface ReplicaAckFile {
+  appliedLsn: number;
+  appliedTs: number;
+}
+
 function stateFile(root: string): string {
   return path.join(root, 'meta', 'replica.json');
 }
@@ -79,6 +103,14 @@ function logMetaFile(root: string): string {
   return path.join(logDir(root), 'meta.json');
 }
 
+function ackDir(root: string): string {
+  return path.join(logDir(root), 'acks');
+}
+
+export function secondaryAckId(storagePath: string): string {
+  return createHash('sha256').update(path.resolve(storagePath)).digest('hex').slice(0, 16);
+}
+
 async function readJsonFile<T>(file: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(file, 'utf8');
@@ -87,6 +119,10 @@ async function readJsonFile<T>(file: string): Promise<T | null> {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export class ReplicaManager {
@@ -98,12 +134,14 @@ export class ReplicaManager {
   private applying = false;
   private syncTimer: ReturnType<typeof setInterval> | null = null;
   private readonly syncIntervalMs: number;
+  private readonly quorum: number;
 
   constructor(
     private readonly storagePath: string,
-    opts?: { syncIntervalMs?: number },
+    opts?: { syncIntervalMs?: number; quorum?: number },
   ) {
     this.syncIntervalMs = Math.max(10, opts?.syncIntervalMs ?? 100);
+    this.quorum = Math.max(0, opts?.quorum ?? 1);
   }
 
   get isApplying(): boolean {
@@ -239,7 +277,7 @@ export class ReplicaManager {
       : 0;
     const lastLsn = enabled ? (role === 'primary' ? this.lastLsn : this.tipLsn) : 0;
     const lastTs = enabled ? (role === 'primary' ? this.lastTs : this.tipTs) : 0;
-    return {
+    const base: ReplicaStatus = {
       enabled,
       role,
       primaryPath: this.state?.primaryPath ?? null,
@@ -252,13 +290,40 @@ export class ReplicaManager {
       replicatedPrefix: appliedLsn,
       promotedAt: this.state?.promotedAt ?? null,
       syncIntervalMs: this.syncIntervalMs,
+      quorum: this.quorum,
+      quorumAcked: 0,
+      replicated: true,
     };
+    if (!enabled) return base;
+    if (role === 'secondary') {
+      // Secondary: local catch-up view (not cluster quorum).
+      base.quorumAcked = appliedLsn > 0 ? 1 : 0;
+      base.replicated = lastLsn === 0 || appliedLsn >= lastLsn;
+      return base;
+    }
+    // Primary: cached count from last wait/refresh (includes primary as 1).
+    base.quorumAcked = this.cachedQuorumAcked;
+    base.replicated = this.isReplicated(this.cachedQuorumAcked, lastLsn);
+    return base;
+  }
+
+  private cachedQuorumAcked = 1;
+
+  private isReplicated(quorumAcked: number, tipLsn: number): boolean {
+    if (this.quorum <= 1) {
+      // Primary-local only: local tip counts as replicated.
+      return true;
+    }
+    if (tipLsn <= 0) return true;
+    return quorumAcked >= this.quorum;
   }
 
   /** Refresh primary tip into status fields without applying entries. */
   async refreshStatus(): Promise<ReplicaStatus> {
     if (this.state?.enabled && this.state.role === 'secondary') {
       await this.refreshTipFromPrimary();
+    } else if (this.state?.enabled && this.state.role === 'primary') {
+      this.cachedQuorumAcked = await this.countQuorumAcks(this.lastLsn);
     }
     return this.status();
   }
@@ -289,6 +354,7 @@ export class ReplicaManager {
       };
       lines.push(`${JSON.stringify(row)}\n`);
     }
+    if (!lines.length) return;
     await fs.appendFile(logFile(this.storagePath), lines.join(''), 'utf8');
     this.tipLsn = this.lastLsn;
     this.tipTs = this.lastTs;
@@ -296,6 +362,7 @@ export class ReplicaManager {
     this.state.appliedTs = this.lastTs;
     await this.writeLogMeta();
     await this.persistState();
+    await this.waitForQuorum(this.lastLsn);
   }
 
   startSync(hooks: ReplicaApplyHooks): void {
@@ -322,7 +389,10 @@ export class ReplicaManager {
     if (!primary) return 0;
     await this.refreshTipFromPrimary();
     const entries = await readLogSince(primary, this.state.appliedLsn);
-    if (!entries.length) return 0;
+    if (!entries.length) {
+      await this.writeAckToPrimary();
+      return 0;
+    }
     this.applying = true;
     try {
       for (const entry of entries) {
@@ -331,10 +401,82 @@ export class ReplicaManager {
         this.state.appliedTs = entry.ts;
       }
       await this.persistState();
+      await this.writeAckToPrimary();
       return entries.length;
     } finally {
       this.applying = false;
     }
+  }
+
+  private async waitForQuorum(targetLsn: number): Promise<void> {
+    const secondaryNeeded = Math.max(0, this.quorum - 1);
+    if (secondaryNeeded === 0) {
+      this.cachedQuorumAcked = 1;
+      return;
+    }
+    const deadline = Date.now() + QUORUM_WAIT_MS;
+    let acked = await this.countQuorumAcks(targetLsn);
+    while (acked < this.quorum && Date.now() < deadline) {
+      await sleep(25);
+      acked = await this.countQuorumAcks(targetLsn);
+    }
+    this.cachedQuorumAcked = acked;
+    if (acked < this.quorum) {
+      throw new JSONSQLiteError(
+        ErrorCode.QUORUM_FAILED,
+        `Quorum not met for LSN ${targetLsn}: need ${this.quorum}, have ${acked}`,
+        {
+          retryable: true,
+          quorum: this.quorum,
+          quorumAcked: acked,
+          targetLsn,
+        },
+      );
+    }
+  }
+
+  /** Primary local ack (1) + secondaries whose ack covers targetLsn. */
+  private async countQuorumAcks(targetLsn: number): Promise<number> {
+    if (targetLsn <= 0) return 1;
+    const secondary = await this.countSecondaryAcks(targetLsn);
+    return 1 + secondary;
+  }
+
+  private async countSecondaryAcks(targetLsn: number): Promise<number> {
+    const dir = ackDir(this.storagePath);
+    let names: string[];
+    try {
+      names = await fs.readdir(dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+      throw err;
+    }
+    let count = 0;
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const ack = await readJsonFile<ReplicaAckFile>(path.join(dir, name));
+      if (ack && typeof ack.appliedLsn === 'number' && ack.appliedLsn >= targetLsn) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private async writeAckToPrimary(): Promise<void> {
+    const primary = this.state?.primaryPath;
+    if (!primary || !this.state) return;
+    const id = secondaryAckId(this.storagePath);
+    const dir = ackDir(primary);
+    await fs.mkdir(dir, { recursive: true });
+    const body: ReplicaAckFile = {
+      appliedLsn: this.state.appliedLsn,
+      appliedTs: this.state.appliedTs,
+    };
+    await writeFileAtomic(
+      path.join(dir, `${id}.json`),
+      JSON.stringify(body, null, 2),
+      'normal',
+    );
   }
 
   private async refreshTipFromPrimary(): Promise<void> {

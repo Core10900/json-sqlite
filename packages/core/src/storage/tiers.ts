@@ -109,6 +109,31 @@ export class TierService {
     return null;
   }
 
+  /**
+   * Try storage-plugin getCold when the local warm/cold maps miss.
+   * Failures are ignored so hot docs stay readable; unrecalled cold
+   * must not appear in hot query results (caller only uses this for point lookup).
+   */
+  async lookupCold(
+    collection: string,
+    id: string,
+  ): Promise<{ doc: Document; tier: 'cold' } | null> {
+    const local = this.lookup(collection, id);
+    if (local?.tier === 'cold') return { doc: local.doc, tier: 'cold' };
+    for (const hook of this.hookSource()) {
+      if (!hook.getCold) continue;
+      try {
+        const doc = await hook.getCold(collection, id);
+        if (doc && typeof doc === 'object' && typeof (doc as Document)._id === 'string') {
+          return { doc: { ...(doc as Document) }, tier: 'cold' };
+        }
+      } catch {
+        // Plugin / object-store failure must not break hot path.
+      }
+    }
+    return null;
+  }
+
   noteColdRead(): void {
     this.coldReads += 1;
   }

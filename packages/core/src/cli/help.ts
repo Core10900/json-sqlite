@@ -34,9 +34,10 @@ Commands:
   explain                    index, selectivity, chunked, earlyStop, profile stages
   advise                     Advisor (aligns with explain fields)
   aggregate                  aggregation pipeline (unwind/lookup)
-  admin serve                start Admin HTTP + SSE
+  admin serve | serve        start Admin HTTP + SSE (serve is an alias)
+  db list|register|use|unregister   multi-db registry (~/.jsonsqlite/registry.json)
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version (3.3.0, lts: false, ltsLine 2.5)
+  compat / version [--json]  compatibility / version (3.4.0, lts: false, ltsLine 2.5)
   config validate --file <f> check a file against the frozen 2.2 config keys
   replica init|status|promote            async primary/secondary (default off; no auto promote)
   backup / vacuum [--compress] / rekey    ops
@@ -144,13 +145,17 @@ queryLanguage.parse may only return a JSON query object for the built-in executo
 export function helpReplica(): string {
   return `jsonsqlite replica init --role primary|secondary [--primary-path <dir>]
 jsonsqlite replica status [--json]
-jsonsqlite replica promote --yes
+jsonsqlite replica promote --yes [--operator name]
 
 Async primary/secondary replication (default off). Not high availability.
-Commit on the primary is local only — secondaries catch up asynchronously.
+replica.quorum (default 1) is acks including primary; quorum>1 waits for secondary acks.
+status prints role, quorum, quorumAcked, replicated, lagEntries, lagMs, appliedLsn.
+QUORUM_FAILED is retryable; replicated stays false until quorum is met.
 lagEntries is counted in log entries; lagMs is milliseconds.
+Three-node handbook: init primary+secondaries, replica status for lag, stop one secondary, promote --yes.
 There is no automatic promote and no cluster command.
 Secondary writes fail with REPLICA_READONLY until replica promote --yes.
+promote writes an audit entry (operator, fromRole, toRole).
 `;
 }
 
@@ -162,15 +167,29 @@ Non-TTY: use jsonsqlite run "<sql>"
 }
 
 export function helpAdmin(): string {
-  return `jsonsqlite admin serve [--host 127.0.0.1] [--port 3000] [--token SECRET] [--once]
+  return `jsonsqlite admin serve | jsonsqlite serve [--host 127.0.0.1] [--port 3000] [--token SECRET] [--once]
 
 Start Admin HTTP (dashboard + REST + SSE + WebSocket /stream).
+Top-level \`serve\` is the same as \`admin serve\`.
 Paths: /admin, /admin/queries, /admin/tables, /admin/monitor, /admin/backup, /admin/settings.
+REST document CRUD: POST/GET/PATCH/DELETE /collections/:name[/:id] (same auth as /query).
 /admin/queries shows plan stages (parse/optimize/indexScan/dataLoad/execute) and usedIndex.
 /stream pushes dataChanged and the same metrics events as SSE. SSE stays available.
 Loopback may omit --token (a warning is printed).
 Non-loopback requires both --token and --cert/--key (TLS). Missing either refuses to listen.
 --once starts then exits (smoke / tests).
+`;
+}
+
+export function helpDb(): string {
+  return `jsonsqlite db list|register|use|unregister
+
+Multi-database registry (cwd .jsonsqlite-registry.json or ~/.jsonsqlite/registry.json).
+
+  db list
+  db register --name <name> --path <storagePath>
+  db use --name <name>          print -p / JSONSQLITE_PATH hint
+  db unregister --name <name>   close if open, remove entry
 `;
 }
 
@@ -252,7 +271,7 @@ Check a JSON file against the 2.2 keys plus later opt-in keys.
 Does not open a database.
 Unknown keys are refused (exit 1, code INVALID_CONFIG) and are not applied.
 Dangerous keys (cluster, replication, raft, quorum, shard,
-graphql, wasm, cache) are named in the error. Nested cache objects stay refused.
+wasm, cache) are named in the error. Nested cache objects stay refused.
 2.4 opt-in key writers is single or multi (default single). Omitting it stays single.
 2.3 opt-in keys (columnStore, storageTiers, smartCompression, and the rest
 listed in config validation) are accepted and default off.
@@ -262,7 +281,8 @@ coldExternalDir, compressionSampleWindow, stopWords) are accepted.
 metricsIntervalMs, memoryWatermarkBytes, deltaSnapshotThreshold, autoTuneMinHits)
 are accepted and default off or equal to 3.1. Missing Redis client keeps L3 closed.
 3.3 opt-in key replica is accepted (boolean or object) and defaults false.
-Role still requires replica init. cluster / graphql / wasm stay refused.
+3.4 opt-in key graphql is accepted (boolean) and defaults false.
+Role still requires replica init. cluster / wasm stay refused.
 The frozen cache field is cacheSize, not cache / cache.l3.
 `;
 }
@@ -296,7 +316,14 @@ export function helpFor(path: string[]): string | null {
       return helpSql();
     case 'admin':
     case 'admin serve':
+    case 'serve':
       return helpAdmin();
+    case 'db':
+    case 'db list':
+    case 'db register':
+    case 'db use':
+    case 'db unregister':
+      return helpDb();
     case 'advise':
       return helpAdvise();
     case 'aggregate':

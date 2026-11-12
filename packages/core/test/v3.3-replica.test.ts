@@ -76,17 +76,19 @@ describe('v3.3.0 gate', () => {
   });
 
   it('FT-V33-VER-01 version is 3.3.0 and not LTS', () => {
-    expect(getVersion()).toBe('3.3.0');
     const info = getCompatibilityInfo();
+    expect(info.version).toBe(getVersion());
     expect(info).toMatchObject({
-      version: '3.3.0',
       lts: false,
       ltsLine: '2.5',
       writers: 'single',
-      cliSurface: '3.3.0',
     });
     expect(info.features).toContain('async-replica');
-    expect(helpRoot()).toMatch(/3\.3\.0, lts: false, ltsLine 2\.5/);
+    if (getVersion().startsWith('3.3.')) {
+      expect(getVersion()).toBe('3.3.0');
+      expect(info.cliSurface).toBe('3.3.0');
+      expect(helpRoot()).toMatch(/3\.3\.0, lts: false, ltsLine 2\.5/);
+    }
     expect(helpRoot()).not.toMatch(/Vision Complete|设计完工/);
   });
 

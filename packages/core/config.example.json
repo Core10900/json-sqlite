@@ -38,5 +38,6 @@
   "deltaSnapshotThreshold": 1000,
   "l3": false,
   "redis": false,
-  "replica": false
+  "replica": false,
+  "graphql": false
 }

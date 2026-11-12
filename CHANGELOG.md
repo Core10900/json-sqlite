@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.4.0 — 2026-11-12 · 非 LTS
+
+**非 LTS，也不是设计完工版。** 相对 3.3 为 **MINOR**。复制硬化与接入层；不开启复制、不加载适配器时，单机契约与 3.3 一致。主宕机**仍然没有自动选主**。设计完工线是 **3.6**。
+
+`latest` 指向 3.4.0。`lts` / `lts-2` 仍是 2.2。`lts-3` 仍是 2.5。生产 pin 仍是 `lts`（2.2）。不新增 `lts-4`。
+
+### Added
+- Quorum：`replica.quorum` 默认 1；达不到确认数时 `QUORUM_FAILED`（可重试），`status.replicated` 不为 true
+- 读路由：`ReadRouter` 写主读从；`lagThresholdEntries` 默认 10；`onLag` 默认 `'fail'`，可选 `'primary'`
+- 三节点手册步骤与 `replica status` 字段（`quorum` / `quorumAcked` / `replicated` / `lagEntries`）对齐；`promote --yes [--operator]` 写审计
+- 冷存储可用示例：`createS3Plugin({ rootDir })`（`availableIn: '3.4'`）；对象存储失败时热点查仍可用
+- GraphQL 最小适配：`executeGraphQL` / `POST /graphql`（`graphql` 默认关闭，移出危险键）
+- 连接池：`createConnectionPool` 借还与 `close`；关闭后 `POOL_CLOSED`
+- 多库：`DatabaseRegistry` / `db list|register|use|unregister`
+- Express / Nest 风格示例（`apps/examples/express`、`apps/examples/nest`）；核心不 peer 依赖框架
+- 可选 `advisorProvider`；未配置仍是规则引擎；provider 失败不拖垮查询
+- 向量可用实现：`createVectorPlugin`（余弦命中与分数）；不是通用向量库；`availableIn: '3.4'`
+- `jsonsqlite serve` / `db.serve()` 与 `startServer()` 同行为；`open` 不自动监听
+- `db.collection` / `db.table` 委托现有引擎
+- REST：`POST/GET/PATCH/DELETE /collections/:name[/:id]`，鉴权同 `/query`
+
+### Not in this release
+自动选主、自动故障切换、Raft、自动分片、跨机锁、WASM、多语言 TCP。稳定帮助无 `cluster`。`config validate` 仍拒绝 `cluster` / `wasm`。
+
 ## 3.3.0 — 2026-11-11 · 非 LTS
 
 **非 LTS，也不是设计完工版。** 相对 3.2 为 **MAJOR**（复制日志格式）。异步主从复制默认关闭；不开启时打开 2.5 / 3.2 库的行为与 LTS-3 默认单写者一致。设计完工线是 **3.6**。

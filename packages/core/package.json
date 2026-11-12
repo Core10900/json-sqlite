@@ -1,7 +1,7 @@
 {
   "name": "@webofcat/jsonsqlite",
-  "version": "3.3.0",
-  "description": "JSON-native embedded database for Node.js — 3.3.0 async replication opt-in (not LTS; replication default off; production pin remains 2.2)",
+  "version": "3.4.0",
+  "description": "JSON-native embedded database for Node.js — 3.4.0 replication and access layer (not LTS; replication default off; production pin remains 2.2)",
   "license": "MIT",
   "author": "hanlin <lincent909@163.com>",
   "repository": {

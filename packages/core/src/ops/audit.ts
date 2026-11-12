@@ -9,7 +9,8 @@ export type AuditAction =
   | 'migrate'
   | 'repair'
   | 'backup'
-  | 'tune';
+  | 'tune'
+  | 'promote';
 
 export interface AuditEntry {
   ts: number;

@@ -204,7 +204,7 @@ describe('v3.0.0 query engine', () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
     const db = await open({ storagePath: await tmpDir() });
-    const advice = db.advise({ collection: 'users', filter: { age: { $gt: 18 } } });
+    const advice = await db.advise({ collection: 'users', filter: { age: { $gt: 18 } } });
     const alt = advice.find((item) => item.jsonPath && item.estimatedCost !== undefined);
     expect(alt?.jsonPath).toBe('$[?(@.age>18)]');
     expect(typeof alt?.estimatedCost).toBe('number');

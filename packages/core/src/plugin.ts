@@ -6,6 +6,7 @@ export {
   assertPluginManifest,
   builtinPluginCatalog,
   builtinPluginInfo,
+  createS3Plugin,
   createS3Stub,
   createVectorStub,
   PLUGIN_KINDS,

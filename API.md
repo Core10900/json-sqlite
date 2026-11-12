@@ -277,6 +277,8 @@ unsubscribe();
 | `CONFIRM_REQUIRED` | 破坏性操作需要显式确认 / `--yes`（3.2） |
 | `PLUGIN_REJECTED` | 插件名、版本或 `queryLanguage.parse` 契约不通过（3.2） |
 | `REPLICA_READONLY` | 从库只读；在 `replica promote` 之前拒绝写入（3.3） |
+| `QUORUM_FAILED` | 主库写入未达到 quorum 确认数；`details.retryable` 为 true，可重试（3.4） |
+| `POOL_CLOSED` | 连接池已 `close`；之后的 borrow/release 被拒绝（3.4） |
 | `ENCRYPTION` | 加密/密钥错误 |
 | `INTERNAL` | 内部错误 |
 
@@ -288,7 +290,7 @@ unsubscribe();
 
 ### 值导出
 
-`JSONSQLite` · `open` · `create` · `init` · `getVersion` · `getCompatibilityInfo` · `parseSql` · `rekeyDatabase` · `JSONSQLiteError` · `ErrorCode` · `FORMAT_VERSION`
+`JSONSQLite` · `open` · `create` · `init` · `getVersion` · `getCompatibilityInfo` · `parseSql` · `rekeyDatabase` · `JSONSQLiteError` · `ErrorCode` · `FORMAT_VERSION` · `ReadRouter` · `createConnectionPool` · `DatabaseRegistry` · `createDatabaseRegistry` · `executeGraphQL` · `createGraphqlHandler` · `createS3Plugin` · `createVectorPlugin`（完整 3.4 表见文末「3.4」节）
 
 ### 类型导出
 
@@ -621,5 +623,38 @@ getCompatibilityInfo();
 | `deltaSnapshotThreshold` | 默认 1000。checksum 失败不删旧 delta |
 | `STORAGE_FULL` / `STORAGE_PERMISSION` | 磁盘满 / 无写权限 |
 
-性能数字见 `devDocs/releases/v3.2.0/性能包络.md`。本版不做复制、Quorum、GraphQL、多库、可用向量、可用 S3、Raft、WASM、HTTP 文档 REST。
+性能数字见 `devDocs/releases/v3.2.0/性能包络.md`。本版不做复制、Quorum、GraphQL、多库、可用向量、可用 S3、Raft、WASM、HTTP 文档 REST（见 3.3 / 3.4）。
+
+---
+
+## 3.3 异步复制（非 LTS）
+
+相对 3.2 为 **MAJOR**（复制日志格式）。复制默认关闭。**没有自动选主。**
+
+| 符号 | 说明 |
+|------|------|
+| `replicaInit` / `replicaStatus` / `replicaPromote` / `replicaSync` | 主从角色、滞后、手动提升 |
+| `REPLICA_READONLY` | 从库在 `replica promote` 前拒绝写入 |
+
+---
+
+## 3.4 复制硬化与接入层（非 LTS）
+
+相对 3.3 为 **MINOR**。不开启复制、不加载适配器时单机契约不变。**仍然没有自动选主。** `lts: false`。生产 pin 仍是 2.2。
+
+| 符号 | 说明 |
+|------|------|
+| `replica: { quorum?, syncIntervalMs? }` | `quorum` 默认 1（含主库 ack）。不足 → `QUORUM_FAILED`（`details.retryable`），`status.replicated === false` |
+| `ReadRouter` / `DEFAULT_LAG_THRESHOLD_ENTRIES` | 写主读从。`lagThresholdEntries` 默认 10；`onLag` 默认 `'fail'`，可选 `'primary'` |
+| `createConnectionPool` | `borrow` / `release` / `close`。关闭后 `POOL_CLOSED` |
+| `DatabaseRegistry` / `createDatabaseRegistry` | 多 `storagePath` 注册与隔离 |
+| `executeGraphQL` / `createGraphqlHandler` | 仅 `documents` 查询与 `insert` 变更；需 `graphql: true` |
+| `createS3Plugin({ rootDir })` | 文件系统冷层示例（非 stub）；`createS3Stub` 仍为空上传 |
+| `createVectorPlugin` | 内存余弦检索；`score` 为相似度。不是通用向量库；`createVectorStub` 仍空命中 |
+| `db.serve(opts)` | 与 `startServer` 同行为；`open` 不自动监听 |
+| `db.collection` / `db.table` | 同一 `CollectionHandle`，委托 `insert`/`find`/`findById`/`update`/`delete` |
+| `advisorProvider` | 可选；抛错时退回规则建议，查询仍成功 |
+| REST | `POST/GET/PATCH/DELETE /collections/:name[/:id]`，鉴权同 `POST /query`；另有 `POST /graphql` |
+
+错误码：`QUORUM_FAILED`、`POOL_CLOSED`（见 §14）。本版不做 Raft、自动分片、自动选主、跨机锁、WASM。
 

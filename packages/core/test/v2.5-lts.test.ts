@@ -427,7 +427,7 @@ describe('v2.5.0 LTS-3', () => {
       getVersion().startsWith('3.4.') ||
       getVersion().startsWith('3.5.') ||
       getVersion().startsWith('3.6.')
-        ? ['cluster', 'graphql', 'shard']
+        ? ['cluster', 'shard']
         : ['replica', 'cluster', 'graphql', 'savepoint', 'shard'];
     for (const token of banned) {
       expect(commands).not.toContain(token);

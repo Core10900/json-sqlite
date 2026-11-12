@@ -12,6 +12,7 @@ import {
   V31_CONFIG_KEYS,
   V32_CONFIG_KEYS,
   V33_CONFIG_KEYS,
+  V34_CONFIG_KEYS,
   validateConfig,
   validateConfigFile,
 } from '../src/config/validate.js';
@@ -134,6 +135,7 @@ describe('v2.2.0 LTS-2', () => {
       ...V31_CONFIG_KEYS,
       ...V32_CONFIG_KEYS,
       ...V33_CONFIG_KEYS,
+      ...V34_CONFIG_KEYS,
     ]);
     const dangerous = new Set<string>(DANGEROUS_CONFIG_KEYS);
     for (const key of Object.keys(example)) {
@@ -169,8 +171,9 @@ describe('v2.2.0 LTS-2', () => {
     }
 
     expect(() =>
-      validateConfig({ storagePath: './data', cluster: { nodes: 3 }, graphql: true }),
+      validateConfig({ storagePath: './data', cluster: { nodes: 3 } }),
     ).toThrow(/Rejected dangerous config key/);
+    expect(validateConfig({ storagePath: './data', graphql: false }).graphql).toBe(false);
 
     const cliOk = await cli(['config', 'validate', '--file', exampleFile, '--json']);
     expect(cliOk.code).toBe(0);
@@ -232,7 +235,7 @@ describe('v2.2.0 LTS-2', () => {
           getVersion().startsWith('3.4.') ||
           getVersion().startsWith('3.5.') ||
           getVersion().startsWith('3.6.')
-        ? ['cluster', 'graphql']
+        ? ['cluster', 'savepoint']
         : ['replica', 'cluster', 'graphql', 'savepoint'];
     for (const token of banned) {
       expect(commands).not.toContain(token);

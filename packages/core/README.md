@@ -1,13 +1,13 @@
 # @webofcat/jsonsqlite
 
-**版本：3.3.0** · **非 LTS** · **不是设计完工版** · 设计完工线 **3.6** · 默认单写者 · 复制默认关闭 · Node.js ≥ 20 · 作者：hanlin
+**版本：3.4.0** · **非 LTS** · **不是设计完工版** · 设计完工线 **3.6** · 默认单写者 · 复制默认关闭 · **没有自动选主** · Node.js ≥ 20 · 作者：hanlin
 
-这一版提供**异步复制雏形**。相对 3.2 是 **MAJOR**（复制日志格式）。复制默认关闭；不开启时打开 2.5 / 3.2 库，行为与 LTS-3 默认单写者一致。主宕机**不**自动选主，也没有自动故障切换。
+这一版是**复制硬化与接入层**。相对 3.3 为 **MINOR**。不开启复制、不加载适配器时，单机契约与 3.3 一致。主宕机**仍然没有自动选主**，也没有自动故障切换；唯一提升入口仍是 `replica promote --yes`。
 
-生产 pin 在 3.6 宣布前仍是 **LTS-2（2.2）** / 多写者 **LTS-3（2.5）**。本包不是长期支持线。不带 tag 的安装得到 `latest`，这一版是 3.3.0。
+生产 pin 在 3.6 宣布前仍是 **LTS-2（2.2）** / 多写者 **LTS-3（2.5）**。本包不是长期支持线。不带 tag 的安装得到 `latest`，这一版是 3.4.0。没有 `lts-4`。
 
 ```bash
-# 不带 tag：latest，这一版是 3.3.0（复制默认关闭）
+# 不带 tag：latest，这一版是 3.4.0（复制默认关闭）
 npm install @webofcat/jsonsqlite
 
 # 单写者生产
@@ -18,31 +18,270 @@ npm install @webofcat/jsonsqlite@lts-2
 npm install @webofcat/jsonsqlite@lts-3
 ```
 
-`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.3.0。
+`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.4.0。
 
 ```ts
 import { getCompatibilityInfo, open } from '@webofcat/jsonsqlite';
 
 const info = getCompatibilityInfo();
-// version: '3.3.0'
+// version: '3.4.0'
 // lts: false
 // ltsLine: '2.5'   // 最新的 LTS 线（LTS-3），不是本包版本
 // writers: 'single'
+// cliSurface: '3.4.0'
 ```
 
-## 3.3 异步复制（默认关闭）
+## 3.4 复制硬化与接入层
 
-拓扑是**一个主、一个或多个从**。主库本地提交成功**不能**当成从库已经收到。从库异步拉取主库的 `replication/log.jsonl`，达到**最终可见**，不是同步确认。
+### 1. Quorum
+
+配置键：`replica.quorum`（含在 `open({ replica: { quorum } })` 里）。默认 **1**（只计主库本地 ack）。`quorum > 1` 时，主库追加日志后等待从库 ack，最长 `QUORUM_WAIT_MS`（**2000** ms）。
+
+达不到确认数：抛 `QUORUM_FAILED`，`details.retryable === true`，调用方可重试。此时 `replica status` 的 **`replicated` 为 false**（主库不把未确认写入报告为已复制）；同时可见 `quorum` / `quorumAcked`。
+
+```ts
+const primary = await open({
+  storagePath: './primary',
+  replica: { quorum: 2, syncIntervalMs: 100 },
+});
+await primary.replicaInit({ role: 'primary' });
+// 没有从库 ack 时 insert → QUORUM_FAILED；status.replicated === false
+```
+
+```bash
+jsonsqlite replica status -p ./primary --json
+# 关注 quorum、quorumAcked、replicated
+```
+
+### 2. 读路由 / 写主
+
+`ReadRouter`：写永远走主（`write` → `primary.insert`）；读在从库 `lagEntries` ≤ 阈值时走从。
+
+| 选项 | 默认 | 含义 |
+|------|------|------|
+| `lagThresholdEntries` | **10** | 允许的最大从库滞后（条数） |
+| `onLag` | **`'fail'`** | 超阈值：抛错（默认）或 `'primary'` 退回主库读 |
+
+- `onLag: 'fail'`：超阈值抛 `INVALID_CONFIG`（含 `lagEntries` / `lagThresholdEntries`）。
+- `onLag: 'primary'`：超阈值改从主库 `findById`。
+
+```ts
+import { ReadRouter, open } from '@webofcat/jsonsqlite';
+
+const primary = await open({ storagePath: './primary', replica: { syncIntervalMs: 50 } });
+const secondary = await open({ storagePath: './secondary', replica: { syncIntervalMs: 50 } });
+await primary.replicaInit({ role: 'primary' });
+await secondary.replicaInit({ role: 'secondary', primaryPath: './primary' });
+
+const router = new ReadRouter(primary, secondary, {
+  lagThresholdEntries: 10,
+  onLag: 'fail', // 或 'primary'
+});
+await router.write('docs', { _id: '1', name: 'a' });
+const doc = await router.read('docs', '1');
+```
+
+### 3. 三节点手册摘要
+
+**没有自动选主。** 任一步失败就停，不要跳过。
+
+```bash
+# 1) 启动主 + 两个从
+jsonsqlite init -p ./n1 && jsonsqlite replica init --role primary -p ./n1
+jsonsqlite init -p ./n2 && jsonsqlite replica init --role secondary --primary-path ./n1 -p ./n2
+jsonsqlite init -p ./n3 && jsonsqlite replica init --role secondary --primary-path ./n1 -p ./n3
+
+# 2) 看滞后（预期：role、lagEntries、quorum、quorumAcked、replicated）
+jsonsqlite replica status -p ./n2 --json
+
+# 3) 停一个从（杀进程或关掉该目录的进程）。主在 quorum=1 时仍可写；
+#    quorum=2 且只剩一个从时，再写入可能 QUORUM_FAILED（可重试）
+
+# 4) 手动提升（确认旧主不再写入之后）
+jsonsqlite replica promote --yes --operator ops -p ./n2
+# 审计：action=promote，details.operator / fromRole / toRole / promotedAt
+```
+
+提升前数据停在 `appliedLsn`；未复制的主库尾部不会自动追回。
+
+### 4. S3 / 对象存储冷层
+
+`createS3Plugin({ rootDir })` 是文件系统示例（`stub: false`，`availableIn: '3.4'`），对象落在 `{rootDir}/{collection}/{id}.json`。`createS3Stub()` 仍只记调用、不落盘。
+
+```ts
+import { createS3Plugin, open } from '@webofcat/jsonsqlite';
+
+const db = await open({ storagePath: './data', storageTiers: true });
+const cold = createS3Plugin({ rootDir: './cold-root' });
+db.registerPlugin(cold);
+
+await cold.putCold('docs', { _id: 'c1', name: 'frozen', _version: 1 });
+await cold.getCold('docs', 'c1'); // 读回同一文档
+await db.findById('docs', 'c1');  // 热层未命中时可由插件召回
+```
+
+对象存储失败时，**热集合点查仍可用**。尚未取回的冷文档**不会**出现在热层 `query` 结果里；对未知冷 id 的 `findById` 为 `null`。
+
+### 5. GraphQL
+
+核心包内：`executeGraphQL(db, source)`。只支持两种形状，**不是**完整 GraphQL 数据库：
+
+- `query { documents(collection: "...", filter?: "...") { fields } }` → `db.query`
+- `mutation { insert(collection: "...", data: "{...}") { fields } }` → `db.insert`
+
+```ts
+import { executeGraphQL, open } from '@webofcat/jsonsqlite';
+
+const db = await open({ storagePath: './data', graphql: true });
+await executeGraphQL(
+  db,
+  'mutation { insert(collection: "users", data: "{\\"_id\\":\\"g1\\",\\"name\\":\\"Grace\\"}") { _id name } }',
+);
+await executeGraphQL(
+  db,
+  'query { documents(collection: "users") { _id name } }',
+);
+```
+
+HTTP：`POST /graphql`（需 `graphql: true`，鉴权与 `/query` 相同）。也可用 `createGraphqlHandler(db)`。`config.example.json` 中 `"graphql": false`；`config validate` 接受它，仍拒绝 `cluster` / `wasm`。
+
+不支持：subscription、复杂 schema、任意 GraphQL 方言。
+
+### 6. 连接池
+
+```ts
+import { createConnectionPool } from '@webofcat/jsonsqlite';
+
+const pool = createConnectionPool({ storagePath: './data', size: 1 });
+const db = await pool.borrow();
+await db.insert('docs', { _id: 'p1', name: 'pooled' });
+pool.release(db);
+await pool.close(); // 关闭并释放文件锁 / 句柄
+// 之后 borrow / release → POOL_CLOSED
+```
+
+单写者存储下同一路径只开一个句柄；`size > 1` 仍共享并串行借还，避免锁争用。`close` 后不应再有泄漏的文件锁。
+
+### 7. 多库注册表
+
+```ts
+import { createDatabaseRegistry } from '@webofcat/jsonsqlite';
+
+const registry = await createDatabaseRegistry();
+await registry.register('A', './data-a');
+await registry.register('B', './data-b');
+const dbA = await registry.use('A');
+const dbB = await registry.use('B');
+await dbA.insert('docs', { _id: 'only-a' });
+await dbB.findById('docs', 'only-a'); // null — 读 A 看不到 B
+await dbA.close({ flush: true });
+await dbB.findById('docs', 'keep'); // 关掉 A 不影响 B
+await registry.closeAll();
+```
+
+```bash
+jsonsqlite db register --name A --path ./data-a
+jsonsqlite db register --name B --path ./data-b
+jsonsqlite db list
+jsonsqlite db use --name A          # 打印 -p / JSONSQLITE_PATH 提示
+jsonsqlite db unregister --name A
+```
+
+注册文件：cwd `.jsonsqlite-registry.json` 或 `~/.jsonsqlite/registry.json`。
+
+### 8. Express / Nest 示例
+
+核心包**不**把 `express` / `@nestjs/*` 列为 dependency 或 peerDependency。
+
+| 示例 | 路径 | 启动 |
+|------|------|------|
+| Express | `apps/examples/express` | `pnpm --filter @jsonsqlite/example-express start`（默认端口 3100） |
+| Nest 风格 | `apps/examples/nest` | `pnpm --filter @jsonsqlite/example-nest start`（默认端口 3200） |
+
+两者都演示：对 `users` 写入再按 id 读回（Express 还挂了 `createGraphqlHandler`）。
+
+### 9. advisorProvider
+
+未配置时 `db.advise(query)` 只返回规则引擎建议。配置后注入异步函数；**provider 抛错时退回规则建议，原查询仍成功**。安装包不依赖外部 LLM。
+
+```ts
+const db = await open({
+  storagePath: './data',
+  advisorProvider: async (_query, rules) => {
+    throw new Error('LLM unavailable'); // 调用方仍拿到 rules；query 不受影响
+  },
+});
+const advice = await db.advise({ collection: 'users', filter: { age: { $gt: 18 } } });
+const rows = await db.query({ collection: 'users', filter: { age: { $gt: 18 } } });
+```
+
+### 10. 向量插件（可用实现，不是通用向量库）
+
+`createVectorPlugin()`：内存索引，`upsertVector` + 余弦相似度 `search` / `db.vectorSearch`。`stub: false`，`availableIn: '3.4'`。命中含 `{ id, score }`（`score` 为余弦相似度，越大越近）。适合**小样本**（进程内、维数一致的演示数据）。**不保证**复杂过滤、持久化、实时增量同步，也**不是**通用向量数据库。`createVectorStub()` 仍返回空命中。
+
+```ts
+import { createVectorPlugin, open } from '@webofcat/jsonsqlite';
+
+const db = await open({ storagePath: './data' });
+const vector = createVectorPlugin();
+db.registerPlugin(vector);
+vector.upsertVector('docs', 'v1', [1, 0, 0]);
+const result = await db.vectorSearch('docs', [1, 0, 0]);
+// result.stub === false；result.hits[0].score > 0
+```
+
+### 11. serve
+
+```bash
+jsonsqlite serve -p ./data --host 127.0.0.1 --port 3000
+# 等同 jsonsqlite admin serve …；监听现有 HTTP/Admin（含 REST、SSE、/stream）
+```
+
+```ts
+await db.serve({ host: '127.0.0.1', port: 3000 });
+await db.startServer({ host: '127.0.0.1', port: 3000 }); // 同一行为
+```
+
+`open()` **不会**因配置自动监听端口。没有新的 TCP / 线协议。
+
+### 12. collection / table
+
+`db.collection(name)` 与 `db.table(name)` 返回同一类 `CollectionHandle`；`insert` / `find` / `findById` / `update` / `delete` 委托现有引擎方法，不另建存储。
+
+```ts
+await db.collection('items').insert({ _id: 'i1', sku: 'X' });
+await db.table('items').findById('i1'); // 与 db.findById('items', 'i1') 相同
+```
+
+### 13. REST 文档接口
+
+鉴权与 `POST /query` 相同（token / TLS 规则不变）。全部委托现有引擎：
+
+| 方法 | 路径 | 等价 |
+|------|------|------|
+| `POST` | `/collections/:name` | `db.insert(name, body)` → 201 `{ doc }` |
+| `GET` | `/collections/:name/:id` | `db.findById`；未找到 `DOCUMENT_NOT_FOUND` 404 |
+| `PATCH` | `/collections/:name/:id` | `db.update` |
+| `DELETE` | `/collections/:name/:id` | `db.delete`；未找到 404 |
+| `POST` | `/query` | 保留，JSON 查询 |
+
+### 14. 明确不在本版
+
+Raft、自动分片、**自动选主**、跨机锁、WASM、多语言 TCP。`config validate` 仍拒绝 `cluster` 与 `wasm`。稳定帮助**没有** `cluster`。选主与集群浸泡在 **3.5**；长期稳定线是 **3.6**。
+
+---
+
+## 3.3 异步复制（默认关闭，历史）
+
+拓扑是**一个主、一个或多个从**。主库本地提交成功**不能**当成从库已经收到。从库异步拉取主库的 `replication/log.jsonl`，达到**最终可见**。3.4 在此基础上增加 quorum、读路由与接入层；本节仍是复制基础行为。
 
 ### 关闭 vs 开启
 
 ```ts
-// 关闭（默认）：仍是单机，可直接打开 2.5 / 3.2 库
+// 关闭（默认）：仍是单机，可直接打开 2.5 / 3.2 / 3.3 库
 const db = await open({ storagePath: './data' });
-// 或显式
 const dbOff = await open({ storagePath: './data', replica: false });
 
-// 开启复制选项（仍须 replica init 写出角色；open 不会自动 init）
 const primary = await open({
   storagePath: './primary',
   replica: { syncIntervalMs: 100 },
@@ -67,44 +306,26 @@ jsonsqlite replica status -p ./secondary --json
 
 ### 滞后字段与单位
 
-`metrics`、`doctor`、`replica status`、开启复制后的 `/health` 使用同一套字段：
-
 | 字段 | 单位 | 含义 |
 |------|------|------|
 | `lagEntries` | **条数** | 主库尖端 LSN − 已应用 LSN |
 | `lagMs` | **毫秒** | 主库尖端时间 − 已应用时间 |
 | `appliedLsn` / `replicatedPrefix` | LSN | 已安全应用的前缀 |
 | `role` | 枚举 | `none` / `primary` / `secondary` |
-
-滞后变大时第一步：看 `replica status`，确认从库进程在跑、`primaryPath` 可读、主库日志在增长。
+| `quorum` / `quorumAcked` / `replicated` | — | 3.4 status 字段 |
 
 ### 主宕机之后
 
 1. 从库停在已复制前缀，**继续拒绝写入**。
 2. 没有自动选主。错误码：`REPLICA_READONLY`。
-3. 确认旧主不再写入后，执行唯一提升命令：
-
-```bash
-jsonsqlite replica promote --yes -p ./secondary
-```
-
-提升前数据停在 `appliedLsn`；未复制的主库尾部不会自动追回。没有这条命令时从库保持只读前缀。
-
-### 迁移（复制仍关闭）
-
-- **3.2 → 3.3** / **2.5 → 3.3**：不开启复制时直接用 3.3 打开即可；也可用 `migrate --from … --to … --yes` 拷贝到新目录。开启复制是**可选项**，与迁移无关。
-- 分片路由本版**未实现**，稳定帮助中不出现；默认请求不经过路由器。
+3. 确认旧主不再写入后：`jsonsqlite replica promote --yes [--operator name] -p ./secondary`
 
 ### `/health` 与配置
 
 - 复制关闭：`/health` 成功，`replica.enabled === false`，**不**因没有从库而失败。
-- 复制打开：含 `role`、`lagEntries`、`lagMs` 等，单位与 `replica status` 相同。
+- 复制打开：含 `role`、`lagEntries`、`lagMs` 等。
 
-`config.example.json` 中 `"replica": false`。`config validate` 接受它，仍拒绝 `cluster`。
-
-### 路线
-
-Quorum、读写分离、可用冷存储与接入层在 **3.4**。选主在 **3.5**。长期稳定线是 **3.6**。本版不做 Raft、自动 rebalance、跨机锁、GraphQL、WASM。CLI 有 `replica init` / `status` / `promote`，**没有** `cluster`。
+`config.example.json` 中 `"replica": false`、`"graphql": false`。`config validate` 接受它们，仍拒绝 `cluster` / `wasm`。
 
 详细协议见 [`devDocs/releases/v3.3.0/RFC-异步复制.md`](../../devDocs/releases/v3.3.0/RFC-异步复制.md)。
 
@@ -185,14 +406,16 @@ import {
   assertPluginManifest,
   builtinPluginCatalog,
   builtinPluginInfo,
+  createS3Plugin,
   createS3Stub,
+  createVectorPlugin,
   createVectorStub,
   isJsonQueryShape,
   loadPluginFromPath,
 } from '@webofcat/jsonsqlite/plugin';
 ```
 
-`l3` / `redis` 默认 false。未安装客户端时 `open` 成功，`db.l3Status()` 为关闭（`reason: 'module-not-found'`）。`replica` / `cluster` / `graphql` / `wasm` 仍被 `config validate` 拒绝。
+`l3` / `redis` 默认 false。未安装客户端时 `open` 成功，`db.l3Status()` 为关闭（`reason: 'module-not-found'`）。3.4 起 `replica` / `graphql` 已移出危险键（example 默认关闭）；`config validate` 仍拒绝 `cluster` / `wasm`。可用冷存储与向量见上文 3.4 节（`createS3Plugin` / `createVectorPlugin`）。
 
 ### Advisor、指标、事务、Delta
 
@@ -212,9 +435,9 @@ Delta 只记变更字段（`patch: true`）。达到 `deltaSnapshotThreshold`（
 
 性能数字只引用 [`devDocs/releases/v3.2.0/性能包络.md`](../../devDocs/releases/v3.2.0/性能包络.md)。
 
-### 这一版明确不做
+### 这一版（3.2）明确不做
 
-复制、Quorum、GraphQL、多库、可用向量、可用 S3、Raft、WASM、HTTP 文档 REST（在 3.4）。
+异步复制、Quorum、GraphQL、多库、可用向量、可用 S3、Raft、WASM、HTTP 文档 REST（这些在 3.3 / 3.4 陆续交付；见上文）。
 
 ## 3.1 索引与存储（历史）
 

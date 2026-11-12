@@ -417,3 +417,20 @@ jsonsqlite insert|update|delete|index|sql --help
 
 帮助文本有 `replica init|status|promote`，没有 `cluster`，没有自动提升。从库写入错误码 `REPLICA_READONLY`。
 
+---
+
+## 25. 3.4 复制硬化与接入层（非 LTS）
+
+> **3.4.0 非 LTS。** 相对 3.3 为 MINOR。仍然没有自动选主。设计完工线 3.6。`latest` 为本版；`lts` / `lts-2` = 2.2，`lts-3` = 2.5；无 `lts-4`。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `replica status [--json]` | ✅ | 增加 `quorum`、`quorumAcked`、`replicated`；保留 3.3 字段。`lagEntries` 单位是条数 |
+| `replica promote --yes [--operator name]` | ✅ | 审计含 `operator` / `fromRole` / `toRole`；无自动提升 |
+| `db list\|register\|use\|unregister` | ✅ | 多库注册表（cwd `.jsonsqlite-registry.json` 或 `~/.jsonsqlite/registry.json`） |
+| `serve` / `admin serve` | ✅ | 现有 HTTP/Admin 常驻；含 REST `/collections/:name[/:id]` 与可选 `POST /graphql` |
+| `version --json` | ✅ | `3.4.0`，`lts: false`，`cliSurface: '3.4.0'` |
+| `config validate --file` | ✅ | 接受默认关闭的 `replica` / `graphql`；仍拒绝 `cluster` / `wasm` |
+
+帮助文本有 quorum / `lagEntries` / `promote --yes`，没有 `cluster`，没有 failover。Quorum 不足错误码 `QUORUM_FAILED`（可重试）。
+

@@ -72,6 +72,7 @@ import { analyzeQuality, autoFixDocs } from '../features/DataQuality.js';
 import { AutoTune } from '../features/AutoTune.js';
 import { StreamProcessor } from '../features/StreamProcessor.js';
 import { startHttpServer, type HttpServerOptions } from '../api/httpServer.js';
+import { CollectionHandle } from '../api/CollectionHandle.js';
 import { autoSelectIndexType } from '../index/autoSelect.js';
 import { parseSql } from '../sql/parse.js';
 import type { SelectStmt, SqlStatement } from '../sql/ast.js';
@@ -103,6 +104,7 @@ import {
   ReplicaManager,
   type ReplicaStatus,
 } from '../replica/ReplicaManager.js';
+import type { Advice } from '../features/QueryAdvisor.js';
 import type {
   AlterTableSpec,
   CollectionInfo,
@@ -134,6 +136,23 @@ function replicaSyncIntervalMs(
     return replica.syncIntervalMs;
   }
   return 100;
+}
+
+function replicaQuorum(replica: ResolvedOptions['replica']): number {
+  if (replica && typeof replica === 'object' && typeof replica.quorum === 'number') {
+    return Math.max(0, replica.quorum);
+  }
+  return 1;
+}
+
+function replicaManagerOpts(replica: ResolvedOptions['replica']): {
+  syncIntervalMs: number;
+  quorum: number;
+} {
+  return {
+    syncIntervalMs: replicaSyncIntervalMs(replica),
+    quorum: replicaQuorum(replica),
+  };
 }
 
 export class JSONSQLite extends EventEmitter {
@@ -188,9 +207,11 @@ export class JSONSQLite extends EventEmitter {
   private ready = false;
   private lastBackupTs = 0;
   private replica: ReplicaManager | null = null;
+  private readonly advisorProvider: JSONSQLiteOptions['advisorProvider'];
 
   constructor(options: JSONSQLiteOptions) {
     super();
+    this.advisorProvider = options.advisorProvider;
     this.options = resolveOptions(options);
     this.encKey = resolveEncryptionKey(this.options.encryptionKey);
   }
@@ -334,6 +355,13 @@ export class JSONSQLite extends EventEmitter {
         this.plugins!.storageHooks().map((plugin) => ({
           putCold: async (collection: string, doc: Document) => {
             await this.plugins!.isolate(plugin, () => plugin.putCold?.(collection, doc));
+          },
+          getCold: async (collection: string, id: string) => {
+            const result = await this.plugins!.isolate(plugin, () =>
+              plugin.getCold?.(collection, id),
+            );
+            if (!result.ok) return null;
+            return result.value ?? null;
           },
         })),
       );
@@ -496,9 +524,7 @@ export class JSONSQLite extends EventEmitter {
         );
       }
 
-      this.replica = new ReplicaManager(root, {
-        syncIntervalMs: replicaSyncIntervalMs(this.options.replica),
-      });
+      this.replica = new ReplicaManager(root, replicaManagerOpts(this.options.replica));
       await this.replica.load();
       this.ready = true;
       if (this.replica.role() === 'secondary') {
@@ -1267,6 +1293,16 @@ export class JSONSQLite extends EventEmitter {
       else this.tiers.noteWarmRead();
       this.tiers.noteAccess(collection, id);
       return { ...placed.doc };
+    }
+    if (!hot) {
+      // Point lookup may recall from storage-plugin cold (e.g. createS3Plugin).
+      // Failures leave hot path intact; unrecalled cold stays out of hot scans.
+      const fromPlugin = await this.tiers.lookupCold(collection, id);
+      if (fromPlugin) {
+        this.tiers.noteColdRead();
+        this.tiers.noteAccess(collection, id);
+        return { ...fromPlugin.doc };
+      }
     }
     if (hot) this.tiers.noteAccess(collection, id);
     return hot;
@@ -2097,12 +2133,16 @@ export class JSONSQLite extends EventEmitter {
     this.autoTune?.setConfig(patch);
   }
 
-  advise(query: JsonQuery) {
+  /**
+   * Rules-based advisor. When `advisorProvider` is set, awaits it and
+   * returns its result; provider failures fall back to rules only.
+   */
+  async advise(query: JsonQuery): Promise<Advice[]> {
     this.assertReady();
     const normalized = foldQuery(query);
     const indexes = this.indexes!.findForCollection(normalized.collection);
     const choice = chooseIndex(normalized.filter, indexes);
-    return adviseQuery(
+    const rules = adviseQuery(
       normalized,
       this.indexes!.list(),
       undefined,
@@ -2112,6 +2152,13 @@ export class JSONSQLite extends EventEmitter {
       },
       this.monitor.rejectedIndexKeys(),
     );
+    if (!this.advisorProvider) return rules;
+    try {
+      const out = await this.advisorProvider(normalized, rules);
+      return out ?? rules;
+    } catch {
+      return rules;
+    }
   }
 
   /**
@@ -2317,6 +2364,7 @@ export class JSONSQLite extends EventEmitter {
       autoTuneMinHits: this.options.autoTuneMinHits,
       l3: this.options.l3,
       redis: this.options.redis,
+      graphql: this.options.graphql,
     };
   }
 
@@ -2525,6 +2573,9 @@ export class JSONSQLite extends EventEmitter {
           appliedLsn: 0,
           lastLsn: 0,
           replicatedPrefix: 0,
+          quorum: replica.quorum,
+          quorumAcked: 0,
+          replicated: true,
         },
       };
     }
@@ -2538,6 +2589,9 @@ export class JSONSQLite extends EventEmitter {
         appliedLsn: replica.appliedLsn,
         lastLsn: replica.lastLsn,
         replicatedPrefix: replica.replicatedPrefix,
+        quorum: replica.quorum,
+        quorumAcked: replica.quorumAcked,
+        replicated: replica.replicated,
       },
     };
   }
@@ -2559,6 +2613,9 @@ export class JSONSQLite extends EventEmitter {
         replicatedPrefix: 0,
         promotedAt: null,
         syncIntervalMs: replicaSyncIntervalMs(this.options.replica),
+        quorum: replicaQuorum(this.options.replica),
+        quorumAcked: 0,
+        replicated: true,
       };
     }
     return this.replica.status();
@@ -2578,9 +2635,10 @@ export class JSONSQLite extends EventEmitter {
   }): Promise<ReplicaStatus> {
     this.assertReady();
     if (!this.replica) {
-      this.replica = new ReplicaManager(this.storagePath, {
-        syncIntervalMs: replicaSyncIntervalMs(this.options.replica),
-      });
+      this.replica = new ReplicaManager(
+        this.storagePath,
+        replicaManagerOpts(this.options.replica),
+      );
     }
     this.replica.stopSync();
     const status = await this.replica.init(opts);
@@ -2592,9 +2650,9 @@ export class JSONSQLite extends EventEmitter {
 
   /**
    * Only command that turns a secondary into a writable primary.
-   * There is no automatic promote.
+   * There is no automatic promote. Writes a promote audit entry.
    */
-  async replicaPromote(): Promise<ReplicaStatus> {
+  async replicaPromote(opts?: { operator?: string }): Promise<ReplicaStatus> {
     this.assertReady();
     if (!this.replica) {
       throw new JSONSQLiteError(
@@ -2602,7 +2660,17 @@ export class JSONSQLite extends EventEmitter {
         'replica promote requires an initialized secondary',
       );
     }
-    return this.replica.promote();
+    const fromRole = this.replica.role();
+    const status = await this.replica.promote();
+    const operator = opts?.operator?.trim() || 'unknown';
+    await this.audit?.append('promote', `replica promote ${fromRole} -> ${status.role}`, {
+      operator,
+      fromRole,
+      toRole: status.role,
+      appliedLsn: status.appliedLsn,
+      promotedAt: status.promotedAt,
+    });
+    return status;
   }
 
   /** Pull and apply pending primary log entries once (secondary). */
@@ -2686,6 +2754,22 @@ export class JSONSQLite extends EventEmitter {
     if (this.httpServer) return this.httpServer;
     this.httpServer = await startHttpServer(this, opts);
     return this.httpServer;
+  }
+
+  /** Alias for `startServer`. */
+  async serve(opts?: HttpServerOptions): Promise<http.Server> {
+    return this.startServer(opts);
+  }
+
+  /** Collection-scoped CRUD handle. */
+  collection(name: string): CollectionHandle {
+    this.assertReady();
+    return new CollectionHandle(this, name);
+  }
+
+  /** Alias for `collection`. */
+  table(name: string): CollectionHandle {
+    return this.collection(name);
   }
 
   private async executeJoinSelect(stmt: SelectStmt): Promise<SqlResult> {
@@ -3108,7 +3192,7 @@ export class JSONSQLite extends EventEmitter {
     if (!plugin?.search) {
       throw new JSONSQLiteError(
         ErrorCode.INVALID_CONFIG,
-        'vector plugin is not registered. The built-in vector entry is a stub; a usable vector index is planned for 3.4+.',
+        'vector plugin is not registered. Register a vector index plugin; the built-in catalog entry is a stub until a usable implementation is loaded.',
       );
     }
     const result = await this.plugins!.isolate(plugin, () =>

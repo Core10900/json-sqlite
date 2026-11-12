@@ -23,7 +23,7 @@ export interface CompatibilityInfo {
    * On 3.0.0 this is not the package version. Single-writer users still pin 2.2.
    */
   ltsLine: '2.5';
-  /** CLI surface. 3.3.0 adds replica init/status/promote. */
+  /** CLI surface. 3.4.0 adds quorum, read-router, GraphQL, pool/registry. */
   cliSurface: string;
   /** Default open mode. Multi-writer is opt-in and is not this field. */
   writers: 'single';
@@ -60,7 +60,7 @@ export function getCompatibilityInfo(): CompatibilityInfo {
     formatVersion: FORMAT_VERSION,
     lts: false,
     ltsLine: '2.5',
-    cliSurface: '3.3.0',
+    cliSurface: '3.4.0',
     writers: 'single',
     features: [
       'encryption',
@@ -144,6 +144,15 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'async-replica',
       'replica-promote',
       'cli-3.3',
+      'cli-3.4',
+      'replica-quorum',
+      'read-router',
+      's3-plugin',
+      'promote-audit',
+      'graphql',
+      'connection-pool',
+      'database-registry',
+      'vector-plugin',
     ],
   };
 }

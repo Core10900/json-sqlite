@@ -156,6 +156,10 @@ export async function dispatch(argv: string[]): Promise<void> {
       return cmdDoctor(ctx, rest);
     case 'admin':
       return cmdAdmin(ctx, rest);
+    case 'serve':
+      return cmdServe(ctx, rest);
+    case 'db':
+      return cmdDb(ctx, rest);
     case 'advise':
       return cmdAdvise(ctx, rest);
     case 'aggregate':
@@ -217,7 +221,7 @@ async function cmdReplica(
       const status = await db.replicaStatusFresh();
       printSuccess(
         ctx.out,
-        `replica role=${status.role} lagEntries=${status.lagEntries} lagMs=${status.lagMs} appliedLsn=${status.appliedLsn} lastLsn=${status.lastLsn}`,
+        `replica role=${status.role} lagEntries=${status.lagEntries} lagMs=${status.lagMs} appliedLsn=${status.appliedLsn} lastLsn=${status.lastLsn} quorum=${status.quorum} quorumAcked=${status.quorumAcked} replicated=${status.replicated}`,
         { action: 'replica.status', ...status },
       );
     });
@@ -230,11 +234,14 @@ async function cmdReplica(
         'replica promote requires --yes (no automatic promote)',
         'CONFIRM_REQUIRED',
         ExitCode.USAGE,
-        'jsonsqlite replica promote --yes -p <secondary>',
+        'jsonsqlite replica promote --yes [--operator name] -p <secondary>',
       );
     }
+    const operator = flag(rest, '--operator') ?? undefined;
     await withDb(ctx, async (db) => {
-      const status = await db.replicaPromote();
+      const status = await db.replicaPromote(
+        operator !== undefined ? { operator } : { operator: 'cli' },
+      );
       printSuccess(
         ctx.out,
         `✓ replica promoted role=${status.role} appliedLsn=${status.appliedLsn}`,
@@ -1323,7 +1330,7 @@ async function cmdTune(ctx: CliContext, rest: string[]): Promise<void> {
     const optionsBefore = db.getOptionsSnapshot();
     db.configureAutoTune({ enabled: true, dryRun });
     const entries = await db.runAutoTune(seed);
-    const advice = db.advise(seed);
+    const advice = await db.advise(seed);
     const after = await db.listIndexes();
     const optionsAfter = db.getOptionsSnapshot();
     if (dryRun && JSON.stringify(before) !== JSON.stringify(after)) {
@@ -1587,21 +1594,37 @@ async function cmdDoctor(ctx: CliContext, rest: string[]): Promise<void> {
 async function cmdAdmin(ctx: CliContext, rest: string[]): Promise<void> {
   const sub = rest[0];
   if (!sub || sub === '--help' || hasFlag(rest, '--help', '-h')) {
-    console.log(helpFor(['admin']) ?? helpAdmin());
+    console.log(helpFor(['admin']) ?? helpAdminText());
     if (!sub) setExit(ExitCode.USAGE);
     return;
   }
   if (sub !== 'serve') {
-    fail(ctx.out, `Unknown admin subcommand: ${sub}`, 'USAGE', ExitCode.USAGE, helpAdmin());
+    fail(ctx.out, `Unknown admin subcommand: ${sub}`, 'USAGE', ExitCode.USAGE, helpAdminText());
   }
-  const args = rest.slice(1);
+  return runServe(ctx, rest.slice(1), 'admin.serve');
+}
+
+/** Top-level `serve` — same as `admin serve`. */
+async function cmdServe(ctx: CliContext, rest: string[]): Promise<void> {
+  if (hasFlag(rest, '--help', '-h')) {
+    console.log(helpFor(['serve']) ?? helpFor(['admin serve']) ?? helpAdminText());
+    return;
+  }
+  return runServe(ctx, rest, 'serve');
+}
+
+async function runServe(
+  ctx: CliContext,
+  args: string[],
+  action: string,
+): Promise<void> {
   const host = flag(args, '--host') ?? '127.0.0.1';
   const port = Number(flag(args, '--port') ?? '3000');
   const token = flag(args, '--token') ?? null;
   const certPath = flag(args, '--cert');
   const keyPath = flag(args, '--key');
   if ((certPath && !keyPath) || (!certPath && keyPath)) {
-    fail(ctx.out, 'admin serve 需要同时提供 --cert 与 --key', 'USAGE');
+    fail(ctx.out, 'serve 需要同时提供 --cert 与 --key', 'USAGE');
   }
   const tls =
     certPath && keyPath
@@ -1611,7 +1634,7 @@ async function cmdAdmin(ctx: CliContext, rest: string[]): Promise<void> {
         }
       : null;
   await withDb(ctx, async (db) => {
-    const server = await db.startServer({
+    const server = await db.serve({
       host,
       port,
       adminToken: token,
@@ -1619,12 +1642,11 @@ async function cmdAdmin(ctx: CliContext, rest: string[]): Promise<void> {
     });
     const addr = `http://${host}:${port}/admin`;
     printSuccess(ctx.out, `✓ admin listening ${addr}`, {
-      action: 'admin.serve',
+      action,
       host,
       port,
       url: addr,
     });
-    // Keep process alive until SIGINT (or --once for tests)
     if (hasFlag(args, '--once')) {
       server.close();
       return;
@@ -1637,6 +1659,85 @@ async function cmdAdmin(ctx: CliContext, rest: string[]): Promise<void> {
       process.once('SIGTERM', stop);
     });
   });
+}
+
+async function cmdDb(ctx: CliContext, rest: string[]): Promise<void> {
+  const sub = rest.find((a) => !a.startsWith('-'));
+  if (!sub || sub === 'help' || hasFlag(rest, '--help', '-h')) {
+    console.log(helpFor(['db']) ?? 'jsonsqlite db list|register|use|unregister');
+    if (!sub) setExit(ExitCode.USAGE);
+    return;
+  }
+  const { createDatabaseRegistry } = await import('../registry/DatabaseRegistry.js');
+  const registry = await createDatabaseRegistry();
+  if (sub === 'list') {
+    const entries = registry.list();
+    printData(
+      ctx.out,
+      entries.map((e) => `${e.name}\t${e.storagePath}`).join('\n') || '(empty)',
+      { action: 'db.list', databases: entries, registry: registry.path },
+    );
+    return;
+  }
+  if (sub === 'register') {
+    const name = flag(rest, '--name');
+    const storagePath = flag(rest, '--path') ?? flag(rest, '-p');
+    if (!name || !storagePath) {
+      fail(
+        ctx.out,
+        '用法: jsonsqlite db register --name <name> --path <storagePath>',
+        'USAGE',
+      );
+    }
+    await registry.register(name, storagePath);
+    printSuccess(ctx.out, `✓ registered ${name} → ${path.resolve(storagePath)}`, {
+      action: 'db.register',
+      name,
+      storagePath: path.resolve(storagePath),
+      registry: registry.path,
+    });
+    return;
+  }
+  if (sub === 'use') {
+    const name =
+      flag(rest, '--name') ??
+      rest.filter((a) => !a.startsWith('-')).find((a) => a !== 'use');
+    if (!name) {
+      fail(ctx.out, '用法: jsonsqlite db use --name <name>', 'USAGE');
+    }
+    const entry = registry.list().find((e) => e.name === name);
+    if (!entry) {
+      fail(ctx.out, `Database "${name}" is not registered`, 'DB_NOT_FOUND');
+    }
+    const hint = `jsonsqlite -p ${entry.storagePath} <command>`;
+    printData(ctx.out, `Use with: ${hint}`, {
+      action: 'db.use',
+      name,
+      storagePath: entry.storagePath,
+      hint,
+      env: `JSONSQLITE_PATH=${entry.storagePath}`,
+    });
+    return;
+  }
+  if (sub === 'unregister') {
+    const name =
+      flag(rest, '--name') ??
+      rest.filter((a) => !a.startsWith('-')).find((a) => a !== 'unregister');
+    if (!name) {
+      fail(ctx.out, '用法: jsonsqlite db unregister --name <name>', 'USAGE');
+    }
+    const ok = await registry.unregister(name);
+    if (!ok) {
+      fail(ctx.out, `Database "${name}" is not registered`, 'DB_NOT_FOUND');
+    }
+    printSuccess(ctx.out, `✓ unregistered ${name}`, {
+      action: 'db.unregister',
+      name,
+      registry: registry.path,
+    });
+    return;
+  }
+  fail(ctx.out, `Unknown db subcommand: ${sub}`, 'USAGE', ExitCode.USAGE);
 }
 
 async function cmdAdvise(ctx: CliContext, rest: string[]): Promise<void> {
@@ -1667,7 +1768,7 @@ async function cmdAdvise(ctx: CliContext, rest: string[]): Promise<void> {
         projection: stmt.columns === '*' ? undefined : stmt.columns,
       };
     }
-    const advice = db.advise(query);
+    const advice = await db.advise(query);
     const indexes = (await db.listIndexes()).filter(
       (i) => i.collection === query.collection,
     );
@@ -1751,10 +1852,6 @@ async function cmdWatch(ctx: CliContext, rest: string[]): Promise<void> {
       void reject;
     });
   });
-}
-
-function helpAdmin(): string {
-  return helpAdminText();
 }
 
 function normalizeFieldType(raw: string): FieldType | null {

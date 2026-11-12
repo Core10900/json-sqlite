@@ -310,8 +310,9 @@ export interface JSONSQLiteOptions {
   /** Redis marker. Default false. Missing client does not fail open. */
   redis?: boolean;
   /**
-   * Async replication (3.3). Default false.
-   * Role requires `replica init`. Object may set `syncIntervalMs`.
+   * Async replication (3.3+). Default false.
+   * Role requires `replica init`. Object may set `syncIntervalMs` and `quorum`.
+   * `quorum` is acknowledgements including the primary (default 1 = primary only).
    */
   replica?:
     | boolean
@@ -319,7 +320,28 @@ export interface JSONSQLiteOptions {
         enabled?: boolean;
         /** Secondary pull interval in milliseconds. Default 100. */
         syncIntervalMs?: number;
+        /**
+         * Acknowledgements required including primary. Default 1 (no secondary wait).
+         * quorum=2 waits for 1 secondary ack after append.
+         */
+        quorum?: number;
       };
+  /**
+   * Enable minimal GraphQL execute/HTTP (3.4). Default false.
+   */
+  graphql?: boolean;
+  /**
+   * Optional async advisor hook (3.4). Called after built-in rules.
+   * Failures fall back to rules advice and do not throw from `advise`.
+   */
+  advisorProvider?: (
+    query: JsonQuery,
+    rulesAdvice: import('../features/QueryAdvisor.js').Advice[],
+  ) =>
+    | import('../features/QueryAdvisor.js').Advice[]
+    | Promise<import('../features/QueryAdvisor.js').Advice[] | null | undefined>
+    | null
+    | undefined;
 }
 
 /** Optional read scope. `txId` selects a REPEATABLE_READ snapshot. */

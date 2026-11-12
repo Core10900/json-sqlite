@@ -159,8 +159,9 @@ const optionsSchema = z.object({
    */
   redis: z.boolean().default(false),
   /**
-   * Async replication opt-in (3.3). Default false.
-   * Role still requires `replica init`. Object may set syncIntervalMs (ms).
+   * Async replication opt-in (3.3+). Default false.
+   * Role still requires `replica init`. Object may set syncIntervalMs / quorum.
+   * Top-level `quorum` remains DANGEROUS; nest under replica only.
    */
   replica: z
     .union([
@@ -168,9 +169,13 @@ const optionsSchema = z.object({
       z.object({
         enabled: z.boolean().optional(),
         syncIntervalMs: z.number().int().positive().optional(),
+        /** Acks including primary. Default 1 = primary-only success. */
+        quorum: z.number().int().nonnegative().optional(),
       }),
     ])
     .default(false),
+  /** 3.4 minimal GraphQL. Default false. */
+  graphql: z.boolean().default(false),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;

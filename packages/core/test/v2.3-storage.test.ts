@@ -532,7 +532,17 @@ describe('v2.3.0 CLI', () => {
 
     const info = await cli(['plugin', 'info', 'vector', '--json']);
     expect(info.code).toBe(0);
-    expect(JSON.parse(info.stdout).plugin.stub).toBe(true);
+    const vectorInfo = JSON.parse(info.stdout).plugin as { stub: boolean };
+    // 3.4+ catalog lists the usable createVectorPlugin (stub:false); earlier lines were stub-only.
+    if (
+      getVersion().startsWith('3.4.') ||
+      getVersion().startsWith('3.5.') ||
+      getVersion().startsWith('3.6.')
+    ) {
+      expect(vectorInfo.stub).toBe(false);
+    } else {
+      expect(vectorInfo.stub).toBe(true);
+    }
 
     const ver = await cli(['version', '--json']);
     const body = JSON.parse(ver.stdout) as { version: string; lts: boolean; ltsLine: string };

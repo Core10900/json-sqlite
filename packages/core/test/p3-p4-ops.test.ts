@@ -67,7 +67,7 @@ describe('P3/P4 backup health timetravel advisor', () => {
   it('FT-P4-ADV-01 advise suggests index', async () => {
     const db = await open({ storagePath: await tmpDir() });
     await db.insert('users', { age: 1 });
-    const advice = db.advise({
+    const advice = await db.advise({
       collection: 'users',
       filter: { age: { $gte: 0 } },
     });

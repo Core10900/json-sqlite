@@ -341,7 +341,7 @@ describe('v2.1.0 query and tune', () => {
     const db = await open({ storagePath: await tmpDir() });
     await db.insert('users', { name: 'n', age: 1 });
     const before = await db.listIndexes();
-    const advice = db.advise({ collection: 'users', filter: { age: 1 } });
+    const advice = await db.advise({ collection: 'users', filter: { age: 1 } });
     expect(advice.some((a) => a.type === 'index' || a.type === 'rewrite')).toBe(true);
     expect(await db.listIndexes()).toEqual(before);
     await db.close();

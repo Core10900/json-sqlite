@@ -1,0 +1,13 @@
+{
+  "name": "@jsonsqlite/example-express",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@webofcat/jsonsqlite": "workspace:*",
+    "express": "^4.21.2"
+  }
+}

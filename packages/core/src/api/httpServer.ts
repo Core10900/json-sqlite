@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { JSONSQLite } from '../engine/JSONSQLite.js';
 import { getAdminHtml } from '../admin/dashboard.js';
+import { executeGraphQL } from '../graphql/adapter.js';
 import type { JsonQuery } from '../types/index.js';
 
 export interface HttpServerOptions {
@@ -156,7 +157,7 @@ export async function startHttpServer(
           req.method === 'POST'
         ) {
           const body = JSON.parse(await readBody(req)) as JsonQuery;
-          return json(res, 200, { advice: db.advise(body) });
+          return json(res, 200, { advice: await db.advise(body) });
         }
         if (
           (route === '/profile' || url.pathname === '/profile') &&
@@ -224,8 +225,84 @@ export async function startHttpServer(
         });
       }
 
+      if (url.pathname === '/graphql' && req.method === 'POST') {
+        if (!authorize(req, token, url)) {
+          return json(res, 401, { error: 'unauthorized' });
+        }
+        if (!db.getOptionsSnapshot().graphql) {
+          return json(res, 404, { error: 'graphql disabled' });
+        }
+        const raw = await readBody(req);
+        let source = raw;
+        const trimmed = raw.trim();
+        if (trimmed.startsWith('{')) {
+          try {
+            const parsed = JSON.parse(trimmed) as { query?: string };
+            if (typeof parsed.query === 'string') source = parsed.query;
+          } catch {
+            /* raw GraphQL */
+          }
+        }
+        const result = await executeGraphQL(db, source);
+        return json(res, result.errors?.length ? 400 : 200, result);
+      }
+
+      const collMatch = url.pathname.match(
+        /^\/collections\/([^/]+)(?:\/([^/]+))?$/,
+      );
+      if (collMatch) {
+        if (!authorize(req, token, url)) {
+          return json(res, 401, { error: 'unauthorized' });
+        }
+        const name = decodeURIComponent(collMatch[1]!);
+        const id = collMatch[2] ? decodeURIComponent(collMatch[2]) : null;
+
+        if (!id && req.method === 'POST') {
+          const body = JSON.parse(await readBody(req)) as Record<string, unknown>;
+          const doc = await db.insert(name, body);
+          return json(res, 201, { doc });
+        }
+
+        if (id && req.method === 'GET') {
+          const doc = await db.findById(name, id);
+          if (!doc) {
+            return json(res, 404, {
+              error: 'DOCUMENT_NOT_FOUND',
+              code: ErrorCode.DOCUMENT_NOT_FOUND,
+              message: `Document not found: ${name}/${id}`,
+            });
+          }
+          return json(res, 200, { doc });
+        }
+
+        if (id && req.method === 'PATCH') {
+          const patch = JSON.parse(await readBody(req)) as Record<string, unknown>;
+          const doc = await db.update(name, id, patch);
+          return json(res, 200, { doc });
+        }
+
+        if (id && req.method === 'DELETE') {
+          const ok = await db.delete(name, id);
+          if (!ok) {
+            return json(res, 404, {
+              error: 'DOCUMENT_NOT_FOUND',
+              code: ErrorCode.DOCUMENT_NOT_FOUND,
+              message: `Document not found: ${name}/${id}`,
+            });
+          }
+          return json(res, 200, { ok: true });
+        }
+      }
+
       json(res, 404, { error: 'not found' });
     } catch (err) {
+      if (err instanceof JSONSQLiteError && err.code === ErrorCode.DOCUMENT_NOT_FOUND) {
+        return json(res, 404, {
+          error: 'DOCUMENT_NOT_FOUND',
+          code: err.code,
+          message: err.message,
+        });
+      }
       json(res, 500, { error: (err as Error).message });
     }
   };

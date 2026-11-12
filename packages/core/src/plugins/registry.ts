@@ -85,11 +85,11 @@ export function builtinPluginCatalog(): BuiltinPluginInfo[] {
       kind: 'index',
       name: 'vector',
       version: '0.0.1',
-      stub: true,
+      stub: false,
       availableIn: '3.4',
       registered: false,
       summary:
-        '可调用的向量索引 stub。search 会记一次调用并返回空命中。可用实现在 3.4+，本版不能做向量检索。',
+        '内存向量索引（3.4）。createVectorPlugin() 提供 upsertVector + cosine search；createVectorStub() 仍返回空命中。',
     },
     {
       kind: 'storage',
@@ -99,7 +99,7 @@ export function builtinPluginCatalog(): BuiltinPluginInfo[] {
       availableIn: '3.4',
       registered: false,
       summary:
-        '可调用的 S3 冷存储 stub。putCold 会记一次调用，不会上传对象。可用实现在 3.4，3.1 不会实际上传。',
+        '可调用的 S3 冷存储 stub。putCold 会记一次调用，不会上传对象。可用文件系统示例通过 createS3Plugin({ rootDir }) 注册（stub:false，3.4）。',
     },
   ];
 }
@@ -138,6 +138,90 @@ export function createVectorStub(): EnginePlugin & { calls: number } {
   return stub;
 }
 
+export interface VectorHit {
+  id: string;
+  score: number;
+}
+
+export interface VectorPluginSearchResult {
+  hits: VectorHit[];
+  stub: false;
+  availableIn: '3.4';
+  collection: string;
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  const n = Math.min(a.length, b.length);
+  if (n === 0) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < n; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+/**
+ * In-memory vector index plugin (3.4).
+ * Call `upsertVector` to index; `search` returns cosine-ranked hits.
+ */
+export function createVectorPlugin(): EnginePlugin & {
+  calls: number;
+  upsertVector(collection: string, id: string, vector: number[]): void;
+  clearVectors(collection?: string): void;
+} {
+  const index = new Map<string, Map<string, number[]>>();
+  const plugin = {
+    kind: 'index' as const,
+    name: 'vector',
+    version: '0.1.0',
+    stub: false,
+    availableIn: '3.4' as const,
+    calls: 0,
+    upsertVector(collection: string, id: string, vector: number[]): void {
+      let bucket = index.get(collection);
+      if (!bucket) {
+        bucket = new Map();
+        index.set(collection, bucket);
+      }
+      bucket.set(id, vector.slice());
+    },
+    clearVectors(collection?: string): void {
+      if (collection) index.delete(collection);
+      else index.clear();
+    },
+    search(ctx: {
+      collection: string;
+      vector: number[];
+      limit?: number;
+    }): VectorPluginSearchResult {
+      plugin.calls += 1;
+      const bucket = index.get(ctx.collection);
+      const hits: VectorHit[] = [];
+      if (bucket) {
+        for (const [id, vec] of bucket) {
+          hits.push({ id, score: cosineSimilarity(ctx.vector, vec) });
+        }
+        hits.sort((a, b) => b.score - a.score);
+      }
+      const limit = ctx.limit ?? hits.length;
+      return {
+        hits: hits.slice(0, Math.max(0, limit)),
+        stub: false,
+        availableIn: '3.4',
+        collection: ctx.collection,
+      };
+    },
+  };
+  return plugin;
+}
+
 export function createS3Stub(): EnginePlugin & { calls: number } {
   const stub = {
     kind: 'storage' as const,
@@ -155,6 +239,46 @@ export function createS3Stub(): EnginePlugin & { calls: number } {
     },
   };
   return stub;
+}
+
+/**
+ * Filesystem-backed cold object store that simulates S3 (V34-S3-1).
+ * Objects live at `{rootDir}/{collection}/{id}.json`.
+ * Not a stub — `stub: false`, `availableIn: '3.4'`.
+ */
+export function createS3Plugin(opts: { rootDir: string }): EnginePlugin {
+  const rootDir = path.resolve(opts.rootDir);
+  return {
+    kind: 'storage',
+    name: 's3',
+    version: '0.1.0',
+    stub: false,
+    availableIn: '3.4',
+    async putCold(collection: string, doc: Document): Promise<void> {
+      const dir = path.join(rootDir, collection);
+      await fs.mkdir(dir, { recursive: true });
+      await writeFileAtomic(
+        path.join(dir, `${doc._id}.json`),
+        JSON.stringify(doc),
+        'normal',
+      );
+    },
+    async getCold(
+      collection: string,
+      id: string,
+    ): Promise<Document | null> {
+      try {
+        const raw = await fs.readFile(
+          path.join(rootDir, collection, `${id}.json`),
+          'utf8',
+        );
+        return JSON.parse(raw) as Document;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw err;
+      }
+    },
+  };
 }
 
 interface StoredManifestFile {

@@ -17,8 +17,19 @@ export type {
   ReplicaStatus,
   ReplicaStateFile,
   ReplicaLogEntry,
+  ReplicaAckFile,
 } from './replica/ReplicaManager.js';
-export { REPLICA_LOG_FORMAT } from './replica/ReplicaManager.js';
+export {
+  REPLICA_LOG_FORMAT,
+  QUORUM_WAIT_MS,
+  secondaryAckId,
+} from './replica/ReplicaManager.js';
+export { ReadRouter, DEFAULT_LAG_THRESHOLD_ENTRIES } from './replica/ReadRouter.js';
+export type {
+  ReadRouterOptions,
+  ReadRouterOnLag,
+  ReadRouterEndpoint,
+} from './replica/ReadRouter.js';
 export { parseSql } from './sql/parse.js';
 export { rekeyDatabase } from './ops/rekey.js';
 export { migrateDatabase } from './ops/migrate.js';
@@ -83,10 +94,30 @@ export type {
 export { FORMAT_VERSION } from './storage/Catalog.js';
 export type { HttpServerOptions } from './api/httpServer.js';
 export { isLoopbackHost } from './api/httpServer.js';
+export { CollectionHandle } from './api/CollectionHandle.js';
+export {
+  createConnectionPool,
+  type ConnectionPool,
+  type ConnectionPoolOptions,
+} from './pool/ConnectionPool.js';
+export {
+  DatabaseRegistry,
+  createDatabaseRegistry,
+  defaultRegistryPath,
+  type RegistryEntry,
+  type DatabaseRegistryOptions,
+} from './registry/DatabaseRegistry.js';
+export {
+  executeGraphQL,
+  createGraphqlHandler,
+  type GraphQLResult,
+} from './graphql/adapter.js';
 export {
   builtinPluginCatalog,
   builtinPluginInfo,
+  createS3Plugin,
   createS3Stub,
+  createVectorPlugin,
   createVectorStub,
 } from './plugins/registry.js';
 export type {
@@ -94,6 +125,8 @@ export type {
   EnginePlugin,
   PluginKind,
   PluginManifest,
+  VectorHit,
+  VectorPluginSearchResult,
 } from './plugins/registry.js';
 export { compressSmart, decompressSmart, readSmartHeader, selectAlgorithm } from './storage/smartCompress.js';
 export type { SmartAlgorithm } from './storage/smartCompress.js';

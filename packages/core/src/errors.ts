@@ -51,6 +51,13 @@ export enum ErrorCode {
    * Not retryable as a conflict — role must change first.
    */
   REPLICA_READONLY = 'REPLICA_READONLY',
+  /**
+   * Primary append waited for secondary acks but quorum was not met.
+   * details.retryable is true. The log entry may already exist on disk.
+   */
+  QUORUM_FAILED = 'QUORUM_FAILED',
+  /** Connection pool was closed; borrow/release are refused. */
+  POOL_CLOSED = 'POOL_CLOSED',
   ENCRYPTION = 'ENCRYPTION',
   INTERNAL = 'INTERNAL',
 }
@@ -59,9 +66,10 @@ const RETRYABLE = new Set<ErrorCode>([
   ErrorCode.WRITE_CONFLICT,
   ErrorCode.DEADLOCK,
   ErrorCode.SERIALIZABLE_CONFLICT,
+  ErrorCode.QUORUM_FAILED,
 ]);
 
-/** True for WRITE_CONFLICT, DEADLOCK, and SERIALIZABLE_CONFLICT. */
+/** True for WRITE_CONFLICT, DEADLOCK, SERIALIZABLE_CONFLICT, and QUORUM_FAILED. */
 export function isRetryableError(err: unknown): boolean {
   return err instanceof JSONSQLiteError && RETRYABLE.has(err.code);
 }
