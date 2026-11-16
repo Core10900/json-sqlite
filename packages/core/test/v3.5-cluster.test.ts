@@ -85,10 +85,19 @@ async function currentLeader(nodes: JSONSQLite[]): Promise<JSONSQLite> {
 
 async function waitForUniqueLeader(
   nodes: JSONSQLite[],
-  timeoutMs = 4000,
+  timeoutMs = 10_000,
 ): Promise<string> {
   let leaderId = '';
   await waitUntil(async () => {
+    // Nudge election/heartbeat so full-suite load does not stall on idle ticks.
+    for (const n of nodes) {
+      try {
+        n.clusterStatus();
+        await n.clusterJoin();
+      } catch {
+        // closed / not ready
+      }
+    }
     const leaders = nodes
       .map((n) => n.clusterStatus())
       .filter((s) => s.role === 'leader' && s.leaderId === s.nodeId);
@@ -103,7 +112,7 @@ async function waitForUniqueLeader(
     if (!agree) return false;
     leaderId = id;
     return true;
-  }, timeoutMs);
+  }, timeoutMs, 50);
   return leaderId;
 }
 

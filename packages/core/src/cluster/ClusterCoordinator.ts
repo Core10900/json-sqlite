@@ -448,9 +448,6 @@ export class ClusterCoordinator {
       return;
     }
     const majority = Math.floor(n / 2) + 1;
-    const term = Math.max(prev.term, this.term) + 1;
-    this.term = term;
-
     const live = await this.liveMemberIds(meta.members, now);
     if (live.length < majority) {
       this.role = 'none';
@@ -459,37 +456,14 @@ export class ClusterCoordinator {
       return;
     }
 
-    // Deterministic candidate among live members → exactly one leader.
+    // Deterministic candidate among live members — only that node claims the lease.
+    // Avoid multi-round vote files (they raced under load and left the cluster leaderless).
     const candidate = [...live].sort()[0]!;
-    await this.writeVote(term, candidate);
-
-    // Brief wait so peers can cast votes for the same term.
-    await sleep(Math.min(40, Math.floor(this.tickMs / 2)));
-    const votes = await this.countVotes(term, candidate);
-    if (votes < majority) {
-      this.role = 'none';
-      this.leaderId = null;
-      this.leaseUntil = 0;
-      return;
-    }
-
-    if (candidate === this.nodeId) {
-      const leaseUntil = now + this.leaseMs;
-      await this.writeElection({
-        term,
-        leaderId: this.nodeId,
-        leaseUntil,
-        voters: live,
-      });
-      this.role = 'leader';
-      this.leaderId = this.nodeId;
-      this.leaseUntil = leaseUntil;
-    } else {
-      // Re-read in case the candidate already wrote the lease.
+    if (candidate !== this.nodeId) {
+      await sleep(Math.min(60, this.tickMs));
       const election = await readJsonFile<ElectionFile>(this.electionPath());
       if (
         election &&
-        election.term >= term &&
         election.leaderId === candidate &&
         election.leaseUntil >= Date.now()
       ) {
@@ -497,12 +471,39 @@ export class ClusterCoordinator {
         this.leaderId = election.leaderId;
         this.leaseUntil = election.leaseUntil;
         this.role = 'follower';
-      } else {
-        this.role = 'follower';
-        this.leaderId = candidate;
-        this.leaseUntil = 0;
+        return;
       }
+      // Candidate has not claimed yet; stay neutral until next tick.
+      this.role = 'none';
+      this.leaderId = null;
+      this.leaseUntil = 0;
+      return;
     }
+
+    const term = Math.max(prev.term, this.term) + 1;
+    const leaseUntil = now + this.leaseMs;
+    await this.writeElection({
+      term,
+      leaderId: this.nodeId,
+      leaseUntil,
+      voters: live,
+    });
+    // Confirm we still own the file (another claim should not happen for same candidate).
+    const confirm = await readJsonFile<ElectionFile>(this.electionPath());
+    if (
+      confirm &&
+      confirm.leaderId === this.nodeId &&
+      confirm.leaseUntil >= Date.now()
+    ) {
+      this.term = confirm.term;
+      this.leaderId = this.nodeId;
+      this.leaseUntil = confirm.leaseUntil;
+      this.role = 'leader';
+      return;
+    }
+    this.role = 'none';
+    this.leaderId = null;
+    this.leaseUntil = 0;
   }
 
   private async liveMemberIds(members: ClusterMember[], now: number): Promise<string[]> {
@@ -519,38 +520,6 @@ export class ClusterCoordinator {
       if (hb && now - hb.at <= freshMs) live.push(m.nodeId);
     }
     return live;
-  }
-
-  private async writeVote(term: number, candidateId: string): Promise<void> {
-    const dir = path.join(this.clusterRoot, 'votes', String(term));
-    await fs.mkdir(dir, { recursive: true });
-    await writeFileAtomic(
-      path.join(dir, `${this.nodeId}.json`),
-      JSON.stringify(
-        { nodeId: this.nodeId, candidateId, term, at: Date.now() },
-        null,
-        2,
-      ),
-      'normal',
-    );
-  }
-
-  private async countVotes(term: number, candidateId: string): Promise<number> {
-    const dir = path.join(this.clusterRoot, 'votes', String(term));
-    let names: string[];
-    try {
-      names = await fs.readdir(dir);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
-      throw err;
-    }
-    let count = 0;
-    for (const name of names) {
-      if (!name.endsWith('.json')) continue;
-      const vote = await readJsonFile<{ candidateId: string }>(path.join(dir, name));
-      if (vote?.candidateId === candidateId) count += 1;
-    }
-    return count;
   }
 
   private heartbeatPath(): string {
