@@ -81,17 +81,22 @@ describe('v3.4.0 gate', () => {
   });
 
   it('FT-V34-VER-01 getVersion 3.4.0, lts false, cliSurface 3.4.0', () => {
-    expect(getVersion()).toBe('3.4.0');
     const info = getCompatibilityInfo();
+    expect(info.version).toBe(getVersion());
     expect(info).toMatchObject({
-      version: '3.4.0',
       lts: false,
       ltsLine: '2.5',
       writers: 'single',
-      cliSurface: '3.4.0',
     });
     expect(info.features).toContain('replica-quorum');
     expect(info.features).toContain('read-router');
+    if (getVersion().startsWith('3.4.')) {
+      expect(getVersion()).toBe('3.4.0');
+      expect(info).toMatchObject({
+        version: '3.4.0',
+        cliSurface: '3.4.0',
+      });
+    }
   });
 
   it('FT-V34-CLI-01 helpRoot has no cluster, no failover', () => {

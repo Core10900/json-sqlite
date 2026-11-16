@@ -10,6 +10,8 @@ export interface GlobalFlags {
   writers?: 'single' | 'multi';
   /** Set when --writers is present but not single or multi. */
   writersError?: string;
+  /** Shared cluster root for 3.5 cluster commands. */
+  clusterRoot?: string;
   /** Remaining positional + unknown flags after stripping globals. */
   rest: string[];
   raw: string[];
@@ -53,6 +55,8 @@ const VALUE_FLAGS = new Set([
   '--action',
   '--role',
   '--primary-path',
+  '--cluster-root',
+  '--node-id',
 ]);
 
 /**
@@ -68,6 +72,7 @@ export function parseGlobalFlags(argv: string[]): GlobalFlags {
   let help = false;
   let writers: 'single' | 'multi' | undefined;
   let writersError: string | undefined;
+  let clusterRoot: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -97,10 +102,25 @@ export function parseGlobalFlags(argv: string[]): GlobalFlags {
       else writersError = value ?? '';
       continue;
     }
+    if (a === '--cluster-root') {
+      clusterRoot = argv[++i];
+      continue;
+    }
     rest.push(a);
   }
 
-  return { path: pathFlag, yes, json, quiet, help, writers, writersError, rest, raw: argv };
+  return {
+    path: pathFlag,
+    yes,
+    json,
+    quiet,
+    help,
+    writers,
+    writersError,
+    clusterRoot,
+    rest,
+    raw: argv,
+  };
 }
 
 export function flag(args: string[], name: string): string | undefined {

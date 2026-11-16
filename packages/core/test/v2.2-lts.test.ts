@@ -13,6 +13,7 @@ import {
   V32_CONFIG_KEYS,
   V33_CONFIG_KEYS,
   V34_CONFIG_KEYS,
+  V35_CONFIG_KEYS,
   validateConfig,
   validateConfigFile,
 } from '../src/config/validate.js';
@@ -136,13 +137,17 @@ describe('v2.2.0 LTS-2', () => {
       ...V32_CONFIG_KEYS,
       ...V33_CONFIG_KEYS,
       ...V34_CONFIG_KEYS,
+      ...V35_CONFIG_KEYS,
     ]);
     const dangerous = new Set<string>(DANGEROUS_CONFIG_KEYS);
     for (const key of Object.keys(example)) {
       expect(frozen.has(key)).toBe(true);
       expect(dangerous.has(key)).toBe(false);
     }
-    const requiredDangerous = ['cluster', 'cache', 'raft'];
+    const on35 =
+      getVersion().startsWith('3.5.') || getVersion().startsWith('3.6.');
+    const requiredDangerous = ['cache', 'raft'];
+    if (!on35) requiredDangerous.push('cluster');
     if (
       !getVersion().startsWith('3.3.') &&
       !getVersion().startsWith('3.4.') &&
@@ -165,14 +170,28 @@ describe('v2.2.0 LTS-2', () => {
     }
     for (const key of requiredDangerous) {
       expect(dangerous.has(key)).toBe(true);
-      if (key !== 'l3' && key !== 'redis' && key !== 'replica') {
+      if (
+        key !== 'l3' &&
+        key !== 'redis' &&
+        key !== 'replica' &&
+        key !== 'cluster'
+      ) {
         expect(example).not.toHaveProperty(key);
       }
     }
 
-    expect(() =>
-      validateConfig({ storagePath: './data', cluster: { nodes: 3 } }),
-    ).toThrow(/Rejected dangerous config key/);
+    if (on35) {
+      expect(validateConfig({ storagePath: './data', cluster: false }).cluster).toBe(
+        false,
+      );
+      expect(() =>
+        validateConfig({ storagePath: './data', cluster: { nodes: 3 } as never }),
+      ).toThrow();
+    } else {
+      expect(() =>
+        validateConfig({ storagePath: './data', cluster: { nodes: 3 } }),
+      ).toThrow(/Rejected dangerous config key/);
+    }
     expect(validateConfig({ storagePath: './data', graphql: false }).graphql).toBe(false);
 
     const cliOk = await cli(['config', 'validate', '--file', exampleFile, '--json']);
@@ -185,14 +204,18 @@ describe('v2.2.0 LTS-2', () => {
     const badFile = path.join(await tmpDir(), 'cluster.json');
     await fs.writeFile(
       badFile,
-      JSON.stringify({ storagePath: './data', cluster: true, checkpointInterval: 1 }),
+      JSON.stringify(
+        on35
+          ? { storagePath: './data', raft: true, checkpointInterval: 1 }
+          : { storagePath: './data', cluster: true, checkpointInterval: 1 },
+      ),
     );
     const cliBad = await cli(['config', 'validate', '--file', badFile, '--json']);
     expect(cliBad.code).toBe(1);
     const badBody = JSON.parse(cliBad.stdout) as { ok: boolean; code: string; message: string };
     expect(badBody.ok).toBe(false);
     expect(badBody.code).toBe('INVALID_CONFIG');
-    expect(badBody.message).toMatch(/cluster/);
+    expect(badBody.message).toMatch(on35 ? /raft/ : /cluster/);
     expect(badBody.message).toMatch(/not applied|Refused/);
     expect(badBody.message).toMatch(/checkpointInterval/);
   });

@@ -104,6 +104,10 @@ import {
   ReplicaManager,
   type ReplicaStatus,
 } from '../replica/ReplicaManager.js';
+import {
+  ClusterCoordinator,
+  type ClusterStatus,
+} from '../cluster/ClusterCoordinator.js';
 import type { Advice } from '../features/QueryAdvisor.js';
 import type {
   AlterTableSpec,
@@ -153,6 +157,26 @@ function replicaManagerOpts(replica: ResolvedOptions['replica']): {
     syncIntervalMs: replicaSyncIntervalMs(replica),
     quorum: replicaQuorum(replica),
   };
+}
+
+function clusterConfigObject(
+  cluster: ResolvedOptions['cluster'],
+): {
+  clusterRoot: string;
+  nodeId?: string;
+  leaseMs?: number;
+  shardCount?: number;
+} | null {
+  if (cluster === false || cluster === true || !cluster) return null;
+  if (typeof cluster === 'object' && typeof cluster.clusterRoot === 'string') {
+    return {
+      clusterRoot: cluster.clusterRoot,
+      nodeId: cluster.nodeId,
+      leaseMs: cluster.leaseMs,
+      shardCount: cluster.shardCount,
+    };
+  }
+  return null;
 }
 
 export class JSONSQLite extends EventEmitter {
@@ -207,6 +231,7 @@ export class JSONSQLite extends EventEmitter {
   private ready = false;
   private lastBackupTs = 0;
   private replica: ReplicaManager | null = null;
+  private cluster: ClusterCoordinator | null = null;
   private readonly advisorProvider: JSONSQLiteOptions['advisorProvider'];
 
   constructor(options: JSONSQLiteOptions) {
@@ -526,6 +551,18 @@ export class JSONSQLite extends EventEmitter {
 
       this.replica = new ReplicaManager(root, replicaManagerOpts(this.options.replica));
       await this.replica.load();
+      const clusterOpts = clusterConfigObject(this.options.cluster);
+      if (clusterOpts) {
+        this.cluster = new ClusterCoordinator({
+          storagePath: root,
+          clusterRoot: clusterOpts.clusterRoot,
+          nodeId: clusterOpts.nodeId,
+          leaseMs: clusterOpts.leaseMs,
+          shardCount: clusterOpts.shardCount,
+        });
+        // Resume prior join from meta/cluster-member.json (CLI cross-process).
+        await this.cluster.maybeResume();
+      }
       this.ready = true;
       if (this.replica.role() === 'secondary') {
         this.replica.startSync(this.replicaApplyHooks());
@@ -535,6 +572,7 @@ export class JSONSQLite extends EventEmitter {
       this.emit('ready');
       return this;
     } catch (err) {
+      this.cluster?.stop();
       this.replica?.stopSync();
       this.tiers?.stop();
       this.stopBackupScheduler();
@@ -559,6 +597,7 @@ export class JSONSQLite extends EventEmitter {
       this.audit = null;
       this.alerts = null;
       this.replica = null;
+      this.cluster = null;
       this.ready = false;
       throw err;
     }
@@ -566,6 +605,9 @@ export class JSONSQLite extends EventEmitter {
 
   async close(opts?: { flush?: boolean }): Promise<void> {
     if (!this.ready) return;
+    if (this.cluster) {
+      await this.cluster.stopAndResign();
+    }
     this.replica?.stopSync();
     this.stopBackupScheduler();
     this.stopMetricsEmitter();
@@ -608,10 +650,25 @@ export class JSONSQLite extends EventEmitter {
     this.audit = null;
     this.alerts = null;
     this.replica = null;
+    this.cluster = null;
     this.lock = null;
     this.multi = null;
     this.autoTune = null;
     this.emit('close');
+  }
+
+  private assertClusterWritable(): void {
+    this.cluster?.assertWritable();
+  }
+
+  private async replicateClusterDoc(
+    collection: string,
+    id: string,
+    doc: Document | null,
+  ): Promise<void> {
+    if (!this.cluster?.status().enabled) return;
+    if (this.cluster.status().role !== 'leader') return;
+    await this.cluster.replicateDoc(collection, id, doc);
   }
 
   private startBackupScheduler(): void {
@@ -709,6 +766,7 @@ export class JSONSQLite extends EventEmitter {
   ): Promise<CollectionInfo> {
     this.assertReady();
     this.replica?.assertWritable();
+    this.assertClusterWritable();
     return this.catalog!.create(name, options?.fields);
   }
 
@@ -749,6 +807,7 @@ export class JSONSQLite extends EventEmitter {
   async dropTable(name: string): Promise<void> {
     this.assertReady();
     this.replica?.assertWritable();
+    this.assertClusterWritable();
     if (!this.catalog!.has(name)) {
       throw new JSONSQLiteError(
         ErrorCode.COLLECTION_NOT_FOUND,
@@ -787,6 +846,7 @@ export class JSONSQLite extends EventEmitter {
   async alterTable(name: string, spec: AlterTableSpec): Promise<TableInfo> {
     this.assertReady();
     this.replica?.assertWritable();
+    this.assertClusterWritable();
     const current = await this.describeTable(name);
     let fields: FieldDef[] = [...(current.fields ?? [])];
 
@@ -1116,6 +1176,7 @@ export class JSONSQLite extends EventEmitter {
   ): Promise<Document | Document[]> {
     this.assertReady();
     this.replica?.assertWritable();
+    this.assertClusterWritable();
     if (this.options.writers === 'multi' && !this.tx!.active) {
       return this.withImplicitTx(() => this.insert(collection, data));
     }
@@ -1147,6 +1208,9 @@ export class JSONSQLite extends EventEmitter {
       if (!inTx) {
         await this.changelog!.appendMany(deltaBatch);
         await this.replica?.appendCommitted(deltaBatch);
+        for (const doc of out) {
+          await this.replicateClusterDoc(collection, doc._id, doc);
+        }
         this.touchCaches(collection);
         this.monitor.recordWrite();
         await this.persistIndexState(collection);
@@ -1170,6 +1234,7 @@ export class JSONSQLite extends EventEmitter {
       };
       await this.changelog!.append(entry);
       await this.replica?.appendCommitted([entry]);
+      await this.replicateClusterDoc(collection, doc._id, doc);
       this.touchCaches(collection);
       this.monitor.recordWrite();
       await this.persistIndexState(collection);
@@ -1187,6 +1252,7 @@ export class JSONSQLite extends EventEmitter {
   ): Promise<Document> {
     this.assertReady();
     this.replica?.assertWritable();
+    this.assertClusterWritable();
     if (this.options.writers === 'multi' && !this.tx!.active) {
       return this.withImplicitTx(() => this.update(collection, id, patch, opts));
     }
@@ -1214,6 +1280,7 @@ export class JSONSQLite extends EventEmitter {
       };
       await this.changelog!.append(entry);
       await this.replica?.appendCommitted([entry]);
+      await this.replicateClusterDoc(collection, id, doc);
       this.touchCaches(collection);
       this.monitor.recordWrite();
       await this.persistIndexState(collection);
@@ -1226,6 +1293,7 @@ export class JSONSQLite extends EventEmitter {
   async delete(collection: string, id: string): Promise<boolean> {
     this.assertReady();
     this.replica?.assertWritable();
+    this.assertClusterWritable();
     if (this.options.writers === 'multi' && !this.tx!.active) {
       return this.withImplicitTx(() => this.delete(collection, id));
     }
@@ -1250,6 +1318,7 @@ export class JSONSQLite extends EventEmitter {
       };
       await this.changelog!.append(entry);
       await this.replica?.appendCommitted([entry]);
+      await this.replicateClusterDoc(collection, id, null);
       this.touchCaches(collection);
       this.monitor.recordWrite();
       await this.persistIndexState(collection);
@@ -1286,7 +1355,13 @@ export class JSONSQLite extends EventEmitter {
     await this.store!.ensureLoaded(collection);
     const hot = (await this.store!.getById(collection, id)) ?? null;
     if (hot) this.tx?.noteRead(collection, id, hot._version);
-    if (!this.options.storageTiers || !this.tiers) return hot;
+    if (!this.options.storageTiers || !this.tiers) {
+      if (hot) return hot;
+      if (this.cluster?.status().enabled) {
+        return this.cluster.readSharedDoc(collection, id);
+      }
+      return null;
+    }
     const placed = this.tiers.lookup(collection, id);
     if (placed && (!hot || placed.doc._version >= hot._version)) {
       if (placed.tier === 'cold') this.tiers.noteColdRead();
@@ -1303,6 +1378,9 @@ export class JSONSQLite extends EventEmitter {
         this.tiers.noteAccess(collection, id);
         return { ...fromPlugin.doc };
       }
+      if (this.cluster?.status().enabled) {
+        return this.cluster.readSharedDoc(collection, id);
+      }
     }
     if (hot) this.tiers.noteAccess(collection, id);
     return hot;
@@ -1310,6 +1388,9 @@ export class JSONSQLite extends EventEmitter {
 
   async query(query: JsonQuery, opts?: QueryReadOptions): Promise<Document[]> {
     this.assertReady();
+    if (this.cluster?.status().enabled) {
+      this.cluster.shards.assertNotMigrating();
+    }
     const mem0 = process.memoryUsage().heapUsed;
     const start = Date.now();
     await this.plugins?.invokeQuery(query.collection);
@@ -2152,6 +2233,14 @@ export class JSONSQLite extends EventEmitter {
       },
       this.monitor.rejectedIndexKeys(),
     );
+    if (this.cluster?.status().enabled && (await this.cluster.detectSkew())) {
+      rules.push({
+        type: 'structure',
+        message:
+          '检测到分片数据倾斜 (shard skew)；建议显式执行 cluster rebalance，不会自动迁移',
+        suggestion: { action: 'cluster.rebalance' },
+      });
+    }
     if (!this.advisorProvider) return rules;
     try {
       const out = await this.advisorProvider(normalized, rules);
@@ -2681,6 +2770,114 @@ export class JSONSQLite extends EventEmitter {
     }
     const applied = await this.replica.syncOnce(this.replicaApplyHooks());
     return { applied, status: this.replica.status() };
+  }
+
+  clusterStatus(): ClusterStatus {
+    this.assertReady();
+    if (!this.cluster) {
+      return {
+        enabled: false,
+        nodeId: '',
+        role: 'none',
+        leaderId: null,
+        term: 0,
+        leaseUntil: 0,
+        members: [],
+        shardVersion: 0,
+        migrating: false,
+      };
+    }
+    return this.cluster.status();
+  }
+
+  async clusterJoin(opts?: {
+    clusterRoot?: string;
+    nodeId?: string;
+    leaseMs?: number;
+    shardCount?: number;
+  }): Promise<ClusterStatus> {
+    this.assertReady();
+    if (!this.cluster) {
+      const root =
+        opts?.clusterRoot ??
+        clusterConfigObject(this.options.cluster)?.clusterRoot;
+      if (!root) {
+        throw new JSONSQLiteError(
+          ErrorCode.INVALID_CONFIG,
+          'cluster join requires cluster: { clusterRoot } or --cluster-root',
+        );
+      }
+      this.cluster = new ClusterCoordinator({
+        storagePath: this.storagePath,
+        clusterRoot: root,
+        nodeId: opts?.nodeId ?? clusterConfigObject(this.options.cluster)?.nodeId,
+        leaseMs: opts?.leaseMs ?? clusterConfigObject(this.options.cluster)?.leaseMs,
+        shardCount:
+          opts?.shardCount ?? clusterConfigObject(this.options.cluster)?.shardCount,
+      });
+    }
+    return this.cluster.join();
+  }
+
+  async clusterLeave(): Promise<ClusterStatus> {
+    this.assertReady();
+    if (!this.cluster) {
+      return this.clusterStatus();
+    }
+    return this.cluster.leave();
+  }
+
+  async clusterRebalance() {
+    this.assertReady();
+    if (!this.cluster) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        'cluster rebalance requires cluster join',
+      );
+    }
+    return this.cluster.rebalance();
+  }
+
+  async clusterAcquireLock(scope: string): Promise<void> {
+    this.assertReady();
+    if (!this.cluster) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        'cluster lock requires cluster join',
+      );
+    }
+    await this.cluster.acquireLock(scope);
+  }
+
+  async clusterReleaseLock(scope: string): Promise<void> {
+    this.assertReady();
+    if (!this.cluster) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        'cluster lock requires cluster join',
+      );
+    }
+    await this.cluster.releaseLock(scope);
+  }
+
+  /** Test hook: partition this node from the shared election plane. */
+  clusterSetPartitioned(value: boolean): void {
+    this.assertReady();
+    this.cluster?.setPartitioned(value);
+  }
+
+  /**
+   * Test hook: run fn while shard map is marked migrating (queries throw SHARD_MOVING).
+   */
+  async clusterRunWithMigrating<T>(fn: () => Promise<T> | T): Promise<T> {
+    this.assertReady();
+    if (!this.cluster) {
+      throw new JSONSQLiteError(
+        ErrorCode.INVALID_CONFIG,
+        'clusterRunWithMigrating requires cluster join',
+      );
+    }
+    return this.cluster.shards.runWithMigrating(fn);
   }
 
   private replicaApplyHooks() {

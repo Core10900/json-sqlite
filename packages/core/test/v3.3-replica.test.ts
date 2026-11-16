@@ -290,9 +290,18 @@ describe('v3.3.0 replication', () => {
         replica: { syncIntervalMs: 200 },
       }),
     ).not.toThrow();
-    expect(() => validateConfig({ storagePath: './data', cluster: true })).toThrow(
-      /Rejected dangerous config key/,
-    );
+    if (
+      getVersion().startsWith('3.5.') ||
+      getVersion().startsWith('3.6.')
+    ) {
+      expect(() =>
+        validateConfig({ storagePath: './data', cluster: false }),
+      ).not.toThrow();
+    } else {
+      expect(() => validateConfig({ storagePath: './data', cluster: true })).toThrow(
+        /Rejected dangerous config key/,
+      );
+    }
   });
 });
 

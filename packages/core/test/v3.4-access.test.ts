@@ -9,6 +9,7 @@ import {
   createDatabaseRegistry,
   createVectorPlugin,
   executeGraphQL,
+  getVersion,
   open,
 } from '../src/index.js';
 import { validateConfig } from '../src/config/validate.js';
@@ -325,12 +326,18 @@ describe('v3.4.0 access layer', () => {
     await db.close();
   });
 
-  it('FT-V34-CFG-01 validateConfig accepts graphql:false; rejects cluster:true', () => {
+  it('FT-V34-CFG-01 validateConfig accepts graphql:false; cluster moved in 3.5', () => {
     expect(() =>
       validateConfig({ storagePath: './data', graphql: false }),
     ).not.toThrow();
-    expect(() =>
-      validateConfig({ storagePath: './data', cluster: true }),
-    ).toThrow(/Rejected dangerous config key/);
+    if (getVersion().startsWith('3.4.')) {
+      expect(() =>
+        validateConfig({ storagePath: './data', cluster: true }),
+      ).toThrow(/Rejected dangerous config key/);
+    } else {
+      expect(() =>
+        validateConfig({ storagePath: './data', cluster: false }),
+      ).not.toThrow();
+    }
   });
 });

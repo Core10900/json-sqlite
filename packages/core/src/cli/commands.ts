@@ -35,6 +35,7 @@ import {
   helpPlugin,
   helpInsert,
   helpRoot,
+  helpCluster,
   helpTableCreate,
   helpUpdate,
   helpDelete,
@@ -170,6 +171,8 @@ export async function dispatch(argv: string[]): Promise<void> {
       return cmdConfig(ctx, rest);
     case 'replica':
       return cmdReplica(ctx, rest, globals);
+    case 'cluster':
+      return cmdCluster(ctx, rest, globals);
     default:
       fail(
         ctx.out,
@@ -179,6 +182,75 @@ export async function dispatch(argv: string[]): Promise<void> {
         '运行 jsonsqlite help 查看可用命令',
       );
   }
+}
+
+async function cmdCluster(
+  ctx: CliContext,
+  rest: string[],
+  g: GlobalFlags,
+): Promise<void> {
+  const sub = rest.find((a) => !a.startsWith('-'));
+  if (!sub || sub === 'help' || hasFlag(rest, '--help', '-h')) {
+    console.log(helpFor(['cluster']) ?? helpCluster());
+    return;
+  }
+  const clusterRoot =
+    flag(rest, '--cluster-root') ?? g.clusterRoot ?? undefined;
+  if (sub === 'join') {
+    await withDb(ctx, async (db) => {
+      const status = await db.clusterJoin(
+        clusterRoot ? { clusterRoot } : undefined,
+      );
+      printSuccess(
+        ctx.out,
+        `✓ cluster join nodeId=${status.nodeId} role=${status.role}`,
+        { action: 'cluster.join', ...status },
+      );
+    });
+    return;
+  }
+  if (sub === 'status') {
+    await withDb(ctx, async (db) => {
+      const status = db.clusterStatus();
+      printSuccess(
+        ctx.out,
+        `cluster enabled=${status.enabled} role=${status.role} leaderId=${status.leaderId} term=${status.term}`,
+        { action: 'cluster.status', ...status },
+      );
+    });
+    return;
+  }
+  if (sub === 'leave') {
+    await withDb(ctx, async (db) => {
+      const status = await db.clusterLeave();
+      printSuccess(
+        ctx.out,
+        `✓ cluster leave enabled=${status.enabled}`,
+        { action: 'cluster.leave', ...status },
+      );
+    });
+    return;
+  }
+  if (sub === 'rebalance') {
+    await withDb(ctx, async (db) => {
+      if (clusterRoot && !db.clusterStatus().enabled) {
+        await db.clusterJoin({ clusterRoot });
+      }
+      const map = await db.clusterRebalance();
+      printSuccess(
+        ctx.out,
+        `✓ cluster rebalance version=${map.version} shards=${map.shards.length}`,
+        { action: 'cluster.rebalance', ...map },
+      );
+    });
+    return;
+  }
+  fail(
+    ctx.out,
+    'Usage: jsonsqlite cluster status|join|leave|rebalance',
+    'USAGE',
+    ExitCode.USAGE,
+  );
 }
 
 async function cmdReplica(

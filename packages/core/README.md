@@ -1,13 +1,13 @@
 # @webofcat/jsonsqlite
 
-**版本：3.4.0** · **非 LTS** · **不是设计完工版** · 设计完工线 **3.6** · 默认单写者 · 复制默认关闭 · **没有自动选主** · Node.js ≥ 20 · 作者：hanlin
+**版本：3.5.0、非 LTS** · 集群浸泡 · 集群 / WASM **默认关闭** · `lts: false` · Node.js ≥ 20 · 作者：hanlin
 
-这一版是**复制硬化与接入层**。相对 3.3 为 **MINOR**。不开启复制、不加载适配器时，单机契约与 3.3 一致。主宕机**仍然没有自动选主**，也没有自动故障切换；唯一提升入口仍是 `replica promote --yes`。
+这一版是**集群浸泡**（选主、分片 rebalance、跨机锁）与可选只读 WASM 包。相对 3.4 为 **MINOR**。集群与 WASM 关闭时，行为与 **3.4** 的单机、异步复制相同。打开集群后，租约选主在集群 **ON** 时按 RFC 自动进行（杀主后重选）；这是 3.5 的有意设计，**不是** LTS，也**不要**当作生产 pin。
 
-生产 pin 在 3.6 宣布前仍是 **LTS-2（2.2）** / 多写者 **LTS-3（2.5）**。本包不是长期支持线。不带 tag 的安装得到 `latest`，这一版是 3.4.0。没有 `lts-4`。
+生产 pin 仍是 **LTS-2（2.2）** / 多写者 **LTS-3（2.5）**。本包不是长期支持线。不带 tag 的安装得到 `latest`，这一版是 **3.5.0**。没有 `lts-4`。**3.6 / LTS-4 尚未存在**；`3.5.x` 只修缺陷，不新增命令、不改默认开关。本 README 不承诺 3.6 的发布日期。
 
 ```bash
-# 不带 tag：latest，这一版是 3.4.0（复制默认关闭）
+# 不带 tag：latest，这一版是 3.5.0（集群默认关闭）
 npm install @webofcat/jsonsqlite
 
 # 单写者生产
@@ -18,20 +18,147 @@ npm install @webofcat/jsonsqlite@lts-2
 npm install @webofcat/jsonsqlite@lts-3
 ```
 
-`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.4.0。
+`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.5.0。
 
 ```ts
 import { getCompatibilityInfo, open } from '@webofcat/jsonsqlite';
 
 const info = getCompatibilityInfo();
-// version: '3.4.0'
+// version: '3.5.0'
 // lts: false
 // ltsLine: '2.5'   // 最新的 LTS 线（LTS-3），不是本包版本
 // writers: 'single'
-// cliSurface: '3.4.0'
+// cliSurface: '3.5.0'
 ```
 
-## 3.4 复制硬化与接入层
+## 3.5 集群浸泡（非 LTS）
+
+协议与断言见已合并 RFC：[RFC-集群选主与分片.md](../../devDocs/releases/v3.5.0/RFC-集群选主与分片.md)。混沌三项（杀主重选、分区无双主、rebalance 不丢文档）已通过。
+
+### 1. 如何保持关闭（先读这里）
+
+`config.example.json` 中 `"cluster": false`、`"wasm": false`。不写这两个键、或显式传 `false` 时，`open` 与 3.4 相同：单机与异步复制路径不变，根帮助**不**把 `cluster` 写成默认可用命令。
+
+```ts
+// 关闭（默认）：与 3.4 单机 / 复制行为相同
+const db = await open({ storagePath: './data' });
+const dbOff = await open({ storagePath: './data', cluster: false, wasm: false });
+```
+
+```bash
+jsonsqlite config validate --file packages/core/config.example.json
+# 接受默认关闭的 cluster / wasm（以及 replica / graphql）
+```
+
+### 2. 如何打开集群
+
+```ts
+const db = await open({
+  storagePath: './n1',
+  cluster: { clusterRoot: './cluster-root', nodeId: 'n1', leaseMs: 2000 },
+});
+await db.clusterJoin(); // open 不会自动 join
+```
+
+```bash
+jsonsqlite cluster join --cluster-root ./cluster-root -p ./n1
+jsonsqlite cluster status -p ./n1 --json
+```
+
+### 3. 选主
+
+共享文件系统上的租约 + 多数票（见 RFC §3）。三节点应选出**唯一** `leader`；其余为 `follower`。只有 `leaderId === self` 且租约未过期的节点接受写入，否则 `NOT_PRIMARY`。
+
+杀死主（停进程 / 停心跳）后租约过期，其余节点按 RFC **重新选出唯一主**；已提交且在共享数据面可见的文档，在新主上仍可按 `_id` 读到。
+
+`cluster status` 字段：
+
+| 字段 | 含义 |
+|------|------|
+| `enabled` | 是否已 join |
+| `nodeId` | 本节点 id |
+| `role` | `none` / `leader` / `follower` |
+| `leaderId` | 当前主；无主时为 `null` |
+| `term` | 选举任期 |
+| `leaseUntil` | 主租约截止 epoch ms |
+| `members` | 成员列表 |
+| `shardVersion` | 分片图版本 |
+| `migrating` | 是否正在 rebalance |
+
+```bash
+# 三节点 join 后，三处 status 的 leaderId 应相同，且仅一处 role=leader
+jsonsqlite cluster status -p ./n1 --json
+jsonsqlite cluster status -p ./n2 --json
+jsonsqlite cluster status -p ./n3 --json
+```
+
+### 4. 网络分区
+
+分区下少数派无法刷新租约或凑齐多数票，**不会**出现两个主同时接受写入。拒绝写入的错误码：
+
+| 码 | 场景 |
+|----|------|
+| `NOT_PRIMARY` | 非领导 / 租约失效，拒绝写 |
+| `CLUSTER_PARTITION` | 已知分区或无法联系多数，拒绝写 |
+
+### 5. rebalance
+
+显式执行 `cluster rebalance`（仅 leader）。迁移中查询要么成功返回完整可见结果，要么抛 `SHARD_MOVING`（`details.retryable === true`）；**不得**在无错误时静默少文档。失败时调用方应停写并重试查询，待 `migrating: false`。
+
+Advisor 检测到分片倾斜时只给出建议（建议动作 `cluster.rebalance`），**不会**自动触发 rebalance。
+
+```bash
+jsonsqlite cluster rebalance -p ./n1 --cluster-root ./cluster-root
+```
+
+### 6. 跨机锁
+
+范围（`scope`）：`collection` 或 `collection/_id`。冲突抛 `CLUSTER_LOCK_CONFLICT`，`details` 含 `scope`、`holderId`。持有方已提交的写入不会因冲突方失败而消失。
+
+```ts
+await db.clusterAcquireLock('users/u1');
+// … 临界区 …
+await db.clusterReleaseLock('users/u1');
+```
+
+### 7. CLI（仅混沌已通过的子命令）
+
+```text
+jsonsqlite cluster status|join|leave|rebalance
+```
+
+```bash
+jsonsqlite cluster join --cluster-root ./cluster-root -p ./n1
+jsonsqlite cluster status -p ./n1 --json
+jsonsqlite cluster rebalance -p ./n1
+jsonsqlite cluster leave -p ./n1
+```
+
+稳定帮助仅在上述子命令下展开；集群关闭时根帮助不把 `cluster` 列为默认可用。`3.5.x` 补丁不得新增上表以外的子命令。
+
+### 8. WASM（可选只读包）
+
+包名：`@webofcat/jsonsqlite-wasm`。**experimental**、**只读**。写路径未做与服务端同等崩溃测试，**不进入** 3.6 的写入承诺。主 bin / 核心帮助**没有** wasm 入口。
+
+```bash
+npm i @webofcat/jsonsqlite-wasm
+```
+
+详见 [`packages/wasm/README.md`](../wasm/README.md)。
+
+### 9. 配置
+
+`config.example.json`：`"cluster": false`，`"wasm": false`。`config validate` 接受这两个键的关闭态（以及对象形态的 `cluster` 配置由实现校验）。顶层危险键（如 `raft`）仍拒绝。
+
+### 10. 路线说明
+
+**3.6 / LTS-4 尚未存在。** `3.5.x` 只修缺陷。生产仍 pin `lts`（2.2）或 `lts-3`（2.5）。不要把 3.5 标为生产默认。
+
+库 API（需已 join）：`clusterStatus` / `clusterJoin` / `clusterLeave` / `clusterRebalance` / `clusterAcquireLock` / `clusterReleaseLock`。
+
+---
+
+## 3.4 复制硬化与接入层（历史）
 
 ### 1. Quorum
 
@@ -143,7 +270,7 @@ await executeGraphQL(
 );
 ```
 
-HTTP：`POST /graphql`（需 `graphql: true`，鉴权与 `/query` 相同）。也可用 `createGraphqlHandler(db)`。`config.example.json` 中 `"graphql": false`；`config validate` 接受它，仍拒绝 `cluster` / `wasm`。
+HTTP：`POST /graphql`（需 `graphql: true`，鉴权与 `/query` 相同）。也可用 `createGraphqlHandler(db)`。`config.example.json` 中 `"graphql": false`；3.4 时 `config validate` 接受它并仍拒绝 `cluster` / `wasm`（3.5 起二者默认关且可校验，见上文）。
 
 不支持：subscription、复杂 schema、任意 GraphQL 方言。
 
@@ -265,9 +392,9 @@ await db.table('items').findById('i1'); // 与 db.findById('items', 'i1') 相同
 | `DELETE` | `/collections/:name/:id` | `db.delete`；未找到 404 |
 | `POST` | `/query` | 保留，JSON 查询 |
 
-### 14. 明确不在本版
+### 14. 明确不在 3.4（已由 3.5 交付的部分见上文）
 
-Raft、自动分片、**自动选主**、跨机锁、WASM、多语言 TCP。`config validate` 仍拒绝 `cluster` 与 `wasm`。稳定帮助**没有** `cluster`。选主与集群浸泡在 **3.5**；长期稳定线是 **3.6**。
+3.4 当时不做：共享文件系统选主、自动分片 / rebalance、跨机锁、WASM、多语言 TCP。`config validate` 在 3.4 仍拒绝 `cluster` / `wasm`。稳定帮助没有 `cluster`。这些能力在 **3.5** 以默认关闭方式交付（非 LTS）；契约冻结仍待 **3.6**（尚未发布）。
 
 ---
 
@@ -325,7 +452,7 @@ jsonsqlite replica status -p ./secondary --json
 - 复制关闭：`/health` 成功，`replica.enabled === false`，**不**因没有从库而失败。
 - 复制打开：含 `role`、`lagEntries`、`lagMs` 等。
 
-`config.example.json` 中 `"replica": false`、`"graphql": false`。`config validate` 接受它们，仍拒绝 `cluster` / `wasm`。
+`config.example.json` 中 `"replica": false`、`"graphql": false`。3.3 / 3.4 时 `config validate` 接受它们并仍拒绝 `cluster` / `wasm`（3.5 起 `cluster` / `wasm` 亦默认关且可校验）。
 
 详细协议见 [`devDocs/releases/v3.3.0/RFC-异步复制.md`](../../devDocs/releases/v3.3.0/RFC-异步复制.md)。
 
@@ -415,7 +542,7 @@ import {
 } from '@webofcat/jsonsqlite/plugin';
 ```
 
-`l3` / `redis` 默认 false。未安装客户端时 `open` 成功，`db.l3Status()` 为关闭（`reason: 'module-not-found'`）。3.4 起 `replica` / `graphql` 已移出危险键（example 默认关闭）；`config validate` 仍拒绝 `cluster` / `wasm`。可用冷存储与向量见上文 3.4 节（`createS3Plugin` / `createVectorPlugin`）。
+`l3` / `redis` 默认 false。未安装客户端时 `open` 成功，`db.l3Status()` 为关闭（`reason: 'module-not-found'`）。3.4 起 `replica` / `graphql` 已移出危险键；**3.5** 起 `cluster` / `wasm` 亦默认关且 `config validate` 接受关闭态。可用冷存储与向量见上文 3.4 节（`createS3Plugin` / `createVectorPlugin`）。
 
 ### Advisor、指标、事务、Delta
 

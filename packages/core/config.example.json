@@ -39,5 +39,7 @@
   "l3": false,
   "redis": false,
   "replica": false,
-  "graphql": false
+  "graphql": false,
+  "cluster": false,
+  "wasm": false
 }

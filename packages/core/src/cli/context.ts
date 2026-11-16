@@ -36,6 +36,9 @@ export async function withDb<T>(
     db = await open({
       storagePath: ctx.storagePath,
       ...(ctx.globals.writers ? { writers: ctx.globals.writers } : {}),
+      ...(ctx.globals.clusterRoot
+        ? { cluster: { clusterRoot: ctx.globals.clusterRoot } }
+        : {}),
     });
     return await fn(db);
   } catch (err) {

@@ -279,6 +279,10 @@ unsubscribe();
 | `REPLICA_READONLY` | 从库只读；在 `replica promote` 之前拒绝写入（3.3） |
 | `QUORUM_FAILED` | 主库写入未达到 quorum 确认数；`details.retryable` 为 true，可重试（3.4） |
 | `POOL_CLOSED` | 连接池已 `close`；之后的 borrow/release 被拒绝（3.4） |
+| `NOT_PRIMARY` | 非集群主节点拒绝写入（3.5） |
+| `CLUSTER_PARTITION` | 分区或无法联系多数，拒绝写入（3.5） |
+| `SHARD_MOVING` | rebalance 迁移中，本查询不能安全完成（3.5） |
+| `CLUSTER_LOCK_CONFLICT` | 跨机锁冲突；`details` 含 `scope`、`holderId`（3.5） |
 | `ENCRYPTION` | 加密/密钥错误 |
 | `INTERNAL` | 内部错误 |
 
@@ -290,7 +294,7 @@ unsubscribe();
 
 ### 值导出
 
-`JSONSQLite` · `open` · `create` · `init` · `getVersion` · `getCompatibilityInfo` · `parseSql` · `rekeyDatabase` · `JSONSQLiteError` · `ErrorCode` · `FORMAT_VERSION` · `ReadRouter` · `createConnectionPool` · `DatabaseRegistry` · `createDatabaseRegistry` · `executeGraphQL` · `createGraphqlHandler` · `createS3Plugin` · `createVectorPlugin`（完整 3.4 表见文末「3.4」节）
+`JSONSQLite` · `open` · `create` · `init` · `getVersion` · `getCompatibilityInfo` · `parseSql` · `rekeyDatabase` · `JSONSQLiteError` · `ErrorCode` · `FORMAT_VERSION` · `ReadRouter` · `createConnectionPool` · `DatabaseRegistry` · `createDatabaseRegistry` · `executeGraphQL` · `createGraphqlHandler` · `createS3Plugin` · `createVectorPlugin`（完整 3.4 表见文末「3.4」节；集群实例方法见「3.5」节）
 
 ### 类型导出
 
@@ -657,4 +661,21 @@ getCompatibilityInfo();
 | REST | `POST/GET/PATCH/DELETE /collections/:name[/:id]`，鉴权同 `POST /query`；另有 `POST /graphql` |
 
 错误码：`QUORUM_FAILED`、`POOL_CLOSED`（见 §14）。本版不做 Raft、自动分片、自动选主、跨机锁、WASM。
+
+---
+
+## 3.5 集群浸泡（非 LTS）
+
+相对 3.4 为 **MINOR**。`cluster` / `wasm` 默认关闭；关闭时单机与复制契约与 3.4 相同。打开集群后租约选主按 [RFC](./devDocs/releases/v3.5.0/RFC-集群选主与分片.md) 运行。`lts: false`。生产 pin 仍是 2.2。**3.6 / LTS-4 尚未存在。**
+
+| 符号 | 说明 |
+|------|------|
+| `open({ cluster: { clusterRoot, nodeId?, leaseMs?, shardCount? } })` | 配置集群根；**不**自动 join |
+| `db.clusterJoin(opts?)` | 显式加入；返回 `ClusterStatus` |
+| `db.clusterStatus()` | `enabled` / `nodeId` / `role` / `leaderId` / `term` / `leaseUntil` / `members` / `shardVersion` / `migrating` |
+| `db.clusterLeave()` | 离开 |
+| `db.clusterRebalance()` | 仅 leader；迁移中查询见 `SHARD_MOVING` |
+| `db.clusterAcquireLock(scope)` / `db.clusterReleaseLock(scope)` | 跨机锁；`scope` 为 `collection` 或 `collection/_id` |
+
+错误码（见 §14）：`NOT_PRIMARY`、`CLUSTER_PARTITION`、`SHARD_MOVING`、`CLUSTER_LOCK_CONFLICT`（`details` 含 `scope`、`holderId`）。只读 WASM 在独立包 `@webofcat/jsonsqlite-wasm`，不进本包 bin。
 

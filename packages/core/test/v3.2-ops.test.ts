@@ -499,9 +499,18 @@ describe('v3.2.0 delta config exports chaos', () => {
       expect(() =>
         validateConfig({ storagePath: './data', replica: false }),
       ).not.toThrow();
-      expect(() => validateConfig({ storagePath: './data', cluster: true })).toThrow(
-        /Rejected dangerous config key/,
-      );
+      if (
+        getVersion().startsWith('3.5.') ||
+        getVersion().startsWith('3.6.')
+      ) {
+        expect(() =>
+          validateConfig({ storagePath: './data', cluster: false }),
+        ).not.toThrow();
+      } else {
+        expect(() => validateConfig({ storagePath: './data', cluster: true })).toThrow(
+          /Rejected dangerous config key/,
+        );
+      }
     }
   });
 

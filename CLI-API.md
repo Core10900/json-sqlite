@@ -434,3 +434,20 @@ jsonsqlite insert|update|delete|index|sql --help
 
 帮助文本有 quorum / `lagEntries` / `promote --yes`，没有 `cluster`，没有 failover。Quorum 不足错误码 `QUORUM_FAILED`（可重试）。
 
+---
+
+## 26. 3.5 集群浸泡（非 LTS）
+
+> **3.5.0、非 LTS。** 相对 3.4 为 MINOR。集群默认关闭；关闭时与 3.4 单机 / 复制相同。打开后租约选主按 RFC 运行（杀主可重选）。混沌三项已通过。`latest` 为本版；`lts` / `lts-2` = 2.2，`lts-3` = 2.5；无 `lts-4`。**3.6 / LTS-4 尚未存在。** RFC：[devDocs/releases/v3.5.0/RFC-集群选主与分片.md](./devDocs/releases/v3.5.0/RFC-集群选主与分片.md)。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `cluster join [--cluster-root <dir>]` | ✅ | 显式加入；`open` 不自动 join。需 `cluster: { clusterRoot }` 或 `--cluster-root` |
+| `cluster status [--json]` | ✅ | `enabled`、`nodeId`、`role`、`leaderId`、`term`、`leaseUntil`、`members`、`shardVersion`、`migrating` |
+| `cluster leave` | ✅ | 离开集群 |
+| `cluster rebalance` | ✅ | 仅 leader；迁移中查询成功或 `SHARD_MOVING` |
+| `version --json` | ✅ | `3.5.0`，`lts: false`，`cliSurface: '3.5.0'` |
+| `config validate --file` | ✅ | 接受默认关闭的 `cluster` / `wasm`（以及 `replica` / `graphql`） |
+
+稳定帮助仅含上述已通过混沌的子命令。集群关闭时根帮助**不**把 `cluster` 写成默认可用。错误码：`NOT_PRIMARY`、`CLUSTER_PARTITION`、`SHARD_MOVING`、`CLUSTER_LOCK_CONFLICT`。WASM 不进主 bin（见 `@webofcat/jsonsqlite-wasm`）。`3.5.x` 补丁不得新增上表以外的子命令。
+

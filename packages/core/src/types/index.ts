@@ -331,6 +331,26 @@ export interface JSONSQLiteOptions {
    */
   graphql?: boolean;
   /**
+   * Shared-filesystem cluster (3.5+). Default false.
+   * Object form needs `clusterRoot`; membership still requires `clusterJoin` / CLI join.
+   */
+  cluster?:
+    | boolean
+    | {
+        enabled?: boolean;
+        clusterRoot: string;
+        nodeId?: string;
+        /** Leader lease duration in ms. Default 2000. */
+        leaseMs?: number;
+        /** Shard map size. Default 16. */
+        shardCount?: number;
+      };
+  /**
+   * WASM experimental marker (3.5+). Default false.
+   * Does not enable a WASM path in the core bin.
+   */
+  wasm?: boolean;
+  /**
    * Optional async advisor hook (3.4). Called after built-in rules.
    * Failures fall back to rules advice and do not throw from `advise`.
    */

@@ -1,0 +1,65 @@
+{
+  "name": "@webofcat/jsonsqlite-wasm",
+  "version": "3.5.0",
+  "description": "Experimental read-only Node adapter for JSONSQLite (optional wasm package; not a browser WASM compile; not LTS write path)",
+  "license": "MIT",
+  "author": "hanlin <lincent909@163.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Core10900/json-sqlite.git",
+    "directory": "packages/wasm"
+  },
+  "homepage": "https://github.com/Core10900/json-sqlite/tree/main/packages/wasm#readme",
+  "bugs": {
+    "url": "https://github.com/Core10900/json-sqlite/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build && pnpm test"
+  },
+  "peerDependencies": {
+    "@webofcat/jsonsqlite": ">=3.5.0"
+  },
+  "devDependencies": {
+    "@webofcat/jsonsqlite": "workspace:*",
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "keywords": [
+    "jsonsqlite",
+    "wasm",
+    "experimental",
+    "read-only",
+    "database"
+  ]
+}

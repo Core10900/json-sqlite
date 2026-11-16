@@ -1,8 +1,8 @@
 # JSONSQLite
 
-**当前包：3.4.0**（**非 LTS**，复制硬化与接入层，**不是设计完工版**；设计完工线 3.6） · **生产 pin：2.2.x**（`lts` / `lts-2`） · **`latest`：3.4.0** · **多写者 pin：`lts-3` = 2.5** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**当前包：3.5.0、非 LTS**（集群浸泡；集群 / WASM **默认关闭**；`lts: false`） · **生产 pin：2.2.x**（`lts` / `lts-2`） · **`latest`：3.5.0** · **多写者 pin：`lts-3` = 2.5** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
-3.4.0 相对 3.3 是 **MINOR**。Quorum、读路由、冷存储示例、GraphQL 最小适配、连接池、多库、`serve`、REST 文档 CRUD、`collection`/`table`、向量可用实现与 Express/Nest 示例。复制默认关闭；不开启复制时单机契约与 3.3 一致。主宕机**仍然没有自动选主**。需要多写者才装 `lts-3`（2.5）；单写者生产仍 pin `lts`（2.2）。`lts` / `lts-2` 是 2.2，`lts-3` 是 2.5，不带 tag 的安装得到 `latest`（3.4.0）。没有 `lts-4`。安装与完整 3.4 说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
+3.5.0 相对 3.4 是 **MINOR**。共享文件系统选主（租约选举，集群 ON 时杀主可重选）、显式 rebalance、跨机锁，以及可选只读包 `@webofcat/jsonsqlite-wasm`（experimental）。**关闭集群时行为与 3.4 单机 / 异步复制相同。** 混沌三项已通过。本版**不是** LTS；**3.6 / LTS-4 尚未存在**；`3.5.x` 只修缺陷。需要多写者才装 `lts-3`（2.5）；单写者生产仍 pin `lts`（2.2）。`lts` / `lts-2` 是 2.2，`lts-3` 是 2.5，不带 tag 的安装得到 `latest`（3.5.0）。没有 `lts-4`。RFC：[devDocs/releases/v3.5.0/RFC-集群选主与分片.md](./devDocs/releases/v3.5.0/RFC-集群选主与分片.md)。安装与完整 3.5 说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
 
 ```bash
 npm install @webofcat/jsonsqlite@lts

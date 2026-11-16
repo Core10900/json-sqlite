@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.5.0 — 2026-11-16 · 非 LTS
+
+**非 LTS。** 相对 3.4 为 **MINOR**。集群浸泡：选主、分片 rebalance、跨机锁；可选只读 WASM 包。集群与 WASM **默认关闭**；关闭时行为与 3.4 的单机、异步复制相同。混沌三项（杀主重选、分区无双主、rebalance 不丢文档）**全部通过**。`lts: false`。**不是**长期支持线；不要 pin 为生产默认。
+
+`latest` 指向 3.5.0。`lts` / `lts-2` 仍是 2.2。`lts-3` 仍是 2.5。生产 pin 仍是 `lts`（2.2）。不新增 `lts-4`。**3.6 / LTS-4 尚未存在**；`3.5.x` 只修缺陷，不新增命令、不改默认开关。
+
+协议见 [RFC-集群选主与分片.md](./devDocs/releases/v3.5.0/RFC-集群选主与分片.md)。
+
+### Added
+- 共享文件系统集群（默认关）：`open({ cluster: { clusterRoot, nodeId?, leaseMs? } })` + 显式 `cluster join`
+- 租约选主：三节点唯一 leader；杀主后按 RFC 重选；已提交数据在共享数据面仍可读。`cluster status` 字段：`enabled` / `nodeId` / `role` / `leaderId` / `term` / `leaseUntil` / `members` / `shardVersion` / `migrating`
+- 网络分区：无双主写；错误码 `NOT_PRIMARY` / `CLUSTER_PARTITION`
+- `cluster rebalance`：迁移中查询成功或 `SHARD_MOVING`；Advisor 倾斜建议不自动 rebalance
+- 跨机锁：`clusterAcquireLock` / `clusterReleaseLock`；冲突 `CLUSTER_LOCK_CONFLICT`（`details.scope` / `holderId`）
+- CLI：`cluster status|join|leave|rebalance`（仅混沌已通过的子命令；关闭时根帮助不列为默认可用）
+- 可选包 `@webofcat/jsonsqlite-wasm`：experimental、只读；不进主 bin；不进 3.6 写入承诺
+- `config.example.json`：`cluster` / `wasm` 默认 `false`；`config validate` 接受关闭态
+
+### Not in this release
+完整 Raft 协议库、多语言 TCP、WASM 写入、在本版宣布 LTS-4、把 WASM 写入主 bin。契约冻结仍待 3.6（尚未发布）。
+
 ## 3.4.0 — 2026-11-12 · 非 LTS
 
 **非 LTS，也不是设计完工版。** 相对 3.3 为 **MINOR**。复制硬化与接入层；不开启复制、不加载适配器时，单机契约与 3.3 一致。主宕机**仍然没有自动选主**。设计完工线是 **3.6**。

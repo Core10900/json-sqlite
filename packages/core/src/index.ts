@@ -25,6 +25,34 @@ export {
   secondaryAckId,
 } from './replica/ReplicaManager.js';
 export { ReadRouter, DEFAULT_LAG_THRESHOLD_ENTRIES } from './replica/ReadRouter.js';
+export {
+  ClusterCoordinator,
+  type ClusterStatus,
+  type ClusterRole,
+  type ClusterMember,
+  type ClusterCoordinatorOpts,
+} from './cluster/ClusterCoordinator.js';
+export {
+  ShardManager,
+  shardIndex,
+  type ShardEntry,
+  type ShardMapFile,
+} from './cluster/ShardManager.js';
+export { ClusterLock, type ClusterLockFile } from './cluster/ClusterLock.js';
+export {
+  FROZEN_CONFIG_KEYS,
+  V23_CONFIG_KEYS,
+  V24_CONFIG_KEYS,
+  V30_CONFIG_KEYS,
+  V31_CONFIG_KEYS,
+  V32_CONFIG_KEYS,
+  V33_CONFIG_KEYS,
+  V34_CONFIG_KEYS,
+  V35_CONFIG_KEYS,
+  DANGEROUS_CONFIG_KEYS,
+  validateConfig,
+  validateConfigFile,
+} from './config/validate.js';
 export type {
   ReadRouterOptions,
   ReadRouterOnLag,

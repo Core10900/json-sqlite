@@ -58,6 +58,14 @@ export enum ErrorCode {
   QUORUM_FAILED = 'QUORUM_FAILED',
   /** Connection pool was closed; borrow/release are refused. */
   POOL_CLOSED = 'POOL_CLOSED',
+  /** Cluster write refused: this node is not the current lease holder. */
+  NOT_PRIMARY = 'NOT_PRIMARY',
+  /** Cluster write refused: node is partitioned or cannot contact majority. */
+  CLUSTER_PARTITION = 'CLUSTER_PARTITION',
+  /** Query refused while shard rebalance is migrating. Retry after migrate. */
+  SHARD_MOVING = 'SHARD_MOVING',
+  /** Another node holds an unexpired cross-node lock for this scope. */
+  CLUSTER_LOCK_CONFLICT = 'CLUSTER_LOCK_CONFLICT',
   ENCRYPTION = 'ENCRYPTION',
   INTERNAL = 'INTERNAL',
 }

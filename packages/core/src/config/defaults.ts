@@ -176,6 +176,24 @@ const optionsSchema = z.object({
     .default(false),
   /** 3.4 minimal GraphQL. Default false. */
   graphql: z.boolean().default(false),
+  /**
+   * Shared-filesystem cluster (3.5+). Default false.
+   * Object form requires clusterRoot; join is still explicit via clusterJoin / CLI.
+   */
+  cluster: z
+    .union([
+      z.boolean(),
+      z.object({
+        enabled: z.boolean().optional(),
+        clusterRoot: z.string().min(1),
+        nodeId: z.string().min(1).optional(),
+        leaseMs: z.number().int().positive().optional(),
+        shardCount: z.number().int().positive().optional(),
+      }),
+    ])
+    .default(false),
+  /** WASM experimental entry marker (3.5+). Default false. Core bin stays without WASM. */
+  wasm: z.boolean().default(false),
 });
 
 export type ResolvedOptions = z.infer<typeof optionsSchema>;

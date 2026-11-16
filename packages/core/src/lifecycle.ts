@@ -23,7 +23,7 @@ export interface CompatibilityInfo {
    * On 3.0.0 this is not the package version. Single-writer users still pin 2.2.
    */
   ltsLine: '2.5';
-  /** CLI surface. 3.4.0 adds quorum, read-router, GraphQL, pool/registry. */
+  /** CLI surface. 3.5.0 adds cluster election / rebalance / lock. */
   cliSurface: string;
   /** Default open mode. Multi-writer is opt-in and is not this field. */
   writers: 'single';
@@ -60,7 +60,7 @@ export function getCompatibilityInfo(): CompatibilityInfo {
     formatVersion: FORMAT_VERSION,
     lts: false,
     ltsLine: '2.5',
-    cliSurface: '3.4.0',
+    cliSurface: '3.5.0',
     writers: 'single',
     features: [
       'encryption',
@@ -153,6 +153,10 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'connection-pool',
       'database-registry',
       'vector-plugin',
+      'cluster-election',
+      'cluster-rebalance',
+      'cluster-lock',
+      'cli-3.5',
     ],
   };
 }

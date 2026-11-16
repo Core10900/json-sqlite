@@ -37,7 +37,7 @@ Commands:
   admin serve | serve        start Admin HTTP + SSE (serve is an alias)
   db list|register|use|unregister   multi-db registry (~/.jsonsqlite/registry.json)
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version (3.4.0, lts: false, ltsLine 2.5)
+  compat / version [--json]  compatibility / version (3.5.0, lts: false, ltsLine 2.5)
   config validate --file <f> check a file against the frozen 2.2 config keys
   replica init|status|promote            async primary/secondary (default off; no auto promote)
   backup / vacuum [--compress] / rekey    ops
@@ -264,14 +264,30 @@ Pin 2.2 unless you need multi-writer (lts-3 / 2.5). The lts tag stays on 2.2.
 `;
 }
 
+export function helpCluster(): string {
+  return `jsonsqlite cluster status|join|leave|rebalance
+
+Shared-filesystem cluster (default off). Requires open with cluster: { clusterRoot }
+or --cluster-root. Join is explicit; open does not auto-join.
+
+  cluster join [--cluster-root <dir>] [-p <storage>]
+  cluster status [--json]
+  cluster leave
+  cluster rebalance
+
+Only the current lease holder accepts writes (NOT_PRIMARY / CLUSTER_PARTITION otherwise).
+Root help does not list cluster as a default available command when cluster is off.
+`;
+}
+
 export function helpConfig(): string {
   return `jsonsqlite config validate --file <path>
 
 Check a JSON file against the 2.2 keys plus later opt-in keys.
 Does not open a database.
 Unknown keys are refused (exit 1, code INVALID_CONFIG) and are not applied.
-Dangerous keys (cluster, replication, raft, quorum, shard,
-wasm, cache) are named in the error. Nested cache objects stay refused.
+Dangerous keys (replication, raft, quorum, shard, sharding, savepoint, cache)
+are named in the error. Nested cache objects stay refused.
 2.4 opt-in key writers is single or multi (default single). Omitting it stays single.
 2.3 opt-in keys (columnStore, storageTiers, smartCompression, and the rest
 listed in config validation) are accepted and default off.
@@ -282,7 +298,8 @@ metricsIntervalMs, memoryWatermarkBytes, deltaSnapshotThreshold, autoTuneMinHits
 are accepted and default off or equal to 3.1. Missing Redis client keeps L3 closed.
 3.3 opt-in key replica is accepted (boolean or object) and defaults false.
 3.4 opt-in key graphql is accepted (boolean) and defaults false.
-Role still requires replica init. cluster / wasm stay refused.
+3.5 opt-in keys cluster and wasm are accepted and default false.
+Role still requires replica init. Cluster still requires explicit cluster join.
 The frozen cache field is cacheSize, not cache / cache.l3.
 `;
 }
@@ -341,6 +358,12 @@ export function helpFor(path: string[]): string | null {
     case 'replica status':
     case 'replica promote':
       return helpReplica();
+    case 'cluster':
+    case 'cluster status':
+    case 'cluster join':
+    case 'cluster leave':
+    case 'cluster rebalance':
+      return helpCluster();
     case 'migrate':
       return helpMigrate();
     case 'backup':
