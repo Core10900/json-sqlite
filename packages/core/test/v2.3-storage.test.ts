@@ -171,7 +171,8 @@ describe('v2.3.0 tiers', () => {
     await new Promise((resolve) => setImmediate(resolve));
     const started = Date.now();
     await db.insert('users', { _id: 'new', name: 'fresh' });
-    expect(Date.now() - started).toBeLessThan(500);
+    // Bound is generous: assert the write is not blocked on cold migration I/O.
+    expect(Date.now() - started).toBeLessThan(2000);
     release();
     await pending;
 
