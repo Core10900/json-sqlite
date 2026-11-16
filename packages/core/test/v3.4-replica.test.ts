@@ -178,10 +178,11 @@ describe('v3.4.0 replication hardening', () => {
       onLag: 'fail',
     });
 
-    const written = (await router.write('docs', {
+    const writtenRaw = await router.write('docs', {
       _id: 'r1',
       name: 'routed',
-    })) as Document;
+    });
+    const written = Array.isArray(writtenRaw) ? writtenRaw[0]! : writtenRaw;
     expect(written._id).toBe('r1');
     expect(primaryWrites).toBe(1);
     expect(secondaryWrites).toBe(0);
@@ -236,7 +237,13 @@ describe('v3.4.0 replication hardening', () => {
     const plugin = createS3Plugin({ rootDir: coldRoot });
     db.registerPlugin(plugin);
 
-    const doc = { _id: 'cold-1', name: 'frozen', _version: 1 } as Document;
+    const doc = {
+      _id: 'cold-1',
+      name: 'frozen',
+      _version: 1,
+      _createdAt: 1,
+      _updatedAt: 1,
+    } satisfies Document;
     await plugin.putCold!('docs', doc);
     const back = await plugin.getCold!('docs', 'cold-1');
     expect(back).toMatchObject({ _id: 'cold-1', name: 'frozen' });

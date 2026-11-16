@@ -11,7 +11,9 @@
   },
   "include": [
     "packages/core/src/**/*",
-    "packages/core/test/**/*"
+    "packages/core/test/**/*",
+    "packages/wasm/src/**/*",
+    "packages/wasm/test/**/*"
   ],
   "exclude": [
     "**/node_modules",

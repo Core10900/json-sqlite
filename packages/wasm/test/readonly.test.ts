@@ -36,10 +36,11 @@ describe('FT-V35-WASM-01 optional read-only package', () => {
   it('can query and findById an existing DB directory', async () => {
     const storagePath = await tmpDir();
     const writer = await open({ storagePath });
-    const doc = (await writer.insert('users', {
+    const inserted = await writer.insert('users', {
       name: '寒',
       age: 30,
-    })) as { _id: string; name: string };
+    });
+    const doc = Array.isArray(inserted) ? inserted[0]! : inserted;
     await writer.close();
 
     const db = await openReadonly({ storagePath });
@@ -58,9 +59,8 @@ describe('FT-V35-WASM-01 optional read-only package', () => {
   it('insert / update / delete throw experimental read-only errors', async () => {
     const storagePath = await tmpDir();
     const writer = await open({ storagePath });
-    const doc = (await writer.insert('users', { name: 'x' })) as {
-      _id: string;
-    };
+    const inserted = await writer.insert('users', { name: 'x' });
+    const doc = Array.isArray(inserted) ? inserted[0]! : inserted;
     await writer.close();
 
     const db = await openReadonly({ storagePath });

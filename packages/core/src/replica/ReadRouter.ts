@@ -26,8 +26,8 @@ export interface ReadRouterOptions {
 export interface ReadRouterEndpoint {
   insert(
     collection: string,
-    data: Record<string, unknown>,
-  ): Promise<Document | string>;
+    data: Record<string, unknown> | Record<string, unknown>[],
+  ): Promise<Document | Document[]>;
   findById(collection: string, id: string): Promise<Document | null>;
   replicaStatus(): ReplicaStatus | Promise<ReplicaStatus>;
 }
@@ -57,8 +57,8 @@ export class ReadRouter {
   /** All writes go to the primary. */
   async write(
     collection: string,
-    data: Record<string, unknown>,
-  ): Promise<Document | string> {
+    data: Record<string, unknown> | Record<string, unknown>[],
+  ): Promise<Document | Document[]> {
     return this.primary.insert(collection, data);
   }
 

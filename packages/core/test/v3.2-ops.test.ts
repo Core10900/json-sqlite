@@ -540,7 +540,7 @@ describe('v3.2.0 delta config exports chaos', () => {
       const hi = lo + Math.floor(Math.random() * 10);
       const filter = { n: { $gte: lo, $lte: hi } };
       const indexed = await db.query({ collection: 'nums', filter });
-      const scan = await db.query({ collection: 'nums', filter, column: false });
+      const scan = await db.query({ collection: 'nums', filter }, { column: false });
       expect(indexed.map((d) => d._id).sort()).toEqual(scan.map((d) => d._id).sort());
     }
     await db.close();
