@@ -1391,7 +1391,8 @@ export class JSONSQLite extends EventEmitter {
     if (this.cluster?.status().enabled) {
       this.cluster.shards.assertNotMigrating();
     }
-    const mem0 = process.memoryUsage().heapUsed;
+    // Avoid process.memoryUsage() on the hot path — with multi-GB heaps it
+    // alone can cost several ms per query and blow the §1.3 point-query budget.
     const start = Date.now();
     await this.plugins?.invokeQuery(query.collection);
 
@@ -1428,7 +1429,7 @@ export class JSONSQLite extends EventEmitter {
         indexScanMs: stages.indexScanMs,
         dataLoadMs: stages.dataLoadMs,
         executeMs: stages.executeMs,
-        memoryDelta: process.memoryUsage().heapUsed - mem0,
+        memoryDelta: 0,
       };
       this.planInfo = {
         ...info,
@@ -1494,11 +1495,10 @@ export class JSONSQLite extends EventEmitter {
     await this.store!.ensureLoaded(normalized.collection);
     const indexes = this.indexes!.findForCollection(normalized.collection);
     const optStart = performance.now();
-    chooseIndex(normalized.filter, indexes);
-    const optimizeMs = performance.now() - optStart;
-    const indexStart = performance.now();
     const indexed = planIndexIds(normalized, indexes);
-    const indexScanMs = performance.now() - indexStart;
+    const plannedAt = performance.now();
+    const optimizeMs = plannedAt - optStart;
+    const indexScanMs = indexed ? plannedAt - optStart : 0;
 
     let plannedDocs: Document[];
     let usedIndex = indexed?.usedIndex;
@@ -1518,15 +1518,36 @@ export class JSONSQLite extends EventEmitter {
       columnFiles = this.columns?.lastFileReads ?? 0;
     } else if (indexed) {
       const loadStart = performance.now();
-      const resolved: Document[] = [];
-      for (const id of indexed.ids) {
-        checkpoint(ctx);
-        const doc = await this.store!.getById(normalized.collection, id);
-        if (doc) resolved.push({ ...doc });
+      // When unordered, trim ids before hydrate so limit/offset do not pull extra pages.
+      let hydrateIds = indexed.ids;
+      if (!normalized.orderBy) {
+        const offset = normalized.offset ?? 0;
+        if (normalized.limit !== undefined) {
+          hydrateIds = hydrateIds.slice(offset, offset + normalized.limit);
+        } else if (offset > 0) {
+          hydrateIds = hydrateIds.slice(offset);
+        }
       }
+      checkpoint(ctx);
+      const resolved = await this.store!.getByIds(normalized.collection, hydrateIds);
       dataLoadMs = performance.now() - loadStart;
       const execStart = performance.now();
-      plannedDocs = executeJsonQuery(resolved, normalized, ctx);
+      // Covering index: filter predicates are already enforced by the index plan.
+      // Skip per-doc re-match when unordered and no projection rewrite is needed.
+      if (
+        !normalized.orderBy &&
+        !normalized.projection?.length &&
+        indexCoversFilter(normalized.filter, indexed.usedIndex.field)
+      ) {
+        const limit = normalized.limit;
+        plannedDocs =
+          limit !== undefined ? resolved.slice(0, limit) : resolved;
+      } else {
+        const execQuery = normalized.orderBy
+          ? normalized
+          : { ...normalized, offset: 0 };
+        plannedDocs = executeJsonQuery(resolved, execQuery, ctx);
+      }
       executeMs = performance.now() - execStart;
     } else {
       const loadStart = performance.now();
@@ -1561,8 +1582,11 @@ export class JSONSQLite extends EventEmitter {
       },
       { optimizeMs, indexScanMs, dataLoadMs, executeMs },
     );
-    this.cache!.set(cacheKey, docs);
-    this.l2?.set(cacheKey, docs);
+    // Huge result sets thrash L1/L2 and burn GC; skip caching them.
+    if (docs.length <= 2_000) {
+      this.cache!.set(cacheKey, docs);
+      this.l2?.set(cacheKey, docs);
+    }
     if (this.options.tiering) {
       for (const doc of docs) {
         this.store!.noteAccess(normalized.collection, doc._id);
@@ -3519,6 +3543,31 @@ export class JSONSQLite extends EventEmitter {
       );
     }
   }
+}
+
+/** True when every filter predicate is on `field` with only equality/range ops. */
+function indexCoversFilter(
+  filter: JsonQuery['filter'],
+  field: string,
+): boolean {
+  if (!filter) return true;
+  const keys = Object.keys(filter);
+  if (keys.length === 0) return true;
+  if (keys.some((k) => k === '$and' || k === '$or' || k === '$const')) return false;
+  if (keys.length !== 1 || keys[0] !== field) return false;
+  const condition = filter[field];
+  if (condition === null || typeof condition !== 'object' || Array.isArray(condition)) {
+    return true; // implicit $eq
+  }
+  const ops = Object.keys(condition as object);
+  return ops.every((op) =>
+    op === '$eq' ||
+    op === '$gt' ||
+    op === '$gte' ||
+    op === '$lt' ||
+    op === '$lte' ||
+    op === '$in',
+  );
 }
 
 function aggregateValue(

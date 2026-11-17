@@ -1,11 +1,13 @@
 # JSONSQLite
 
-**当前包：3.5.0、非 LTS**（集群浸泡；集群 / WASM **默认关闭**；`lts: false`） · **生产 pin：2.2.x**（`lts` / `lts-2`） · **`latest`：3.5.0** · **多写者 pin：`lts-3` = 2.5** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
+**当前包：3.6.0、LTS-4**（设计完工冻结；默认单写者；复制 / 集群 / WASM **默认关闭**；`lts: true`；`ltsLine: '3.6'`） · **生产 pin：`lts` / `lts-4` = 3.6** · **`latest`：3.6.0** · **旧单写者：`lts-2` = 2.2** · **多写者：`lts-3` = 2.5** · **LTS-1：1.6.x** 并行收安全补丁 · **运行时：Node.js ≥ 20** · **包名：`@webofcat/jsonsqlite`**
 
-3.5.0 相对 3.4 是 **MINOR**。共享文件系统选主（租约选举，集群 ON 时杀主可重选）、显式 rebalance、跨机锁，以及可选只读包 `@webofcat/jsonsqlite-wasm`（experimental）。**关闭集群时行为与 3.4 单机 / 异步复制相同。** 混沌三项已通过。本版**不是** LTS；**3.6 / LTS-4 尚未存在**；`3.5.x` 只修缺陷。需要多写者才装 `lts-3`（2.5）；单写者生产仍 pin `lts`（2.2）。`lts` / `lts-2` 是 2.2，`lts-3` 是 2.5，不带 tag 的安装得到 `latest`（3.5.0）。没有 `lts-4`。RFC：[devDocs/releases/v3.5.0/RFC-集群选主与分片.md](./devDocs/releases/v3.5.0/RFC-集群选主与分片.md)。安装与完整 3.5 说明见 [`packages/core/README.md`](./packages/core/README.md)。不需要多进程写时：
+3.6.0 **不增加功能**。相对 3.5 为 **MINOR**。把 3.0–3.5 已交付契约冻结为长期稳定线。不带 tag 的安装得到 `latest`（3.6.0），默认仍是单写者、复制关、集群关。需要多写者装 `lts-3`（2.5）；只想留在旧单写者线装 `lts-2`（2.2）。WASM 写路径不进 LTS-4 承诺。完整说明见 [`packages/core/README.md`](./packages/core/README.md) 与 [迁移指南](./devDocs/releases/v3.6.0/迁移指南.md)。
 
 ```bash
 npm install @webofcat/jsonsqlite@lts
+# 或
+npm install @webofcat/jsonsqlite@lts-4
 ```
 
 JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**：以 JSON/JSONL 文件为存储载体，提供文档 CRUD、查询、索引、事务、WAL 崩溃恢复、备份与运维能力。既可 `npm install` 嵌入业务进程，也可 **`npm i -g` 全局安装**，用 `jsonsqlite` 管理表 / 跑 SQL。
@@ -21,9 +23,10 @@ JSONSQLite 是一个面向 Node.js 后端的 **JSON 原生嵌入式数据库**�
 
 | 线 | 版本 | 说明 |
 |----|------|------|
-| **LTS-1** | `1.6.x` | 旧单写者契约。继续只收安全/正确性补丁，并行不少于 12 个月，或至 LTS-3 发布后 6 个月 |
-| **LTS-2** | `2.2.x`（当前主推荐，`lts` / `lts-2`） | 单写者、分页、诚实的 RC/RR、可恢复备份。不是集群版 |
+| **LTS-1** | `1.6.x` | 旧单写者契约。继续只收安全/正确性补丁 |
+| **LTS-2** | `2.2.x`（`lts-2`） | 单写者、分页、诚实的 RC/RR、可恢复备份。不是集群版 |
 | **LTS-3** | `2.5.x`（`lts-3`） | 同一台机器多进程写。默认仍是单写者。需要多写者才升级 |
+| **LTS-4** | `3.6.x`（`lts` / `lts-4`） | 3.0–3.5 完工冻结。默认仍单写者，复制和集群关闭 |
 
 完整路线与能力勾选见 [ROADMAP](./devDocs/releases/ROADMAP.md) / [FEATURE-MATRIX](./devDocs/releases/FEATURE-MATRIX.md)。
 
@@ -791,7 +794,7 @@ jsonsqlite stats -p ./data --json           # l2 / tiers / compression
 pnpm --filter @jsonsqlite/bench start       # 报告含 threshold；BENCH_SKIP_THRESHOLD=1 可跳过
 ```
 
-阈值在 `apps/bench/thresholds.json`，对照 `apps/bench/baseline.json`（仅当 `N` 相同）。数字是回归上限，不是对外性能承诺。
+阈值在 `apps/bench/thresholds.json`，对照 `apps/bench/baseline.json`（仅当 `N` 相同）。数字是回归上限，不是对外性能承诺。百万级绝对数字与 3.6 热路径优化说明见 [`devDocs/releases/v3.6.0/性能包络.md`](./devDocs/releases/v3.6.0/性能包络.md)（`BENCH_N=1000000`；点查分位可用 `apps/bench/p99-conc.mjs`）。
 
 ---
 
@@ -840,7 +843,8 @@ pnpm --filter @jsonsqlite/bench start
 | [devDocs/releases/v2.4.0/开发计划.md](./devDocs/releases/v2.4.0/开发计划.md) | v2.4 多写者 opt-in（非 LTS，已发布） |
 | [devDocs/releases/v2.5.0/开发计划.md](./devDocs/releases/v2.5.0/开发计划.md) | **LTS-3** `2.5.x`（已发布） |
 | [devDocs/releases/v3.0.0/开发计划.md](./devDocs/releases/v3.0.0/开发计划.md) | v3.0 查询引擎补齐（非 LTS，已发布） |
-| [devDocs/releases/v3.6.0/开发计划.md](./devDocs/releases/v3.6.0/开发计划.md) | **LTS-4** `3.6.x` 设计完工冻结（规划）。3.1–3.5 见路线图 |
+| [devDocs/releases/v3.6.0/开发计划.md](./devDocs/releases/v3.6.0/开发计划.md) | **LTS-4** `3.6.x` 设计完工冻结。默认单写者，复制/集群关 |
+| [devDocs/releases/v3.6.0/性能包络.md](./devDocs/releases/v3.6.0/性能包络.md) | LTS-4 百万级复测与热路径优化说明（相对 3.2） |
 | [devDocs/releases/v1.5.5/开发计划.md](./devDocs/releases/v1.5.5/开发计划.md) | v1.5.5 **CLI LTS 化**（命令扩展 / 交互与脚本契约） |
 | [devDocs/releases/v1.5.0/开发计划.md](./devDocs/releases/v1.5.0/开发计划.md) | v1.5.0 生产就绪（rekey / vacuum / 压测） |
 | [devDocs/releases/v1.4.0/开发计划.md](./devDocs/releases/v1.4.0/开发计划.md) | v1.4.0 加密主存 / LIKE·JOIN / 导入导出 |

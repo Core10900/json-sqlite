@@ -5,7 +5,7 @@ import {
   type JSONSQLite,
 } from '@webofcat/jsonsqlite';
 
-const VERSION = '3.5.0';
+const VERSION = '3.6.0';
 
 export const meta = {
   experimental: true,
@@ -32,8 +32,8 @@ export interface OpenReadonlyOptions {
 
 /**
  * Node experimental read-only facade over an existing JSONSQLite directory.
- * True browser WASM compile is not shipped in 3.5; this package is the
- * optional `@webofcat/jsonsqlite-wasm` adapter (pure JS).
+ * True browser WASM compile is not shipped; this package is the
+ * optional `@webofcat/jsonsqlite-wasm` adapter (pure JS; LTS-4 write path excluded).
  */
 export interface ReadonlyDb {
   findById(collection: string, id: string): Promise<Document | null>;

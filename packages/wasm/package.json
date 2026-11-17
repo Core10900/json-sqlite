@@ -1,7 +1,7 @@
 {
   "name": "@webofcat/jsonsqlite-wasm",
-  "version": "3.5.0",
-  "description": "Experimental read-only Node adapter for JSONSQLite (optional wasm package; not a browser WASM compile; not LTS write path)",
+  "version": "3.6.0",
+  "description": "Experimental read-only Node adapter for JSONSQLite 3.6 LTS-4 (optional; not a browser WASM compile; write path not in LTS)",
   "license": "MIT",
   "author": "hanlin <lincent909@163.com>",
   "repository": {
@@ -27,6 +27,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "LICENSE",
     "README.md"
   ],
@@ -46,7 +47,7 @@
     "prepublishOnly": "pnpm run build && pnpm test"
   },
   "peerDependencies": {
-    "@webofcat/jsonsqlite": ">=3.5.0"
+    "@webofcat/jsonsqlite": ">=3.6.0"
   },
   "devDependencies": {
     "@webofcat/jsonsqlite": "workspace:*",

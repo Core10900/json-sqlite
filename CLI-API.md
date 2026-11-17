@@ -451,3 +451,17 @@ jsonsqlite insert|update|delete|index|sql --help
 
 稳定帮助仅含上述已通过混沌的子命令。集群关闭时根帮助**不**把 `cluster` 写成默认可用。错误码：`NOT_PRIMARY`、`CLUSTER_PARTITION`、`SHARD_MOVING`、`CLUSTER_LOCK_CONFLICT`。WASM 不进主 bin（见 `@webofcat/jsonsqlite-wasm`）。`3.5.x` 补丁不得新增上表以外的子命令。
 
+---
+
+## 27. 3.6 LTS-4
+
+> **3.6.0、LTS-4。** 相对 3.5 为 MINOR。**不加功能。** 默认单写者；复制关；集群关。`latest` / `lts` / `lts-4` = 3.6.0；`lts-2` = 2.2；`lts-3` = 2.5。PATCH 不新增子命令。
+
+| 命令 | 非交互 | 说明 |
+|------|--------|------|
+| `version --json` / `compat` | ✅ | `3.6.0`，`lts: true`，`ltsLine: "3.6"`，`cliSurface: "3.6.0"`，`writers: "single"` |
+| `config validate --file` | ✅ | 默认开关与 3.5 最后一个补丁相同；接受关闭态的 `cluster` / `wasm` / `replica` / `graphql` |
+| 3.0–3.5 已进入稳定帮助的命令 | ✅ | 冻结；集群命令仍只在开关打开时按 3.5 规则出现 |
+
+根帮助写明 `3.6.0, lts: true, ltsLine 3.6`。默认不启用复制和集群。
+

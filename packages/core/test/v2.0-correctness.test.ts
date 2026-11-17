@@ -77,7 +77,8 @@ describe('v2.0.0 compatibility', () => {
       }
     } else {
       expect(info.version.startsWith('3.')).toBe(true);
-      expect(info.lts).toBe(false);
+      if (info.version.startsWith('3.6.')) expect(info.lts).toBe(true);
+      else expect(info.lts).toBe(false);
     }
     expect(info.writers).toBe('single');
     expect(info.features).toEqual(

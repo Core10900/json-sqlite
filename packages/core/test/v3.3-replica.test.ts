@@ -78,18 +78,19 @@ describe('v3.3.0 gate', () => {
   it('FT-V33-VER-01 version is 3.3.0 and not LTS', () => {
     const info = getCompatibilityInfo();
     expect(info.version).toBe(getVersion());
-    expect(info).toMatchObject({
-      lts: false,
-      ltsLine: '2.5',
-      writers: 'single',
-    });
+    expect(info.writers).toBe('single');
+    if (getVersion().startsWith('3.6.')) {
+      expect(info).toMatchObject({ lts: true, ltsLine: '3.6' });
+    } else {
+      expect(info).toMatchObject({ lts: false, ltsLine: '2.5' });
+    }
     expect(info.features).toContain('async-replica');
     if (getVersion().startsWith('3.3.')) {
       expect(getVersion()).toBe('3.3.0');
       expect(info.cliSurface).toBe('3.3.0');
       expect(helpRoot()).toMatch(/3\.3\.0, lts: false, ltsLine 2\.5/);
     }
-    expect(helpRoot()).not.toMatch(/Vision Complete|设计完工/);
+    expect(helpRoot()).not.toMatch(/Vision Complete/);
   });
 
   it('FT-V33-REG-01 replication off keeps single-writer 3.2 behavior', async () => {

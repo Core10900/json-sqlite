@@ -128,17 +128,10 @@ describe('v3.5.0 gate', () => {
     expect(rfc).toMatch(/跨机锁/);
   });
 
-  it('FT-V35-VER-01 version is 3.5.0 and not LTS', () => {
+  it('FT-V35-VER-01 version gate keeps cluster features; exact 3.5 pin only on 3.5.x', () => {
     const info = getCompatibilityInfo();
     expect(info.version).toBe(getVersion());
-    expect(getVersion()).toBe('3.5.0');
-    expect(info).toMatchObject({
-      version: '3.5.0',
-      lts: false,
-      ltsLine: '2.5',
-      cliSurface: '3.5.0',
-      writers: 'single',
-    });
+    expect(info.writers).toBe('single');
     expect(info.features).toEqual(
       expect.arrayContaining([
         'cluster-election',
@@ -147,6 +140,15 @@ describe('v3.5.0 gate', () => {
         'cli-3.5',
       ]),
     );
+    if (getVersion().startsWith('3.5.')) {
+      expect(getVersion()).toBe('3.5.0');
+      expect(info).toMatchObject({
+        version: '3.5.0',
+        lts: false,
+        ltsLine: '2.5',
+        cliSurface: '3.5.0',
+      });
+    }
   });
 
   it('FT-V35-REG-01 cluster off — insert/find works like 3.4', async () => {

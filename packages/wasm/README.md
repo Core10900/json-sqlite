@@ -1,14 +1,14 @@
 # @webofcat/jsonsqlite-wasm
 
-**experimental · read-only · 3.5.0**
+**experimental · read-only · 3.6.0（随 LTS-4；写路径仍不进承诺）**
 
-这是 JSONSQLite **3.5** 的可选包：Node 侧只读适配器。包名保留 `@webofcat/jsonsqlite-wasm`，本版**不**提供浏览器 WASM 编译产物；实现为纯 JS，依赖核心包打开已有库目录。
+这是 JSONSQLite **3.6 LTS-4** 旁路的可选包：Node 侧只读适配器。包名保留 `@webofcat/jsonsqlite-wasm`，本版**不**提供浏览器 WASM 编译产物；实现为纯 JS，依赖核心包打开已有库目录。
 
 ## 重要说明
 
 - **experimental**：实验能力，接口与行为可能调整。
 - **只读**：仅支持查询 / 按 id 读取；`insert` / `update` / `delete` 会抛出明确的只读错误。
-- **不进入 LTS 写入承诺**：写路径未做与服务端同等的崩溃测试，**不会**进入 3.6 的写入承诺，也不要当作生产写入方案。
+- **不进入 LTS-4 写入承诺**：写路径未做与服务端同等的崩溃测试，**不会**进入 3.6 的写入承诺，也不要当作生产写入方案。
 - **不进入主 bin**：不会作为 `@webofcat/jsonsqlite` 的 CLI / bin 入口；核心包帮助里没有 wasm 命令。
 - **不是** `@webofcat/jsonsqlite` 的 `lts` / `latest` 标签；本包有自己的 npm 包名与版本。
 
@@ -26,7 +26,7 @@ npm i @webofcat/jsonsqlite-wasm
 import { openReadonly, meta } from '@webofcat/jsonsqlite-wasm';
 
 console.log(meta);
-// { experimental: true, readOnly: true, version: '3.5.0' }
+// { experimental: true, readOnly: true, version: '3.6.0' }
 
 const db = await openReadonly({ storagePath: './data' });
 
@@ -46,7 +46,7 @@ await db.close();
 | `openReadonly({ storagePath })` | 打开已有库目录，返回只读门面 |
 | `ReadonlyDb.findById` / `query` / `close` | 只读读取与关闭 |
 | `ReadonlyDb.insert` / `update` / `delete` | 抛出 `ExperimentalReadonlyError` |
-| `meta` | `{ experimental: true, readOnly: true, version: '3.5.0' }` |
+| `meta` | `{ experimental: true, readOnly: true, version: '3.6.0' }` |
 
 ## 发布
 

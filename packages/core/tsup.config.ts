@@ -9,8 +9,11 @@ const shared = {
   define: {
     __JSONSQLITE_VERSION__: JSON.stringify(pkg.version),
   },
+  // Minify shipped JS; keep maps locally for debug but exclude from npm `files`.
+  minify: true,
   sourcemap: true,
   splitting: false,
+  treeshake: true,
   target: 'node20' as const,
   outDir: 'dist',
 };

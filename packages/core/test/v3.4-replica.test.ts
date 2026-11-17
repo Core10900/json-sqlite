@@ -83,11 +83,12 @@ describe('v3.4.0 gate', () => {
   it('FT-V34-VER-01 getVersion 3.4.0, lts false, cliSurface 3.4.0', () => {
     const info = getCompatibilityInfo();
     expect(info.version).toBe(getVersion());
-    expect(info).toMatchObject({
-      lts: false,
-      ltsLine: '2.5',
-      writers: 'single',
-    });
+    expect(info.writers).toBe('single');
+    if (getVersion().startsWith('3.6.')) {
+      expect(info).toMatchObject({ lts: true, ltsLine: '3.6' });
+    } else {
+      expect(info).toMatchObject({ lts: false, ltsLine: '2.5' });
+    }
     expect(info.features).toContain('replica-quorum');
     expect(info.features).toContain('read-router');
     if (getVersion().startsWith('3.4.')) {

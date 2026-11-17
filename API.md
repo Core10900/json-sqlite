@@ -627,7 +627,7 @@ getCompatibilityInfo();
 | `deltaSnapshotThreshold` | 默认 1000。checksum 失败不删旧 delta |
 | `STORAGE_FULL` / `STORAGE_PERMISSION` | 磁盘满 / 无写权限 |
 
-性能数字见 `devDocs/releases/v3.2.0/性能包络.md`。本版不做复制、Quorum、GraphQL、多库、可用向量、可用 S3、Raft、WASM、HTTP 文档 REST（见 3.3 / 3.4）。
+性能数字与 3.6 热路径优化说明见 `devDocs/releases/v3.6.0/性能包络.md`（3.2 原文保留作历史）。本版不做复制、Quorum、GraphQL、多库、可用向量、可用 S3、Raft、WASM、HTTP 文档 REST（见 3.3 / 3.4）。
 
 ---
 
@@ -666,7 +666,7 @@ getCompatibilityInfo();
 
 ## 3.5 集群浸泡（非 LTS）
 
-相对 3.4 为 **MINOR**。`cluster` / `wasm` 默认关闭；关闭时单机与复制契约与 3.4 相同。打开集群后租约选主按 [RFC](./devDocs/releases/v3.5.0/RFC-集群选主与分片.md) 运行。`lts: false`。生产 pin 仍是 2.2。**3.6 / LTS-4 尚未存在。**
+相对 3.4 为 **MINOR**。`cluster` / `wasm` 默认关闭；关闭时单机与复制契约与 3.4 相同。打开集群后租约选主按 [RFC](./devDocs/releases/v3.5.0/RFC-集群选主与分片.md) 运行。发布当时 `lts: false`；生产 pin 仍是 2.2。契约冻结见 **3.6 LTS-4**。
 
 | 符号 | 说明 |
 |------|------|
@@ -678,4 +678,28 @@ getCompatibilityInfo();
 | `db.clusterAcquireLock(scope)` / `db.clusterReleaseLock(scope)` | 跨机锁；`scope` 为 `collection` 或 `collection/_id` |
 
 错误码（见 §14）：`NOT_PRIMARY`、`CLUSTER_PARTITION`、`SHARD_MOVING`、`CLUSTER_LOCK_CONFLICT`（`details` 含 `scope`、`holderId`）。只读 WASM 在独立包 `@webofcat/jsonsqlite-wasm`，不进本包 bin。
+
+---
+
+## 3.6 LTS-4
+
+相对 3.5 为 **MINOR**。**不加功能。** 默认单写者；复制关；集群关。`lts: true`。`ltsLine: '3.6'`。`cliSurface: '3.6.0'`。`latest` / `lts` / `lts-4` = 3.6；`lts-2` = 2.2；`lts-3` = 2.5。PATCH 不新增符号、不升格式。
+
+```ts
+import { getCompatibilityInfo, open } from '@webofcat/jsonsqlite';
+
+const info = getCompatibilityInfo();
+// version: '3.6.0'
+// lts: true
+// ltsLine: '3.6'
+// writers: 'single'
+// cliSurface: '3.6.0'
+
+const db = await open({ storagePath: './data' });
+// writers single；replica / cluster 默认关
+```
+
+从 2.5 / 3.5 升级步骤见 [迁移指南](./devDocs/releases/v3.6.0/迁移指南.md)。WASM 写路径不在 LTS-4 承诺内。
+
+热路径内部优化（批量 `getByIds`、运行时 id→page `Map`、覆盖索引等）不新增符号、不改默认配置；数字与说明见 [性能包络](./devDocs/releases/v3.6.0/性能包络.md)。
 

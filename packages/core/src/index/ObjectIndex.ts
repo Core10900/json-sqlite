@@ -15,11 +15,13 @@ function fieldValue(doc: Document, field: string): unknown {
 
 export class ObjectIndex implements Index {
   private map = new Map<string, Set<string>>();
+  private docCount = 0;
 
   constructor(readonly meta: IndexMeta) {}
 
   build(docs: Document[]): void {
     this.map.clear();
+    this.docCount = 0;
     for (const doc of docs) this.insert(doc);
   }
 
@@ -30,7 +32,9 @@ export class ObjectIndex implements Index {
       set = new Set();
       this.map.set(k, set);
     }
+    const before = set.size;
     set.add(doc._id);
+    if (set.size > before) this.docCount += 1;
   }
 
   update(prev: Document | undefined, next: Document): void {
@@ -42,12 +46,19 @@ export class ObjectIndex implements Index {
     const k = keyOf(fieldValue(doc, this.meta.field));
     const set = this.map.get(k);
     if (!set) return;
-    set.delete(doc._id);
+    if (!set.delete(doc._id)) return;
+    this.docCount -= 1;
     if (set.size === 0) this.map.delete(k);
   }
 
   lookupEq(value: unknown): string[] {
-    return Array.from(this.map.get(keyOf(value)) ?? []);
+    const set = this.map.get(keyOf(value));
+    if (!set || set.size === 0) return [];
+    // Avoid Array.from allocator for the common single-hit equality case.
+    if (set.size === 1) {
+      for (const id of set) return [id];
+    }
+    return [...set];
   }
 
   lookupRange(): string[] {
@@ -59,9 +70,7 @@ export class ObjectIndex implements Index {
   }
 
   stats(): { keys: number; docs: number } {
-    let docs = 0;
-    for (const ids of this.map.values()) docs += ids.size;
-    return { keys: this.map.size, docs };
+    return { keys: this.map.size, docs: this.docCount };
   }
 
   exportEntries(): IndexSnapshot {
@@ -72,6 +81,10 @@ export class ObjectIndex implements Index {
 
   importEntries(snapshot: IndexSnapshot): void {
     this.map.clear();
-    for (const [k, ids] of snapshot.entries) this.map.set(k, new Set(ids));
+    this.docCount = 0;
+    for (const [k, ids] of snapshot.entries) {
+      this.map.set(k, new Set(ids));
+      this.docCount += ids.length;
+    }
   }
 }

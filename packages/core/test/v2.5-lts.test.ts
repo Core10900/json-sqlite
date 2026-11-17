@@ -140,7 +140,14 @@ describe('v2.5.0 LTS-3', () => {
     expect(info.version).toBe(getVersion());
     expect(info.writers).toBe('single');
     expect(info.formatVersion).toBe(2);
-    expect(info.ltsLine).toBe('2.5');
+    if (getVersion().startsWith('3.6.')) {
+      expect(info.ltsLine).toBe('3.6');
+      expect(info.lts).toBe(true);
+      expect(info.cliSurface).toBe('3.6.0');
+      expect(info.features).toContain('lts-4');
+    } else {
+      expect(info.ltsLine).toBe('2.5');
+    }
     if (getVersion().startsWith('2.5.')) {
       expect(getVersion()).toBe('2.5.0');
       expect(info.lts).toBe(true);
@@ -434,6 +441,8 @@ describe('v2.5.0 LTS-3', () => {
     }
     if (getVersion().startsWith('2.5.')) {
       expect(help).toMatch(/2\.5\.0, lts: true, ltsLine 2\.5/);
+    } else if (getVersion().startsWith('3.6.')) {
+      expect(help).toMatch(/3\.6\.0, lts: true, ltsLine 3\.6/);
     } else {
       expect(help).toMatch(/3\.\d+\.\d+, lts: false, ltsLine 2\.5/);
     }
@@ -452,14 +461,25 @@ describe('v2.5.0 LTS-3', () => {
     };
     expect(versionBody.action).toBe('version');
     expect(versionBody.writers).toBe('single');
-    expect(versionBody.ltsLine).toBe('2.5');
     expect(versionBody.formatVersion).toBe(2);
+    if (versionBody.version.startsWith('3.6.')) {
+      expect(versionBody.ltsLine).toBe('3.6');
+      expect(versionBody.lts).toBe(true);
+      expect(versionBody.cliSurface).toBe('3.6.0');
+    } else {
+      expect(versionBody.ltsLine).toBe('2.5');
+    }
     if (versionBody.version.startsWith('2.5.')) {
       expect(versionBody).toMatchObject({ version: '2.5.0', lts: true, cliSurface: '2.5.0' });
     }
     const compat = await cli(['compat', '--json']);
     const compatBody = JSON.parse(compat.stdout) as { lts: boolean; ltsLine: string; writers: string };
-    expect(compatBody.ltsLine).toBe('2.5');
+    if (getVersion().startsWith('3.6.')) {
+      expect(compatBody.ltsLine).toBe('3.6');
+      expect(compatBody.lts).toBe(true);
+    } else {
+      expect(compatBody.ltsLine).toBe('2.5');
+    }
     expect(compatBody.writers).toBe('single');
     if (getVersion().startsWith('2.5.')) expect(compatBody.lts).toBe(true);
 

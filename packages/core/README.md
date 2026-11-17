@@ -1,39 +1,77 @@
 # @webofcat/jsonsqlite
 
-**版本：3.5.0、非 LTS** · 集群浸泡 · 集群 / WASM **默认关闭** · `lts: false` · Node.js ≥ 20 · 作者：hanlin
+**版本：3.6.0、LTS-4** · 设计功能完工后的长期稳定线 · 默认单写者 · 复制 / 集群 / WASM **默认关闭** · `lts: true` · `ltsLine: '3.6'` · Node.js ≥ 20 · 作者：hanlin
 
-这一版是**集群浸泡**（选主、分片 rebalance、跨机锁）与可选只读 WASM 包。相对 3.4 为 **MINOR**。集群与 WASM 关闭时，行为与 **3.4** 的单机、异步复制相同。打开集群后，租约选主在集群 **ON** 时按 RFC 自动进行（杀主后重选）；这是 3.5 的有意设计，**不是** LTS，也**不要**当作生产 pin。
+这一版**不增加功能**。相对 3.5 为 **MINOR**。把 3.0–3.5 已经跑绿的契约冻结为 **LTS-4**。不带 tag 的安装得到 `latest`（3.6.0）；`lts` 与 `lts-4` 都指向 3.6。打开库之后，默认仍是单写者，复制关，集群关。需要哪一项必须显式打开。
 
-生产 pin 仍是 **LTS-2（2.2）** / 多写者 **LTS-3（2.5）**。本包不是长期支持线。不带 tag 的安装得到 `latest`，这一版是 **3.5.0**。没有 `lts-4`。**3.6 / LTS-4 尚未存在**；`3.5.x` 只修缺陷，不新增命令、不改默认开关。本 README 不承诺 3.6 的发布日期。
+| 线 | 谁应该 pin |
+|----|------------|
+| **LTS-2 = 2.2.x**（`lts-2`） | 只要单写者、且不需要 3.x 能力 |
+| **LTS-3 = 2.5.x**（`lts-3`） | 只要同一台机器的多进程写 |
+| **LTS-4 = 3.6.x**（`lts` / `lts-4`） | 需要这条完工线。默认仍不打开复制和集群 |
+
+LTS-4 承诺：默认 single 的正确性不低于 LTS-3 默认模式；已文档化的查询、存储开关、复制、Quorum、接入层和 3.5 混沌语义在 PATCH 中不缩小；PATCH 不新增命令、不改默认值、不升 `formatVersion`。WASM 写路径不进本线承诺。
 
 ```bash
-# 不带 tag：latest，这一版是 3.5.0（集群默认关闭）
+# 不带 tag：latest = 3.6.0（默认单写者，复制关，集群关）
 npm install @webofcat/jsonsqlite
 
-# 单写者生产
+# LTS-4 生产 pin
 npm install @webofcat/jsonsqlite@lts
+npm install @webofcat/jsonsqlite@lts-4
+
+# 仍要旧单写者线
 npm install @webofcat/jsonsqlite@lts-2
 
 # 需要多写者
 npm install @webofcat/jsonsqlite@lts-3
 ```
 
-`lts` / `lts-2` 是 2.2。`lts-3` 是 2.5。`latest` 是 3.5.0。
+`latest` / `lts` / `lts-4` 是 3.6。`lts-2` 仍是 2.2。`lts-3` 仍是 2.5。
 
 ```ts
 import { getCompatibilityInfo, open } from '@webofcat/jsonsqlite';
 
 const info = getCompatibilityInfo();
-// version: '3.5.0'
-// lts: false
-// ltsLine: '2.5'   // 最新的 LTS 线（LTS-3），不是本包版本
+// version: '3.6.0'   // 包版本字符串，不是线名
+// lts: true
+// ltsLine: '3.6'     // LTS-4。与 version 不是同一个数
 // writers: 'single'
-// cliSurface: '3.5.0'
+// cliSurface: '3.6.0' // PATCH 不新增子命令
 ```
 
-## 3.5 集群浸泡（非 LTS）
+### 迁移 2.5 → 3.6
 
-协议与断言见已合并 RFC：[RFC-集群选主与分片.md](../../devDocs/releases/v3.5.0/RFC-集群选主与分片.md)。混沌三项（杀主重选、分区无双主、rebalance 不丢文档）已通过。
+1. 安装 `@webofcat/jsonsqlite@3.6.0`（或 `lts` / `lts-4`）。
+2. 用原 `storagePath` 直接 `open`，或不写复制 / 集群键。需要格式迁移时用 `migrate --from … --to … --yes`；失败不得留下半份目标目录。
+3. 打开后确认：写者模式仍是 `single`，复制关，集群关。需要多写者时沿用 `writers: 'multi'`（不是升级必选项）。
+4. 需要 3.0–3.5 能力时按下文逐项打开（列存、复制、GraphQL、集群等均为 opt-in）。
+
+详见 [迁移指南](../../devDocs/releases/v3.6.0/迁移指南.md)。
+
+### 迁移 3.5 → 3.6
+
+直接打开原目录。磁盘 `formatVersion` 与 3.5 最后一个补丁相同。原来关闭的复制和集群保持关闭；原来显式打开的开关保持打开，语义不缩小。不需要再跑数据迁移。
+
+### 性能
+
+性能包络见 [3.6 性能包络](../../devDocs/releases/v3.6.0/性能包络.md)（相对 [3.2](../../devDocs/releases/v3.2.0/性能包络.md) 的复测）。本机 SSD + 热缓冲池下方案 §1.3 三项已达到；绝对值随机器波动，不以 README 另写一套数字。
+
+3.6 冻结前对**查询热路径**做了内部优化（**不改公开 API、不升 `formatVersion`、不改默认 `pageSize` / `maxResidentDocs`**）：
+
+- 索引命中后批量 `getByIds`（按页回表、驻留时 pin；全驻留单遍）
+- 运行时 `Map` 维护 id→page（磁盘仍为 `pages.json` 的 Record）
+- 覆盖索引跳过二次过滤；点查去掉热路径上的 `memoryUsage` / 未缓存的索引 `stats()`
+
+要复现包络：`BENCH_N=1000000 pnpm --filter @jsonsqlite/bench start`，点查分位另见 `apps/bench/p99-conc.mjs`。
+
+### 本版明确不做
+
+新存储格式、新复制语义、新选主规则、完整 SQL 方言、通用向量库、通用数仓、多语言 TCP、WASM 写路径。不发布 3.7 计划。
+
+## 3.5 集群（已冻结进 LTS-4；默认仍关）
+
+协议与断言见已合并 RFC：[RFC-集群选主与分片.md](../../devDocs/releases/v3.5.0/RFC-集群选主与分片.md)。混沌三项（杀主重选、分区无双主、rebalance 不丢文档）已通过，并在 3.6 冻结。
 
 ### 1. 如何保持关闭（先读这里）
 
@@ -152,7 +190,7 @@ npm i @webofcat/jsonsqlite-wasm
 
 ### 10. 路线说明
 
-**3.6 / LTS-4 尚未存在。** `3.5.x` 只修缺陷。生产仍 pin `lts`（2.2）或 `lts-3`（2.5）。不要把 3.5 标为生产默认。
+**3.6.0 即 LTS-4。** 生产可 pin `lts` / `lts-4`（3.6）。仍可留在 `lts-2`（2.2）或 `lts-3`（2.5）。默认不启用复制和集群。`3.6.x` PATCH 只修正确性与安全，不加命令、不改默认、不升格式。
 
 库 API（需已 join）：`clusterStatus` / `clusterJoin` / `clusterLeave` / `clusterRebalance` / `clusterAcquireLock` / `clusterReleaseLock`。
 
@@ -560,7 +598,7 @@ Delta 只记变更字段（`patch: true`）。达到 `deltaSnapshotThreshold`（
 
 配置保持扁平。示例：`timeTravelRetentionMs`、`transactionTimeoutMs`、`alerts.responseTimeMs`、`autoTuneMinHits`、`metricsIntervalMs`。不接受嵌套 `cache`。`syncMode: 'full'` 即 fsync。
 
-性能数字只引用 [`devDocs/releases/v3.2.0/性能包络.md`](../../devDocs/releases/v3.2.0/性能包络.md)。
+性能数字只引用 [`devDocs/releases/v3.6.0/性能包络.md`](../../devDocs/releases/v3.6.0/性能包络.md)。
 
 ### 这一版（3.2）明确不做
 

@@ -53,7 +53,8 @@ afterEach(async () => {
 describe('v3.0.0 query engine', () => {
   it('FT-V30-VER-01 version is 3.0.0 and not LTS', () => {
     const info = getCompatibilityInfo();
-    expect(info.lts).toBe(false);
+    if (getVersion().startsWith('3.6.')) expect(info.lts).toBe(true);
+    else expect(info.lts).toBe(false);
     expect(info.version).toBe(getVersion());
     if (getVersion().startsWith('3.0.')) {
       expect(getVersion()).toBe('3.0.0');

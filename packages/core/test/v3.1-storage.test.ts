@@ -66,8 +66,13 @@ describe('v3.1.0 gate', () => {
       expect(info.version).toBe('3.1.0');
       expect(info.cliSurface).toBe('3.1.0');
     }
-    expect(info.lts).toBe(false);
-    expect(info.ltsLine).toBe('2.5');
+    if (getVersion().startsWith('3.6.')) {
+      expect(info.lts).toBe(true);
+      expect(info.ltsLine).toBe('3.6');
+    } else {
+      expect(info.lts).toBe(false);
+      expect(info.ltsLine).toBe('2.5');
+    }
     expect(info.writers).toBe('single');
     expect(info.version).toBe(getVersion());
     expect(info.features).toContain('btree');

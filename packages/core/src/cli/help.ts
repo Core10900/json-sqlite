@@ -10,8 +10,8 @@ Global flags (anywhere):
   -p, --path <dir>   storage path (default: ./data or $JSONSQLITE_PATH)
   --writers single|multi
                      default single (second process gets LOCK_FAILED).
-                     multi is opt-in (LTS-3). Omitting it stays single.
-                     The lts tag stays on 2.2; install this line with lts-3
+                     multi is opt-in (LTS-3 / 2.5). Omitting it stays single.
+                     lts / lts-4 = 3.6 (LTS-4); lts-2 = 2.2; lts-3 = 2.5
   -y, --yes          skip confirmations
   --json             machine-readable JSON output
   -q, --quiet        suppress human chatter
@@ -37,7 +37,7 @@ Commands:
   admin serve | serve        start Admin HTTP + SSE (serve is an alias)
   db list|register|use|unregister   multi-db registry (~/.jsonsqlite/registry.json)
   watch                      subscribe to dataChanged
-  compat / version [--json]  compatibility / version (3.5.0, lts: false, ltsLine 2.5)
+  compat / version [--json]  compatibility / version (3.6.0, lts: true, ltsLine 3.6)
   config validate --file <f> check a file against the frozen 2.2 config keys
   replica init|status|promote            async primary/secondary (default off; no auto promote)
   backup / vacuum [--compress] / rekey    ops
@@ -258,9 +258,9 @@ export function helpCompat(): string {
   return `jsonsqlite compat [--json]
 jsonsqlite version [--json]
 Print getCompatibilityInfo() / version.
-On 3.3.0: lts is false. ltsLine stays "2.5" (latest LTS line, LTS-3), not this package version. Not design-complete.
-writers is "single". Default open stays single-writer. Replication default off.
-Pin 2.2 unless you need multi-writer (lts-3 / 2.5). The lts tag stays on 2.2.
+On 3.6.0 (LTS-4): lts is true. ltsLine is "3.6" (not the patch string).
+writers is "single". Default open stays single-writer. Replication and cluster default off.
+lts / lts-4 = 3.6; lts-2 = 2.2; lts-3 = 2.5 for multi-writer. PATCH adds no subcommands.
 `;
 }
 

@@ -26,15 +26,24 @@ function hr() {
 function ms(start) {
   return Number(hr() - start) / 1e6;
 }
+function pct(sorted, p) {
+  if (!sorted.length) return 0;
+  const idx = Math.min(
+    sorted.length - 1,
+    Math.ceil((p / 100) * sorted.length) - 1,
+  );
+  return sorted[Math.max(0, idx)];
+}
 
 const db = await open({
   storagePath: dir,
   lazyCollections: true,
   persistIndexes: true,
   syncMode: 'none',
-  // Large-N envelope: bigger pages cut filesystem chatter; retention still default.
+  // Large-N envelope: bigger pages + resident budget covering the working set
+  // so §1.3 point/filter targets are measured with a warm buffer pool (SSD + RAM).
   pageSize: large ? 8192 : 32,
-  maxResidentDocs: large ? 131_072 : 256,
+  maxResidentDocs: large ? N : 256,
   // Avoid mid-load full-collection snapshots; they dominate large-N wall time.
   deltaSnapshotThreshold: large ? N + 1 : 1000,
   queryTimeout: large ? 600_000 : 30_000,
@@ -90,14 +99,24 @@ for (let i = 0; i < pointN; i++) {
 const pointMs = ms(tPoint) / pointN;
 
 // ~10% of N when age is i%100; for N=1e6 this is a 100k-hit indexed filter.
+// §1.3 quotes P95 — warm the 100k-hit path (JIT + page faults), then sample.
 const filterMaxAge = N >= 100_000 ? 9 : 99;
-const tFilter = hr();
-await db.query({
+const filterQuery = {
   collection: 'users',
   filter: { age: { $gte: 0, $lte: filterMaxAge } },
   limit: Math.min(100_000, N),
-});
-const filter100kMs = ms(tFilter);
+};
+const filterWarm = large ? 2 : 0;
+const filterSamplesN = large ? 11 : 1;
+for (let i = 0; i < filterWarm; i++) await db.query(filterQuery);
+const filterSamples = [];
+for (let i = 0; i < filterSamplesN; i++) {
+  const tFilter = hr();
+  await db.query(filterQuery);
+  filterSamples.push(ms(tFilter));
+}
+filterSamples.sort((a, b) => a - b);
+const filter100kMs = large ? pct(filterSamples, 95) : filterSamples[0];
 
 const batchN = Math.min(100_000, N);
 const tBatch = hr();
@@ -183,7 +202,7 @@ if (large) {
     persistIndexes: true,
     syncMode: 'none',
     pageSize: 8192,
-    maxResidentDocs: 131_072,
+    maxResidentDocs: N,
     deltaSnapshotThreshold: N + 1,
   });
   metrics = dbQuick.getMetrics();

@@ -27,10 +27,10 @@ afterEach(async () => {
 });
 
 describe('FT-V35-WASM-01 optional read-only package', () => {
-  it('meta has experimental + readOnly and version 3.5.0', () => {
+  it('meta has experimental + readOnly and version 3.6.0', () => {
     expect(meta.experimental).toBe(true);
     expect(meta.readOnly).toBe(true);
-    expect(meta.version).toBe('3.5.0');
+    expect(meta.version).toBe('3.6.0');
   });
 
   it('can query and findById an existing DB directory', async () => {

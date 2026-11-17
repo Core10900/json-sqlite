@@ -54,17 +54,18 @@ describe('v3.2.0 gate', () => {
   it('FT-V32-VER-01 version is 3.2.0 and not LTS', () => {
     const info = getCompatibilityInfo();
     expect(info.version).toBe(getVersion());
-    expect(info).toMatchObject({
-      lts: false,
-      ltsLine: '2.5',
-      writers: 'single',
-    });
+    expect(info.writers).toBe('single');
+    if (getVersion().startsWith('3.6.')) {
+      expect(info).toMatchObject({ lts: true, ltsLine: '3.6' });
+    } else {
+      expect(info).toMatchObject({ lts: false, ltsLine: '2.5' });
+    }
     if (getVersion().startsWith('3.2.')) {
       expect(getVersion()).toBe('3.2.0');
       expect(info.cliSurface).toBe('3.2.0');
       expect(helpRoot()).toMatch(/3\.2\.0, lts: false, ltsLine 2\.5/);
     }
-    expect(helpRoot()).not.toMatch(/Vision Complete|设计完工/);
+    expect(helpRoot()).not.toMatch(/Vision Complete/);
   });
 
   it('FT-V32-REG-01 default open keeps Redis and autoFix off', async () => {

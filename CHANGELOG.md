@@ -1,10 +1,25 @@
 # Changelog
 
-## 3.5.0 — 2026-11-16 · 非 LTS
+## 3.6.0 — 2026-11-17 · LTS-4
 
-**非 LTS。** 相对 3.4 为 **MINOR**。集群浸泡：选主、分片 rebalance、跨机锁；可选只读 WASM 包。集群与 WASM **默认关闭**；关闭时行为与 3.4 的单机、异步复制相同。混沌三项（杀主重选、分区无双主、rebalance 不丢文档）**全部通过**。`lts: false`。**不是**长期支持线；不要 pin 为生产默认。
+**LTS-4。** 相对 3.5 为 **MINOR**。本版**不增加功能**。冻结 3.0–3.5 已交付契约。默认单写者；复制关；集群关。`getCompatibilityInfo()`：`lts: true`，`ltsLine: '3.6'`，`cliSurface: '3.6.0'`。PATCH 不新增命令、不改默认值、不升 `formatVersion`。
 
-`latest` 指向 3.5.0。`lts` / `lts-2` 仍是 2.2。`lts-3` 仍是 2.5。生产 pin 仍是 `lts`（2.2）。不新增 `lts-4`。**3.6 / LTS-4 尚未存在**；`3.5.x` 只修缺陷，不新增命令、不改默认开关。
+`latest` / `lts` / `lts-4` 指向 **3.6.0**。`lts-2` 仍是 2.2。`lts-3` 仍是 2.5。不带 tag 的安装得到 3.6.0，默认仍不启用复制和集群。
+
+### Changed
+- 宣布 **LTS-4**：生产可 pin `lts` / `lts-4`
+- 兼容信息与 `version --json` 区分 `ltsLine: '3.6'`（不是包版本字符串）
+- 文档与迁移指南覆盖 **2.5 → 3.6** 与 **3.5 → 3.6**
+- 发布产物：minify 构建，npm 包排除 `*.map`（本地仍可生成 sourcemap）；`apps/bench/baseline.json` 按 N=2000 刷新为回归护栏（非绝对 SLA）
+- **热路径性能（不改 API / 不升格式）**：索引命中后批量 `getByIds`（按页分组、驻留时 pin、全驻留单遍）；运行时 `Map` 维护 id→page（磁盘仍写 `pages.json` 的 Record）；覆盖索引跳过二次 `match`；点查热路径去掉 `process.memoryUsage()` 与每次查询的 O(n) 索引 `stats()`；树/对象索引缓存 `stats()`。百万级过滤在热缓冲池下由秒级降至数十毫秒级
+- 性能包络复测写入 [`devDocs/releases/v3.6.0/性能包络.md`](./devDocs/releases/v3.6.0/性能包络.md)；本机达到方案 §1.3 三项。大样本 bench 对 10 万级过滤按 P95 预热采样（`apps/bench`）
+
+### Not in this release
+新存储格式、新复制语义、新选主规则、完整 SQL 方言、通用向量库、通用数仓、多语言 TCP、WASM 写路径。不发布 3.7。
+
+## 3.5.0 — 2026-11-16 · 非 LTS（历史）
+
+**非 LTS。** 相对 3.4 为 **MINOR**。集群浸泡：选主、分片 rebalance、跨机锁；可选只读 WASM 包。集群与 WASM **默认关闭**；关闭时行为与 3.4 的单机、异步复制相同。混沌三项（杀主重选、分区无双主、rebalance 不丢文档）**全部通过**。`lts: false`。发布当时生产 pin 仍是 `lts`（2.2）；无 `lts-4`。
 
 协议见 [RFC-集群选主与分片.md](./devDocs/releases/v3.5.0/RFC-集群选主与分片.md)。
 
@@ -15,11 +30,11 @@
 - `cluster rebalance`：迁移中查询成功或 `SHARD_MOVING`；Advisor 倾斜建议不自动 rebalance
 - 跨机锁：`clusterAcquireLock` / `clusterReleaseLock`；冲突 `CLUSTER_LOCK_CONFLICT`（`details.scope` / `holderId`）
 - CLI：`cluster status|join|leave|rebalance`（仅混沌已通过的子命令；关闭时根帮助不列为默认可用）
-- 可选包 `@webofcat/jsonsqlite-wasm`：experimental、只读；不进主 bin；不进 3.6 写入承诺
+- 可选包 `@webofcat/jsonsqlite-wasm`：experimental、只读；不进主 bin；不进 LTS-4 写入承诺
 - `config.example.json`：`cluster` / `wasm` 默认 `false`；`config validate` 接受关闭态
 
-### Not in this release
-完整 Raft 协议库、多语言 TCP、WASM 写入、在本版宣布 LTS-4、把 WASM 写入主 bin。契约冻结仍待 3.6（尚未发布）。
+### Not in this release（发布当时）
+完整 Raft 协议库、多语言 TCP、WASM 写入、在 3.5 宣布 LTS-4、把 WASM 写入主 bin。契约冻结在 3.6。
 
 ## 3.4.0 — 2026-11-12 · 非 LTS
 

@@ -6,6 +6,7 @@ import { ErrorCode, JSONSQLiteError } from '../errors.js';
 import type { JSONSQLite } from '../engine/JSONSQLite.js';
 import { getAdminHtml } from '../admin/dashboard.js';
 import { executeGraphQL } from '../graphql/adapter.js';
+import { getCompatibilityInfo } from '../lifecycle.js';
 import type { JsonQuery } from '../types/index.js';
 
 export interface HttpServerOptions {
@@ -129,9 +130,11 @@ export async function startHttpServer(
           return json(res, 200, { backups: await db.listBackups() });
         }
         if (url.pathname === '/admin/settings') {
+          const compat = getCompatibilityInfo();
           return json(res, 200, {
             settings: {
-              lts: false,
+              lts: compat.lts,
+              ltsLine: compat.ltsLine,
               writers: 'single',
               memoryWatermarkBytes: db.getOptionsSnapshot().memoryWatermarkBytes,
               transactionTimeoutMs: db.getOptionsSnapshot().transactionTimeoutMs,

@@ -48,6 +48,8 @@ export class TreeIndex implements Index {
   private root: Node = emptyLeaf();
   /** Nodes entered by the last lookupEq or lookupRange. */
   nodeVisits = 0;
+  /** Lazily filled; invalidated on structural mutation. */
+  private cachedStats: { keys: number; docs: number } | null = null;
 
   constructor(
     readonly meta: IndexMeta,
@@ -60,10 +62,12 @@ export class TreeIndex implements Index {
 
   build(docs: Document[]): void {
     this.root = emptyLeaf();
+    this.cachedStats = null;
     for (const doc of docs) this.insert(doc);
   }
 
   insert(doc: Document): void {
+    this.cachedStats = null;
     const split = this.insertRec(this.root, fieldValue(doc, this.meta.field), doc._id);
     if (!split) return;
     this.root = {
@@ -79,6 +83,7 @@ export class TreeIndex implements Index {
   }
 
   remove(doc: Document): void {
+    this.cachedStats = null;
     const key = fieldValue(doc, this.meta.field);
     const leaf = this.findLeaf(key, false);
     const i = lowerBound(leaf.keys, key);
@@ -131,13 +136,15 @@ export class TreeIndex implements Index {
   }
 
   stats(): { keys: number; docs: number } {
+    if (this.cachedStats) return this.cachedStats;
     let keys = 0;
     let docs = 0;
     for (const leaf of this.leaves()) {
       keys += leaf.keys.length;
       for (const ids of leaf.ids) docs += ids.length;
     }
-    return { keys, docs };
+    this.cachedStats = { keys, docs };
+    return this.cachedStats;
   }
 
   exportEntries(): IndexSnapshot {
@@ -155,6 +162,7 @@ export class TreeIndex implements Index {
 
   importEntries(snapshot: IndexSnapshot): void {
     this.root = emptyLeaf();
+    this.cachedStats = null;
     const pairs =
       snapshot.keys && snapshot.keys.length === snapshot.entries.length
         ? snapshot.entries.map((entry, i) => [snapshot.keys![i], entry[1]] as const)

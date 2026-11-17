@@ -51,6 +51,8 @@ interface PageDirectory {
 export class DocumentStore {
   private readonly dirs = new Map<string, PageDirectory>();
   private readonly pages = new Map<string, Map<number, Map<string, Document>>>();
+  /** Runtime id→page map (V8 Map); `dir.idToPage` remains the persisted Record. */
+  private readonly idPageMaps = new Map<string, Map<string, number>>();
   private readonly dirtyPages = new Map<string, Set<number>>();
   private readonly lru = new Map<string, number[]>();
   /** Cold docs not yet promoted (tiering on). */
@@ -175,6 +177,7 @@ export class DocumentStore {
     const t0 = Date.now();
     const dir = await this.readDirectory(name);
     this.dirs.set(name, dir);
+    this.rebuildIdPageMap(name, dir);
     this.pages.set(name, this.pages.get(name) ?? new Map());
     this.dirtyPages.set(name, this.dirtyPages.get(name) ?? new Set());
 
@@ -274,7 +277,7 @@ export class DocumentStore {
   async getById(name: string, id: string): Promise<Document | undefined> {
     const dir = this.dirs.get(name);
     if (!dir) return undefined;
-    const pageId = dir.idToPage[id];
+    const pageId = this.idPageMaps.get(name)?.get(id) ?? dir.idToPage[id];
     if (pageId !== undefined) {
       const map = await this.loadPage(name, pageId);
       const hit = map.get(id);
@@ -295,11 +298,106 @@ export class DocumentStore {
     return cold;
   }
 
+  /**
+   * Batch resolve by `_id`. Groups ids by page so each page is decoded at most
+   * once, pins those pages for the duration (no mid-loop thrash), then evicts
+   * back to `maxResidentDocs`. Preserves input id order; missing ids are skipped.
+   */
+  async getByIds(name: string, ids: readonly string[]): Promise<Document[]> {
+    if (ids.length === 0) return [];
+    if (ids.length === 1) {
+      const doc = await this.getById(name, ids[0]!);
+      return doc ? [doc] : [];
+    }
+    await this.ensureLoaded(name);
+    const dir = this.dirs.get(name);
+    if (!dir) return [];
+    const pageMaps = this.pages.get(name);
+
+    const idMap = this.idPageMaps.get(name);
+    // Warm fast path: working set fully resident — one pass, no async I/O,
+    // no intermediate grouping maps. Skip the O(n) "all pages hot?" probe.
+    if (
+      pageMaps &&
+      idMap &&
+      (this.coldPending.get(name)?.size ?? 0) === 0 &&
+      this.residentDocumentCount(name) >= dir.docCount
+    ) {
+      const out: Document[] = new Array(ids.length);
+      let n = 0;
+      const track = this.tiering;
+      for (const id of ids) {
+        const pageId = idMap.get(id);
+        if (pageId === undefined) continue;
+        const doc = pageMaps.get(pageId)?.get(id);
+        if (doc) {
+          if (track) this.noteAccess(name, id);
+          out[n++] = doc;
+        }
+      }
+      out.length = n;
+      return out;
+    }
+
+    const byPage = new Map<number, string[]>();
+    const coldIds: string[] = [];
+    for (const id of ids) {
+      const pageId = idMap?.get(id) ?? dir.idToPage[id];
+      if (pageId === undefined) {
+        coldIds.push(id);
+        continue;
+      }
+      let bucket = byPage.get(pageId);
+      if (!bucket) {
+        bucket = [];
+        byPage.set(pageId, bucket);
+      }
+      bucket.push(id);
+    }
+
+    const pins = new Set<number>(byPage.keys());
+    const found = new Map<string, Document>();
+    for (const pageId of pins) {
+      const map = await this.loadPage(name, pageId, { pins });
+      const bucket = byPage.get(pageId)!;
+      for (const id of bucket) {
+        const doc = map.get(id);
+        if (doc) found.set(id, doc);
+      }
+    }
+
+    if (coldIds.length > 0) {
+      const pending = this.coldPending.get(name);
+      for (const id of coldIds) {
+        const cold = pending?.get(id);
+        if (!cold) continue;
+        pending!.delete(id);
+        this.coldRev.set(name, (this.coldRev.get(name) ?? 0) - cold._version);
+        await this.putExact(name, cold);
+        this.coldOrigin.add(`${name}:${id}`);
+        this.delayedLoads += 1;
+        found.set(id, cold);
+      }
+    }
+
+    await this.evictToBudget(name);
+    const out: Document[] = [];
+    for (const id of ids) {
+      const doc = found.get(id);
+      if (doc) {
+        this.noteAccess(name, id);
+        out.push(doc);
+      }
+    }
+    return out;
+  }
+
   /** Replace entire collection contents in memory (restore / time-travel). */
   replaceAll(name: string, docs: Document[]): void {
     const dir = this.emptyDir();
     this.dirs.set(name, dir);
     this.pages.set(name, new Map());
+    this.idPageMaps.set(name, new Map());
     this.dirtyPages.set(name, new Set());
     this.lru.set(name, []);
     this.coldPending.delete(name);
@@ -312,7 +410,7 @@ export class DocumentStore {
       const pageId = this.allocPage(name);
       const map = this.pageMap(name, pageId);
       map.set(doc._id, doc);
-      dir.idToPage[doc._id] = pageId;
+      this.bindIdPage(name, dir, doc._id, pageId);
       dir.docCount += 1;
       dir.revisionSum += doc._version;
       const meta = dir.pages.find((p) => p.id === pageId)!;
@@ -676,6 +774,7 @@ export class DocumentStore {
   unload(name: string): void {
     this.dirs.delete(name);
     this.pages.delete(name);
+    this.idPageMaps.delete(name);
     this.dirtyPages.delete(name);
     this.lru.delete(name);
     this.coldPending.delete(name);
@@ -690,6 +789,7 @@ export class DocumentStore {
   renameInMemory(from: string, to: string): void {
     moveKey(this.dirs, from, to);
     moveKey(this.pages, from, to);
+    moveKey(this.idPageMaps, from, to);
     moveKey(this.dirtyPages, from, to);
     moveKey(this.lru, from, to);
     moveKey(this.coldPending, from, to);
@@ -721,7 +821,8 @@ export class DocumentStore {
 
   private async putExact(name: string, doc: Document): Promise<void> {
     const dir = this.dirs.get(name)!;
-    const existingPage = dir.idToPage[doc._id];
+    const existingPage =
+      this.idPageMaps.get(name)?.get(doc._id) ?? dir.idToPage[doc._id];
     if (existingPage !== undefined) {
       const map = await this.loadPage(name, existingPage);
       const prev = map.get(doc._id);
@@ -736,7 +837,7 @@ export class DocumentStore {
     const pageId = this.allocPage(name);
     const map = await this.loadPage(name, pageId);
     map.set(doc._id, doc);
-    dir.idToPage[doc._id] = pageId;
+    this.bindIdPage(name, dir, doc._id, pageId);
     const meta = dir.pages.find((p) => p.id === pageId)!;
     meta.count += 1;
     dir.docCount += 1;
@@ -755,11 +856,11 @@ export class DocumentStore {
       this.catalog.setDocumentCount(name, this.indexStats(name).docCount);
       return;
     }
-    const pageId = dir.idToPage[id];
+    const pageId = this.idPageMaps.get(name)?.get(id) ?? dir.idToPage[id];
     if (pageId === undefined) return;
     const map = this.pages.get(name)?.get(pageId);
     map?.delete(id);
-    delete dir.idToPage[id];
+    this.unbindIdPage(name, dir, id);
     const meta = dir.pages.find((p) => p.id === pageId);
     if (meta) meta.count = Math.max(0, meta.count - 1);
     dir.docCount = Math.max(0, dir.docCount - 1);
@@ -767,6 +868,34 @@ export class DocumentStore {
     this.coldOrigin.delete(`${name}:${id}`);
     this.markDirty(name, pageId);
     this.catalog.setDocumentCount(name, this.indexStats(name).docCount);
+  }
+
+  private rebuildIdPageMap(name: string, dir: PageDirectory): void {
+    const map = new Map<string, number>();
+    for (const id of Object.keys(dir.idToPage)) {
+      map.set(id, dir.idToPage[id]!);
+    }
+    this.idPageMaps.set(name, map);
+  }
+
+  private bindIdPage(
+    name: string,
+    dir: PageDirectory,
+    id: string,
+    pageId: number,
+  ): void {
+    dir.idToPage[id] = pageId;
+    let map = this.idPageMaps.get(name);
+    if (!map) {
+      map = new Map();
+      this.idPageMaps.set(name, map);
+    }
+    map.set(id, pageId);
+  }
+
+  private unbindIdPage(name: string, dir: PageDirectory, id: string): void {
+    delete dir.idToPage[id];
+    this.idPageMaps.get(name)?.delete(id);
   }
 
   private emptyDir(): PageDirectory {
@@ -827,7 +956,7 @@ export class DocumentStore {
   private async loadPage(
     name: string,
     pageId: number,
-    opts?: { fromPrefetch?: boolean },
+    opts?: { fromPrefetch?: boolean; pins?: ReadonlySet<number> },
   ): Promise<Map<string, Document>> {
     const existing = this.pages.get(name)?.get(pageId);
     if (existing) {
@@ -851,7 +980,7 @@ export class DocumentStore {
     this.pageMap(name, pageId);
     this.pages.get(name)!.set(pageId, map);
     this.touchLru(name, pageId);
-    await this.evictToBudget(name, pageId);
+    await this.evictToBudget(name, pageId, opts?.pins);
     if (this.prefetchPages && !opts?.fromPrefetch) {
       await this.prefetchNext(name, pageId);
     }
@@ -878,13 +1007,19 @@ export class DocumentStore {
     }
   }
 
-  private async evictToBudget(name: string, pin?: number): Promise<void> {
+  private async evictToBudget(
+    name: string,
+    pin?: number,
+    pins?: ReadonlySet<number>,
+  ): Promise<void> {
     const dirty = this.dirtyPages.get(name);
     const lru = this.lru.get(name);
     const pages = this.pages.get(name);
     if (!lru || !pages) return;
     while (this.residentDocumentCount(name) > this.maxResidentDocs) {
-      const victim = lru.find((id) => id !== pin && !dirty?.has(id));
+      const victim = lru.find(
+        (id) => id !== pin && !pins?.has(id) && !dirty?.has(id),
+      );
       if (victim === undefined) break;
       pages.delete(victim);
       const idx = lru.indexOf(victim);
@@ -918,13 +1053,14 @@ export class DocumentStore {
     if (legacy.length === 0) return this.emptyDir();
     const dir = this.emptyDir();
     this.dirs.set(name, dir);
+    this.idPageMaps.set(name, new Map());
     this.pages.set(name, new Map());
     this.dirtyPages.set(name, new Set());
     for (const doc of legacy) {
       const pageId = this.allocPage(name);
       const map = this.pageMap(name, pageId);
       map.set(doc._id, doc);
-      dir.idToPage[doc._id] = pageId;
+      this.bindIdPage(name, dir, doc._id, pageId);
       dir.docCount += 1;
       dir.revisionSum += doc._version;
       dir.pages.find((p) => p.id === pageId)!.count += 1;

@@ -14,16 +14,16 @@ export interface CompatibilityInfo {
   version: string;
   formatVersion: number;
   /**
-   * True on an LTS binary. 3.0.0 is not LTS.
-   * The recommended single-writer pin remains LTS-2 (2.2). This flag does not switch the default open mode.
+   * True on an LTS binary. 3.6.0 is LTS-4.
+   * This flag does not switch the default open mode (still single-writer; replica/cluster off).
    */
   lts: boolean;
   /**
-   * Latest LTS line known to this binary. `2.5` means LTS-3.
-   * On 3.0.0 this is not the package version. Single-writer users still pin 2.2.
+   * LTS line this binary belongs to. On 3.6.0 this is `3.6` (LTS-4), not the patch string.
+   * Older lines remain available via dist-tags `lts-2` (2.2) and `lts-3` (2.5).
    */
-  ltsLine: '2.5';
-  /** CLI surface. 3.5.0 adds cluster election / rebalance / lock. */
+  ltsLine: '3.6';
+  /** CLI surface. 3.6.0 freezes 3.0–3.5 commands; PATCH adds none. */
   cliSurface: string;
   /** Default open mode. Multi-writer is opt-in and is not this field. */
   writers: 'single';
@@ -58,9 +58,9 @@ export function getCompatibilityInfo(): CompatibilityInfo {
   return {
     version: getVersion(),
     formatVersion: FORMAT_VERSION,
-    lts: false,
-    ltsLine: '2.5',
-    cliSurface: '3.5.0',
+    lts: true,
+    ltsLine: '3.6',
+    cliSurface: '3.6.0',
     writers: 'single',
     features: [
       'encryption',
@@ -157,6 +157,8 @@ export function getCompatibilityInfo(): CompatibilityInfo {
       'cluster-rebalance',
       'cluster-lock',
       'cli-3.5',
+      'lts-4',
+      'cli-3.6',
     ],
   };
 }
